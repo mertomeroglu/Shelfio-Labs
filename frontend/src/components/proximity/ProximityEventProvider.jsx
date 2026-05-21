@@ -1,0 +1,298 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MapPin, X } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  getBeaconCooldownKey,
+  normalizeNativeBeaconEvent,
+  proximityService,
+} from '../../services/proximityService.js';
+import './ProximityEventProvider.css';
+
+const NATIVE_BEACON_EVENT = 'shelfio:beacon-detected';
+const CUSTOMER_PREFS_KEY = 'shelfio.customer.preferences';
+const CUSTOMER_USER_KEY = 'shelfio_customer_user';
+const CUSTOMER_PREFS_UPDATED_EVENT = 'shelfio:customer-preferences-updated';
+const FRONTEND_COOLDOWN_MS = 1 * 1000;
+const DISMISS_COOLDOWN_MS = 60 * 1000;
+
+const isDev = () => Boolean(import.meta.env?.DEV);
+const normalizeText = (value) => String(value || '').trim();
+
+const readCustomerId = () => {
+  if (typeof window === 'undefined') return 'guest';
+  try {
+    const user = JSON.parse(window.localStorage.getItem(CUSTOMER_USER_KEY) || 'null');
+    return String(user?.id || user?.customerId || 'guest');
+  } catch {
+    return 'guest';
+  }
+};
+
+const readCustomerNotificationPrefs = () => {
+  if (typeof window === 'undefined') {
+    return { inAppNotifications: true, phoneNotifications: true };
+  }
+  try {
+    const scopedKey = `${CUSTOMER_PREFS_KEY}.${readCustomerId()}`;
+    const raw = window.localStorage.getItem(scopedKey) || window.localStorage.getItem(`${CUSTOMER_PREFS_KEY}.guest`);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return {
+      inAppNotifications: parsed?.inAppNotifications !== false,
+      phoneNotifications: parsed?.phoneNotifications !== false,
+    };
+  } catch {
+    return { inAppNotifications: true, phoneNotifications: true };
+  }
+};
+
+const resolveSurface = (pathname) => {
+  const path = String(pathname || '');
+  return path.startsWith('/musteri') ? 'customer' : null;
+};
+
+const resolveActionLabel = (notification = {}) => {
+  const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  const explicit = normalizeText(notification.actionLabel || payload.actionLabel);
+  if (explicit) return explicit;
+
+  const typeText = `${notification.type || ''} ${notification.actionType || ''} ${notification.actionUrl || ''}`.toLocaleLowerCase('tr-TR');
+  if (typeText.includes('campaign') || typeText.includes('kampanya')) return 'Kampanyayı Gör';
+  if (typeText.includes('product') || typeText.includes('urun') || typeText.includes('ürün')) return 'Ürüne Git';
+  if (typeText.includes('category') || typeText.includes('kategori')) return 'Kategoriye Git';
+  return 'İncele';
+};
+
+const getNotificationSignature = (notification = {}) => [
+  notification.id || '',
+  notification.type || '',
+  notification.title || '',
+  notification.body || '',
+  notification.actionUrl || '',
+].join(':');
+
+const canNavigateToCustomerRoute = (actionUrl) => {
+  const route = normalizeText(actionUrl);
+  return Boolean(route && route.startsWith('/musteri'));
+};
+
+const toPriceNumber = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = typeof value === 'string' ? value.replace(',', '.') : value;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const formatTryPrice = (value) => {
+  const numeric = toPriceNumber(value);
+  if (numeric === null) return '';
+  return new Intl.NumberFormat('tr-TR', {
+    style: 'currency',
+    currency: 'TRY',
+    minimumFractionDigits: numeric % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(numeric);
+};
+
+const dispatchNativeNotificationEvent = (notification = {}, prefs = readCustomerNotificationPrefs()) => {
+  if (typeof window === 'undefined') return;
+  if (prefs.phoneNotifications === false) return;
+  const title = normalizeText(notification.title);
+  const actionUrl = normalizeText(notification.actionUrl);
+  const detail = {
+    title,
+    body: notification.body || notification.message || '',
+    actionUrl,
+    notificationId: notification.id || '',
+    type: notification.type || '',
+    payload: notification.payload || {},
+  };
+
+  try {
+    window.dispatchEvent(new CustomEvent('shelfio:show-native-notification', {
+      detail,
+    }));
+  } catch {
+    // Native bridge opsiyoneldir; desktop web akışı sessizce devam eder.
+  }
+
+  if (!title || !canNavigateToCustomerRoute(actionUrl)) return;
+
+  try {
+    const bridge = window.ShelfioNativeNotifications;
+    if (!bridge || typeof bridge.showNotification !== 'function') return;
+    bridge.showNotification(JSON.stringify(detail));
+  } catch {
+    // Android JS interface opsiyoneldir; hata web akışını bozmamalı.
+  }
+};
+
+function ProximityNotificationCard({ notification, onClose, onAction }) {
+  const title = normalizeText(notification.title) || 'Yakındaki fırsat';
+  const body = normalizeText(notification.body || notification.message || notification.description);
+  const actionLabel = resolveActionLabel(notification);
+  const hasAction = canNavigateToCustomerRoute(notification.actionUrl);
+  const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  const isProductDiscount = notification.type === 'PROXIMITY_PRODUCT_DISCOUNT';
+  const regularPriceValue = toPriceNumber(payload.regularPrice);
+  const displayPriceValue = toPriceNumber(payload.campaignPrice ?? payload.displayPrice);
+  const regularPrice = regularPriceValue !== null && displayPriceValue !== null && Math.round(regularPriceValue * 100) > Math.round(displayPriceValue * 100)
+    ? formatTryPrice(regularPriceValue)
+    : '';
+  const displayPrice = formatTryPrice(displayPriceValue);
+  const productName = normalizeText(payload.productName);
+  const aisleName = normalizeText(payload.aisleName || payload.sectionName);
+  const cardTitle = isProductDiscount
+    ? (aisleName ? `${aisleName} reyonundasın` : title)
+    : title;
+  const productSubtitle = normalizeText(payload.subtitle) || (productName ? `${productName} indirimde` : '');
+  const description = isProductDiscount ? 'İndirimli ürünü detaylı görüntüle.' : body;
+  const productImage = normalizeText(payload.imageUrl || payload.productImageUrl || payload.thumbnailUrl);
+
+  return (
+    <div className="proximity-overlay is-customer" aria-live="polite">
+      <section className="proximity-card" role="dialog" aria-modal="false" aria-label={cardTitle}>
+        <button type="button" className="proximity-close" onClick={onClose} aria-label="Kapat">
+          <X size={18} />
+        </button>
+        <div className="proximity-visual" aria-hidden="true">
+          {productImage ? <img src={productImage} alt="" loading="lazy" /> : <MapPin size={20} />}
+        </div>
+        <div className="proximity-copy">
+          <h3>{cardTitle}</h3>
+          {isProductDiscount && productSubtitle ? <strong className="proximity-product-name">{productSubtitle}</strong> : null}
+          {isProductDiscount && (regularPrice || displayPrice) ? (
+            <div className="proximity-price-row">
+              {regularPrice ? <span className="proximity-old-price">{regularPrice}</span> : null}
+              {displayPrice ? <span className="proximity-new-price">{displayPrice}</span> : null}
+            </div>
+          ) : null}
+          {description ? <p>{description}</p> : null}
+        </div>
+        <div className="proximity-actions">
+          {hasAction ? (
+            <button type="button" className="proximity-primary-action" onClick={onAction}>
+              {actionLabel}
+            </button>
+          ) : null}
+          <button type="button" className="proximity-secondary-action" onClick={onClose}>
+            Kapat
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default function ProximityEventProvider({ children }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const cooldownRef = useRef(new Map());
+  const dismissedRef = useRef(new Map());
+  const [activeNotification, setActiveNotification] = useState(null);
+  const [notificationPrefs, setNotificationPrefs] = useState(readCustomerNotificationPrefs);
+  const surface = useMemo(() => resolveSurface(location.pathname), [location.pathname]);
+
+  useEffect(() => {
+    const refreshPrefs = () => setNotificationPrefs(readCustomerNotificationPrefs());
+    window.addEventListener(CUSTOMER_PREFS_UPDATED_EVENT, refreshPrefs);
+    window.addEventListener('storage', refreshPrefs);
+    return () => {
+      window.removeEventListener(CUSTOMER_PREFS_UPDATED_EVENT, refreshPrefs);
+      window.removeEventListener('storage', refreshPrefs);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!surface && activeNotification) {
+      setActiveNotification(null);
+    }
+  }, [activeNotification, surface]);
+
+  const handleClose = useCallback(() => {
+    if (activeNotification?.notification) {
+      dismissedRef.current.set(getNotificationSignature(activeNotification.notification), Date.now() + DISMISS_COOLDOWN_MS);
+    }
+    setActiveNotification(null);
+  }, [activeNotification]);
+
+  const handleAction = useCallback(() => {
+    const route = normalizeText(activeNotification?.notification?.actionUrl);
+    if (canNavigateToCustomerRoute(route)) {
+      navigate(route);
+    }
+    handleClose();
+  }, [activeNotification, handleClose, navigate]);
+
+  useEffect(() => {
+    if (surface !== 'customer') return undefined;
+
+    let disposed = false;
+
+    const handleBeaconDetected = async (event) => {
+      const normalized = normalizeNativeBeaconEvent(event?.detail);
+      if (!normalized.valid) {
+        if (isDev()) console.debug('[proximity] ignored native beacon event', normalized.reason);
+        return;
+      }
+
+      const cooldownKey = getBeaconCooldownKey(normalized.payload);
+      const now = Date.now();
+      const cooldownUntil = cooldownRef.current.get(cooldownKey) || 0;
+      if (cooldownUntil > now) {
+        if (isDev()) console.debug('[proximity] customer frontend cooldown active');
+        return;
+      }
+      cooldownRef.current.set(cooldownKey, now + FRONTEND_COOLDOWN_MS);
+
+      try {
+        const response = await proximityService.sendEvent(normalized.payload);
+        if (disposed || !response?.success) return;
+
+        if (!response.shouldNotify || !response.notification) {
+          if (isDev()) console.debug('[proximity] no customer notification', response?.reason || 'NO_REASON');
+          return;
+        }
+
+        if (normalizeText(response.notification.actionUrl) && !canNavigateToCustomerRoute(response.notification.actionUrl)) {
+          if (isDev()) console.debug('[proximity] ignored non-customer actionUrl');
+          return;
+        }
+
+        const signature = getNotificationSignature(response.notification);
+        const dismissedUntil = dismissedRef.current.get(signature) || 0;
+        if (dismissedUntil > Date.now()) {
+          return;
+        }
+
+        if (notificationPrefs.inAppNotifications !== false) {
+          setActiveNotification({
+            id: `${response.eventId || Date.now()}`,
+            notification: response.notification,
+          });
+        }
+        dispatchNativeNotificationEvent(response.notification, notificationPrefs);
+      } catch (error) {
+        if (isDev()) console.debug('[proximity] customer event delivery failed', error?.message || error);
+      }
+    };
+
+    window.addEventListener(NATIVE_BEACON_EVENT, handleBeaconDetected);
+    return () => {
+      disposed = true;
+      window.removeEventListener(NATIVE_BEACON_EVENT, handleBeaconDetected);
+    };
+  }, [notificationPrefs, surface]);
+
+  return (
+    <>
+      {children}
+      {surface === 'customer' && activeNotification?.notification ? (
+        <ProximityNotificationCard
+          notification={activeNotification.notification}
+          onClose={handleClose}
+          onAction={handleAction}
+        />
+      ) : null}
+    </>
+  );
+}

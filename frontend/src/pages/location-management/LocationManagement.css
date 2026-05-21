@@ -1,0 +1,778 @@
+.location-management-page .lm-grid-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.location-management-page .lm-grid-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #dbe4ef 22%);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 36%);
+}
+
+.location-management-page .lm-grid-toolbar-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.location-management-page .lm-grid-toolbar-copy strong {
+  font-size: 0.92rem;
+  color: #0f172a;
+}
+
+.location-management-page .lm-grid-toolbar-copy span {
+  font-size: 0.77rem;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.location-management-page .lm-grid-toolbar .location-legend {
+  margin-left: auto;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.location-management-page .lm-reyon-matrices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.location-management-page .lm-grid-toolbar-section-shelf {
+  border-radius: 20px;
+  border-color: rgba(203, 213, 225, 0.95);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98)),
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.09), transparent 34%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.location-management-page .lm-reyon-shelf-faces {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.location-management-page .lm-shelf-face {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.97)),
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 30%);
+  box-shadow:
+    0 18px 42px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.location-management-page .lm-shelf-face-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.location-management-page .lm-shelf-face-head h4 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #0f172a;
+}
+
+.location-management-page .lm-shelf-face-head p {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-shelf-face-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.location-management-page .lm-shelf-face-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(214, 223, 235, 0.95);
+  background: rgba(255, 255, 255, 0.92);
+  color: #475569;
+  font-size: 0.71rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-shelf-face-stats strong {
+  color: #111827;
+}
+
+.location-management-page .lm-shelf-bay-head {
+  display: grid;
+  grid-template-columns: 66px repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.location-management-page .lm-shelf-bay-head span {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  border-radius: 12px;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(214, 223, 235, 0.9);
+  color: #475569;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.location-management-page .lm-shelf-bay-head .lm-shelf-bay-head-label {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 246, 249, 0.98));
+}
+
+.location-management-page .lm-shelf-wall {
+  display: grid;
+  gap: 10px;
+}
+
+.location-management-page .lm-shelf-row {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.location-management-page .lm-shelf-row-label {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 3px;
+  padding: 10px 6px;
+  border-radius: 16px;
+  border: 1px solid rgba(214, 223, 235, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 252, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.location-management-page .lm-shelf-row-label strong {
+  font-size: 0.82rem;
+  color: #0f172a;
+  letter-spacing: 0.04em;
+}
+
+.location-management-page .lm-shelf-row-label span {
+  font-size: 0.63rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.location-management-page .lm-shelf-row-track {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(214, 223, 235, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(249, 250, 251, 0.98) 54%, rgba(237, 242, 247, 0.96) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    inset 0 -8px 18px rgba(148, 163, 184, 0.08);
+}
+
+.location-management-page .lm-shelf-row-track::before {
+  content: "";
+  position: absolute;
+  inset: 8px 10px auto;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(203, 213, 225, 0), rgba(203, 213, 225, 0.85), rgba(203, 213, 225, 0));
+}
+
+.location-management-page .lm-shelf-row-track::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 7px;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.18), rgba(203, 213, 225, 0.42), rgba(148, 163, 184, 0.18));
+}
+
+.location-management-page .lm-shelf-slot {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 88px;
+  padding: 9px 9px 10px;
+  border-radius: 14px 14px 12px 12px;
+  border: 1px solid rgba(203, 213, 225, 0.94);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.97));
+  text-align: left;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  box-shadow:
+    0 6px 14px rgba(15, 23, 42, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.location-management-page .lm-shelf-slot:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.78);
+  box-shadow:
+    0 14px 24px rgba(59, 130, 246, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.location-management-page .lm-shelf-slot:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.35);
+  outline-offset: 2px;
+}
+
+.location-management-page .lm-shelf-slot-kicker {
+  font-size: 0.56rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.location-management-page .lm-shelf-slot .lm-cell-topline strong {
+  font-size: 0.78rem;
+  line-height: 1.15;
+}
+
+.location-management-page .lm-shelf-slot .lm-cell-subline {
+  min-height: 2.5em;
+  font-size: 0.63rem;
+}
+
+.location-management-page .lm-shelf-slot-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.location-management-page .lm-shelf-slot-meta em {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.92);
+  color: #475569;
+  font-size: 0.6rem;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-shelf-slot-meta span {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.location-management-page .lm-shelf-slot .lm-cell-metrics {
+  font-size: 0.61rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-shelf-slot-meter {
+  margin-top: auto;
+}
+
+.location-management-page .lm-shelf-slot .lm-cell-progress {
+  height: 5px;
+  background: rgba(226, 232, 240, 0.95);
+}
+
+.location-management-page .lm-shelf-slot.is-empty {
+  background:
+    linear-gradient(180deg, rgba(250, 251, 252, 0.98), rgba(243, 246, 249, 0.98));
+  border-style: dashed;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.location-management-page .lm-shelf-slot.is-empty .lm-shelf-slot-kicker,
+.location-management-page .lm-shelf-slot.is-empty .lm-cell-topline strong,
+.location-management-page .lm-shelf-slot.is-empty .lm-cell-subline,
+.location-management-page .lm-shelf-slot.is-empty .lm-shelf-slot-meta span,
+.location-management-page .lm-shelf-slot.is-empty .lm-cell-metrics {
+  color: #a3afbf;
+}
+
+.location-management-page .lm-shelf-slot.is-empty .lm-shelf-slot-meta em {
+  background: rgba(241, 245, 249, 0.96);
+  color: #94a3b8;
+}
+
+.location-management-page .lm-shelf-slot.is-empty .lm-cell-progress {
+  background: rgba(226, 232, 240, 0.75);
+}
+
+.location-management-page .lm-shelf-slot.is-selected {
+  border-color: rgba(37, 99, 235, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(191, 219, 254, 0.92),
+    0 16px 26px rgba(37, 99, 235, 0.15);
+}
+
+.location-management-page .lm-shelf-slot.is-critical,
+.location-management-page .lm-shelf-slot.status-kritik {
+  border-color: rgba(239, 68, 68, 0.86);
+  box-shadow:
+    0 8px 18px rgba(239, 68, 68, 0.08),
+    inset 0 0 0 1px rgba(254, 202, 202, 0.96);
+}
+
+.location-management-page .lm-shelf-slot.status-kritik .lm-shelf-slot-meta em,
+.location-management-page .lm-shelf-slot.is-critical .lm-shelf-slot-meta em {
+  background: rgba(254, 226, 226, 0.96);
+  color: #b91c1c;
+}
+
+.location-management-page .lm-shelf-slot.is-cold {
+  background:
+    linear-gradient(180deg, rgba(240, 249, 255, 0.98), rgba(248, 250, 252, 0.98));
+}
+
+.location-management-page .lm-shelf-slot.is-freezer {
+  background:
+    linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(244, 247, 255, 0.98));
+}
+
+.location-management-page .lm-matrix-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, #dbe4ef 18%);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.07), transparent 28%);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.06);
+}
+
+.location-management-page .lm-matrix-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.location-management-page .lm-matrix-panel-head h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #0f172a;
+}
+
+.location-management-page .lm-matrix-panel-head p {
+  margin: 3px 0 0;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-matrix-panel-stats,
+.location-management-page .lm-depot-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.location-management-page .lm-matrix-panel-stats span,
+.location-management-page .lm-depot-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.92);
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  color: #475569;
+  font-size: 0.71rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-matrix-panel-stats strong,
+.location-management-page .lm-depot-metrics strong {
+  color: #0f172a;
+  font-size: 0.78rem;
+}
+
+.location-management-page .lm-grid-scroll {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.location-management-page .lm-grid-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.location-management-page .lm-grid-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.location-management-page .lm-matrix-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.location-management-page .lm-matrix-grid-reyon {
+  grid-template-columns: 58px repeat(5, minmax(132px, 1fr));
+}
+
+.location-management-page .lm-matrix-grid-depot {
+  grid-template-columns: 58px repeat(10, minmax(86px, 1fr));
+  min-width: 980px;
+}
+
+.location-management-page .lm-matrix-corner,
+.location-management-page .lm-matrix-axis {
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.98));
+  color: #475569;
+  min-height: 38px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  position: sticky;
+  z-index: 2;
+}
+
+.location-management-page .lm-matrix-corner,
+.location-management-page .lm-matrix-axis-top {
+  top: 0;
+}
+
+.location-management-page .lm-matrix-corner,
+.location-management-page .lm-matrix-axis-side {
+  left: 0;
+}
+
+.location-management-page .lm-matrix-corner {
+  z-index: 4;
+}
+
+.location-management-page .lm-matrix-axis-top {
+  z-index: 3;
+}
+
+.location-management-page .lm-matrix-axis-side {
+  z-index: 3;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+}
+
+.location-management-page .lm-matrix-cell {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  text-align: left;
+  width: 100%;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  color: #0f172a;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.location-management-page .lm-matrix-cell:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.8);
+  box-shadow: 0 12px 28px rgba(59, 130, 246, 0.12);
+}
+
+.location-management-page .lm-matrix-cell:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.36);
+  outline-offset: 2px;
+}
+
+.location-management-page .lm-matrix-cell-section {
+  min-height: 76px;
+  padding: 9px 10px 10px;
+}
+
+.location-management-page .lm-matrix-cell-depot {
+  min-height: 58px;
+  padding: 9px 9px 8px;
+}
+
+.location-management-page .lm-cell-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.location-management-page .lm-cell-topline strong,
+.location-management-page .lm-matrix-cell-depot strong {
+  font-size: 0.73rem;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.location-management-page .lm-cell-topline em {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.9);
+  color: #475569;
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-cell-subline,
+.location-management-page .lm-matrix-cell-depot small,
+.location-management-page .lm-cell-foot {
+  font-size: 0.64rem;
+  line-height: 1.3;
+  color: #64748b;
+}
+
+.location-management-page .lm-cell-subline {
+  min-height: 1.3em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.location-management-page .lm-cell-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.63rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.location-management-page .lm-cell-progress,
+.location-management-page .lm-cell-cap {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(226, 232, 240, 0.92);
+}
+
+.location-management-page .lm-cell-progress {
+  height: 6px;
+}
+
+.location-management-page .lm-cell-cap {
+  height: 4px;
+  margin-bottom: 2px;
+}
+
+.location-management-page .lm-cell-progress i,
+.location-management-page .lm-cell-cap i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+}
+
+.location-management-page .lm-matrix-cell.is-cold .lm-cell-progress i,
+.location-management-page .lm-matrix-cell.is-cold .lm-cell-cap i {
+  background: linear-gradient(90deg, #38bdf8, #2563eb);
+}
+
+.location-management-page .lm-matrix-cell.is-freezer .lm-cell-progress i,
+.location-management-page .lm-matrix-cell.is-freezer .lm-cell-cap i {
+  background: linear-gradient(90deg, #1d4ed8, #172554);
+}
+
+.location-management-page .lm-matrix-cell.is-Ortam .lm-cell-progress i,
+.location-management-page .lm-matrix-cell.is-Ortam .lm-cell-cap i {
+  background: linear-gradient(90deg, #34d399, #10b981);
+}
+
+.location-management-page .lm-matrix-cell.is-empty {
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.98));
+  border-style: dashed;
+}
+
+.location-management-page .lm-matrix-cell.is-empty .lm-cell-topline strong,
+.location-management-page .lm-matrix-cell.is-empty .lm-cell-subline,
+.location-management-page .lm-matrix-cell.is-empty .lm-matrix-cell-depot strong {
+  color: #94a3b8;
+}
+
+.location-management-page .lm-matrix-cell.is-selected {
+  border-color: rgba(37, 99, 235, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(191, 219, 254, 0.95),
+    0 16px 34px rgba(37, 99, 235, 0.16);
+}
+
+.location-management-page .lm-matrix-cell.is-critical,
+.location-management-page .lm-matrix-cell.status-kritik {
+  border-color: rgba(239, 68, 68, 0.88);
+  box-shadow: inset 0 0 0 1px rgba(254, 202, 202, 0.95);
+}
+
+.location-management-page .lm-matrix-cell.status-kritik .lm-cell-topline em,
+.location-management-page .lm-matrix-cell.status-kritik small,
+.location-management-page .lm-matrix-cell.is-critical .lm-cell-topline em {
+  background: rgba(254, 226, 226, 0.95);
+  color: #b91c1c;
+}
+
+.location-management-page .lm-depot-context {
+  display: grid;
+  gap: 10px;
+}
+
+.location-management-page .lm-depot-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.location-management-page .lm-depot-switcher button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background: rgba(248, 250, 252, 0.95);
+  color: #475569;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.location-management-page .lm-depot-switcher button.is-active {
+  background: linear-gradient(135deg, #0f172a, #1d4ed8);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 12px 26px rgba(29, 78, 216, 0.24);
+}
+
+.location-management-page .lm-grid-toolbar-depot {
+  align-items: center;
+}
+
+@media (max-width: 1240px) {
+  .location-management-page .lm-reyon-matrices,
+  .location-management-page .lm-reyon-shelf-faces {
+    grid-template-columns: 1fr;
+  }
+
+  .location-management-page .lm-grid-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .location-management-page .lm-grid-toolbar {
+    display: grid;
+  }
+
+  .location-management-page .lm-grid-toolbar .location-legend {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .location-management-page .lm-matrix-panel-head {
+    display: grid;
+  }
+
+  .location-management-page .lm-matrix-panel-stats,
+  .location-management-page .lm-depot-metrics,
+  .location-management-page .lm-shelf-face-stats {
+    justify-content: flex-start;
+  }
+
+  .location-management-page .lm-matrix-grid-reyon {
+    min-width: 760px;
+  }
+
+  .location-management-page .lm-shelf-bay-head,
+  .location-management-page .lm-shelf-row-track {
+    min-width: 760px;
+  }
+
+  .location-management-page .lm-shelf-face-head {
+    display: grid;
+  }
+}
+
+@media (max-width: 640px) {
+  .location-management-page .lm-grid-toolbar,
+  .location-management-page .lm-matrix-panel,
+  .location-management-page .lm-shelf-face {
+    padding: 10px;
+  }
+
+  .location-management-page .lm-matrix-grid-reyon {
+    grid-template-columns: 52px repeat(5, minmax(118px, 1fr));
+  }
+
+  .location-management-page .lm-matrix-grid-depot {
+    grid-template-columns: 52px repeat(10, minmax(78px, 1fr));
+    min-width: 860px;
+  }
+
+  .location-management-page .lm-matrix-cell-section {
+    min-height: 70px;
+    padding: 8px;
+  }
+
+  .location-management-page .lm-shelf-bay-head {
+    grid-template-columns: 58px repeat(5, minmax(114px, 1fr));
+  }
+
+  .location-management-page .lm-shelf-row {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .location-management-page .lm-shelf-row-track {
+    grid-template-columns: repeat(5, minmax(114px, 1fr));
+    padding: 8px;
+  }
+
+  .location-management-page .lm-shelf-slot {
+    min-height: 82px;
+    padding: 8px;
+  }
+}

@@ -1,0 +1,154 @@
+export const PERMISSIONS = {
+  ACCESS_REQUEST_CREATE: 'access_request:create',
+  ACCESS_REQUEST_VIEW_OWN: 'access_request:view_own',
+  ACCESS_REQUEST_VIEW_ALL: 'access_request:view_all',
+  ACCESS_REQUEST_APPROVE: 'access_request:approve',
+  ACCESS_REQUEST_REJECT: 'access_request:reject',
+  TEMP_GRANT_REVOKE: 'temporary_grant:revoke',
+  PERMISSION_EFFECTIVE_VIEW: 'permission:effective_view',
+  CATEGORY_VIEW: 'category:view',
+  CATEGORY_CREATE: 'category:create',
+  CATEGORY_UPDATE: 'category:update',
+  CATEGORY_DELETE: 'category:delete',
+  SUPPLIER_VIEW: 'supplier:view',
+  SUPPLIER_CREATE: 'supplier:create',
+  SUPPLIER_UPDATE: 'supplier:update',
+  SUPPLIER_DELETE: 'supplier:delete',
+  PRODUCT_VIEW: 'product:view',
+  PRODUCT_CREATE: 'product:create',
+  PRODUCT_UPDATE: 'product:update',
+  PRODUCT_DELETE: 'product:delete',
+  STOCK_VIEW: 'stock:view',
+  STOCK_UPDATE: 'stock:update',
+  TRANSFER_REQUEST_CREATE: 'transfer_request:create',
+  TRANSFER_REQUEST_VIEW: 'transfer_request:view',
+  TRANSFER_REQUEST_MANAGE: 'transfer_request:manage',
+  REPORT_VIEW: 'report:view',
+  REPORT_EXPORT: 'report:export',
+  TASK_VIEW: 'task:view',
+  TASK_CREATE: 'task:create',
+  TASK_UPDATE: 'task:update',
+  TASK_DELETE: 'task:delete',
+  TASK_COMMENT: 'task:comment',
+  SECTION_VIEW: 'section:view',
+  SECTION_CREATE: 'section:create',
+  SECTION_UPDATE: 'section:update',
+  SECTION_DELETE: 'section:delete',
+  USER_VIEW: 'user:view',
+  USER_CREATE: 'user:create',
+  USER_UPDATE: 'user:update',
+  SETTINGS_VIEW: 'settings:view',
+  SETTINGS_UPDATE: 'settings:update',
+  ESL_VIEW: 'esl:view',
+  ESL_UPDATE: 'esl:update',
+  POS_VIEW: 'pos:view',
+  POS_SALE: 'pos:sale',
+  POS_RETURN: 'pos:return',
+  POS_DESK_MANAGE: 'pos:desk_manage',
+  PROCUREMENT_VIEW: 'purchase:view',
+  PROCUREMENT_CREATE: 'purchase:create',
+  PROCUREMENT_UPDATE: 'purchase:update',
+  PROCUREMENT_APPROVE: 'purchase:approve',
+  NOTIFICATION_VIEW: 'notification:view',
+  NOTIFICATION_MANAGE: 'notification:manage',
+  PROXIMITY_VIEW: 'proximity:view',
+  PROXIMITY_MANAGE: 'proximity:manage',
+  PROXIMITY_BEACONS_MANAGE: 'proximity:beacons:manage',
+  PROXIMITY_ZONES_MANAGE: 'proximity:zones:manage',
+  PROXIMITY_RULES_MANAGE: 'proximity:rules:manage',
+  PROXIMITY_LOGS_VIEW: 'proximity:logs:view',
+};
+
+export const ROLE_PERMISSIONS = {
+  admin: ['*'],
+  user: [
+    PERMISSIONS.ACCESS_REQUEST_CREATE,
+    PERMISSIONS.ACCESS_REQUEST_VIEW_OWN,
+    PERMISSIONS.PERMISSION_EFFECTIVE_VIEW,
+    PERMISSIONS.CATEGORY_VIEW,
+    PERMISSIONS.CATEGORY_CREATE,
+    PERMISSIONS.CATEGORY_UPDATE,
+    PERMISSIONS.CATEGORY_DELETE,
+    PERMISSIONS.SUPPLIER_VIEW,
+    PERMISSIONS.SUPPLIER_CREATE,
+    PERMISSIONS.SUPPLIER_UPDATE,
+    PERMISSIONS.SUPPLIER_DELETE,
+    PERMISSIONS.PRODUCT_VIEW,
+    PERMISSIONS.PRODUCT_CREATE,
+    PERMISSIONS.PRODUCT_UPDATE,
+    PERMISSIONS.PRODUCT_DELETE,
+    PERMISSIONS.STOCK_VIEW,
+    PERMISSIONS.STOCK_UPDATE,
+    PERMISSIONS.TASK_VIEW,
+    PERMISSIONS.TASK_CREATE,
+    PERMISSIONS.TASK_UPDATE,
+    PERMISSIONS.TASK_DELETE,
+    PERMISSIONS.TASK_COMMENT,
+    PERMISSIONS.SECTION_VIEW,
+    PERMISSIONS.SECTION_CREATE,
+    PERMISSIONS.SECTION_UPDATE,
+    PERMISSIONS.SECTION_DELETE,
+    PERMISSIONS.SETTINGS_VIEW,
+    PERMISSIONS.ESL_VIEW,
+    PERMISSIONS.ESL_UPDATE,
+    PERMISSIONS.PROCUREMENT_VIEW,
+    PERMISSIONS.PROCUREMENT_CREATE,
+    PERMISSIONS.PROCUREMENT_UPDATE,
+    PERMISSIONS.PROCUREMENT_APPROVE,
+    PERMISSIONS.NOTIFICATION_VIEW,
+    PERMISSIONS.NOTIFICATION_MANAGE,
+  ],
+  cashier: [
+    PERMISSIONS.PERMISSION_EFFECTIVE_VIEW,
+    PERMISSIONS.POS_VIEW,
+    PERMISSIONS.POS_SALE,
+    PERMISSIONS.POS_RETURN,
+  ],
+  depo_personeli: [
+    PERMISSIONS.PERMISSION_EFFECTIVE_VIEW,
+    PERMISSIONS.TRANSFER_REQUEST_VIEW,
+    PERMISSIONS.TRANSFER_REQUEST_MANAGE,
+  ],
+  viewer: [
+    PERMISSIONS.PERMISSION_EFFECTIVE_VIEW,
+    PERMISSIONS.CATEGORY_VIEW,
+    PERMISSIONS.SUPPLIER_VIEW,
+    PERMISSIONS.PRODUCT_VIEW,
+    PERMISSIONS.STOCK_VIEW,
+    PERMISSIONS.REPORT_VIEW,
+    PERMISSIONS.SECTION_VIEW,
+    PERMISSIONS.TRANSFER_REQUEST_VIEW,
+    PERMISSIONS.NOTIFICATION_VIEW,
+  ],
+  komisyon_b: ['*'],
+  komisyon_c: ['*'],
+  komisyon_v: ['*'],
+};
+
+export function getRolePermissions(role) {
+  return ROLE_PERMISSIONS[String(role || '').trim()] || [];
+}
+
+const IMPLIED_PERMISSIONS = {
+  'proximity:manage': [
+    'proximity:view',
+    'proximity:beacons:manage',
+    'proximity:zones:manage',
+    'proximity:rules:manage',
+    'proximity:logs:view',
+  ],
+};
+
+function hasPermissionWithImplications(permissions = [], permission) {
+  if (permissions.includes('*') || permissions.includes(permission)) return true;
+  return permissions.some((ownedPermission) => (IMPLIED_PERMISSIONS[ownedPermission] || []).includes(permission));
+}
+
+export function hasPermission(user, permission, effectivePermissions = null) {
+  if (!permission) return true;
+  if (user?.isSuperUser || user?.role === 'admin') return true;
+  const permissions = Array.isArray(effectivePermissions) && effectivePermissions.length
+    ? effectivePermissions
+    : getRolePermissions(user?.role);
+  return hasPermissionWithImplications(permissions, permission);
+}

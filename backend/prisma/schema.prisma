@@ -1,0 +1,1010 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                   String                     @id
+  username             String                     @unique
+  passwordHash         String?                    @map("password_hash")
+  role                 String?
+  assignedDeskCode     String?                    @map("assigned_desk_code")
+  name                 String?
+  email                String?
+  isActive             Boolean?                   @map("is_active")
+  lastLoginAt          DateTime?                  @map("last_login_at")
+  registerPin          String?                    @map("register_pin")
+  storeId              String?                    @map("store_id")
+  department           String?
+  permissions          Json?
+  payload              Json?
+  createdAt            DateTime?                  @map("created_at")
+  updatedAt            DateTime?                  @map("updated_at")
+  tasksAssigned        Task[]                     @relation("TaskAssignedTo")
+  tasksCreated         Task[]                     @relation("TaskCreatedBy")
+  sales                Sale[]
+  stockMovements       StockMovement[]
+  warehouseMovements   WarehouseMovement[]
+  purchaseOrdersCreated PurchaseOrder[]
+  purchaseOrderStatusRows PurchaseOrderStatusHistory[]
+  purchaseOrderActivityRows PurchaseOrderActivityLog[]
+  accessRequests       AccessRequest[]            @relation("AccessRequestUser")
+  createdAccessRequests AccessRequest[]           @relation("AccessRequestCreator")
+  reviewedAccessRequests AccessRequest[]          @relation("AccessRequestReviewer")
+  temporaryGrants      TemporaryPermissionGrant[]
+  temporaryGrantsApproved TemporaryPermissionGrant[] @relation("TemporaryGrantApprover")
+  temporaryGrantsRevoked TemporaryPermissionGrant[] @relation("TemporaryGrantRevoker")
+  transferRequestsCreated StockTransferRequest[]  @relation("TransferRequestedBy")
+  transferRequestsHandled StockTransferRequest[]  @relation("TransferHandledBy")
+  transferAudits       TransferAudit[]
+  taskComments         TaskComment[]
+
+  @@map("users")
+}
+
+model Category {
+  id                 String    @id
+  name               String
+  code               String?   @unique
+  description        String?
+  mainSectionNo      Int?      @map("main_section_no")
+  mainSectionName    String?   @map("main_section_name")
+  mainStorageType    String?   @map("main_storage_type")
+  requiresColdChain  Boolean?  @map("requires_cold_chain")
+  requiresFreezer    Boolean?  @map("requires_freezer")
+  isActive           Boolean?  @map("is_active")
+  payload            Json?
+  createdAt          DateTime? @map("created_at")
+  updatedAt          DateTime? @map("updated_at")
+  products           Product[]
+  purchaseSuggestions PurchaseSuggestion[]
+
+  @@map("categories")
+}
+
+model Section {
+  id          String                 @id
+  number      Int?                   @unique
+  name        String?
+  description String?
+  isActive    Boolean?               @map("is_active")
+  payload     Json?
+  createdAt   DateTime?              @map("created_at")
+  updatedAt   DateTime?              @map("updated_at")
+  products    Product[]
+  transfers   StockTransferRequest[]
+  beaconDevices BeaconDevice[]
+  locationZones LocationZone[]
+
+  @@map("sections")
+}
+
+model Supplier {
+  id                   String              @id
+  supplierCode         String?             @map("supplier_code")
+  code                 String?
+  name                 String
+  type                 String?
+  tedarikciTuru        String?             @map("tedarikci_turu")
+  website              String?
+  minimumOrderQty      Int?                @map("minimum_order_qty")
+  minimumOrderCaseQty  Int?                @map("minimum_order_case_qty")
+  coveredCategories    Json?               @map("covered_categories")
+  delayStatus          String?             @map("delay_status")
+  linkedProductCount   Int?                @map("linked_product_count")
+  isActive             Boolean?            @map("is_active")
+  categories           Json?
+  productCount         Int?                @map("product_count")
+  payload              Json?
+  createdAt            DateTime?           @map("created_at")
+  updatedAt            DateTime?           @map("updated_at")
+  products             Product[]
+  supplierProducts     SupplierProduct[]
+  purchaseSuggestions  PurchaseSuggestion[]
+  purchaseOrders       PurchaseOrder[]
+  warehouseLocations   WarehouseLocation[]
+  warehouseMovements   WarehouseMovement[]
+  stockMovements       StockMovement[]
+  catalogImports       CatalogImport[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id                                String                 @id
+  sku                               String                 @unique
+  barcode                           String?                @unique
+  name                              String
+  brand                             String?
+  categoryId                        String?                @map("category_id")
+  supplierId                        String?                @map("supplier_id")
+  sectionId                         String?                @map("section_id")
+  shelfSide                         String?                @map("shelf_side")
+  shelfNo                           Int?                   @map("shelf_no")
+  shelfLevel                        Int?                   @map("shelf_level")
+  shelfCode                         String?                @map("shelf_code")
+  requiredStorageType               String?                @map("required_storage_type")
+  unit                              String?
+  purchasePrice                     Decimal?               @map("purchase_price") @db.Decimal(14, 4)
+  salePrice                         Decimal?               @map("sale_price") @db.Decimal(14, 4)
+  etiket                            String?
+  placementPriority                 String?                @map("placement_priority")
+  averageDesi                       Decimal?               @map("average_desi") @db.Decimal(12, 3)
+  criticalStock                     Int?                   @map("critical_stock")
+  maxShelfStock                     Int?                   @map("max_shelf_stock")
+  maxStock                          Int?                   @map("max_stock")
+  unitsPerCase                      Int?                   @map("units_per_case")
+  casesPerPallet                    Int?                   @map("cases_per_pallet")
+  unitsPerPallet                    Int?                   @map("units_per_pallet")
+  minimumOrderCaseQty               Int?                   @map("minimum_order_case_qty")
+  isListed                          Boolean?               @map("is_listed")
+  registerOnOrder                   Boolean?               @map("register_on_order")
+  catalogVisibility                 String?                @map("catalog_visibility")
+  orderActivatedStatus              String?                @map("order_activated_status")
+  isActive                          Boolean?               @map("is_active")
+  sourceSheet                       String?                @map("source_sheet")
+  depotAssignmentType               String?                @map("depot_assignment_type")
+  depotLocationCode                 String?                @map("depot_location_code")
+  depotZoneCode                     String?                @map("depot_zone_code")
+  isVirtualLocation                 Boolean?               @map("is_virtual_location")
+  capacityMode                      String?                @map("capacity_mode")
+  stockingStrategy                  String?                @map("stocking_strategy")
+  assignmentPriority                Int?                   @map("assignment_priority")
+  depotLocationLabel                String?                @map("depot_location_label")
+  defaultWarehouseLocationCode      String?                @map("default_warehouse_location_code")
+  alternativeWarehouseLocationCodes Json?                  @map("alternative_warehouse_location_codes")
+  payload                           Json?
+  createdAt                         DateTime?              @map("created_at")
+  updatedAt                         DateTime?              @map("updated_at")
+  priceUpdatedAt                    DateTime?              @map("price_updated_at")
+  lastPriceChangeDate               DateTime?              @map("last_price_change_date")
+  lastPriceChangeAt                 DateTime?              @map("last_price_change_at")
+  lastPriceChangeSource             String?                @map("last_price_change_source")
+  category                          Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier                          Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  section                           Section?               @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  stock                             Stock?
+  supplierProducts                  SupplierProduct[]
+  stockMovements                    StockMovement[]
+  warehouseLocations                WarehouseLocation[]
+  warehouseMovements                WarehouseMovement[]
+  purchaseSuggestions               PurchaseSuggestion[]
+  purchaseOrderItems                PurchaseOrderItem[]
+  saleItems                         SaleItem[]
+  stockTransferRequests             StockTransferRequest[]
+  eslDevices                        EslDevice[]
+  eslHistory                        EslHistory[]
+  priceEvents                       ProductPriceEvent[]
+
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([sectionId])
+  @@map("products")
+}
+
+model ProductPriceEvent {
+  id                String    @id
+  productId         String    @map("product_id")
+  previousSalePrice Decimal?  @map("previous_sale_price") @db.Decimal(14, 4)
+  salePrice         Decimal?  @map("sale_price") @db.Decimal(14, 4)
+  source            String?
+  payload           Json?
+  createdAt         DateTime? @map("created_at")
+  product           Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@map("product_price_events")
+}
+
+model Stock {
+  id                String       @id @default(uuid())
+  productId         String       @unique @map("product_id")
+  warehouseQuantity Int?         @map("warehouse_quantity")
+  shelfQuantity     Int?         @map("shelf_quantity")
+  quantity          Int?
+  onHand            Int?         @map("on_hand")
+  available         Int?
+  reserved          Int?
+  batchCount        Int?         @map("batch_count")
+  nearestExpiry     String?      @map("nearest_expiry")
+  fefoDefaultBatchNo String?     @map("fefo_default_batch_no")
+  fefoDefaultExpiry String?      @map("fefo_default_expiry")
+  payload           Json?
+  updatedAt         DateTime?    @map("updated_at")
+  product           Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batches           StockBatch[]
+
+  @@index([productId])
+  @@map("stocks")
+}
+
+model StockBatch {
+  id                String    @id @default(uuid())
+  stockId           String    @map("stock_id")
+  productId         String    @map("product_id")
+  batchNo           String    @map("batch_no")
+  skt               String?
+  warehouseQuantity Int?      @map("warehouse_quantity")
+  shelfQuantity     Int?      @map("shelf_quantity")
+  totalQuantity     Int?      @map("total_quantity")
+  status            String?
+  payload           Json?
+  stock             Stock     @relation(fields: [stockId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([batchNo, skt])
+  @@map("stock_batches")
+}
+
+model StockMovement {
+  id                    String    @id
+  productId             String?   @map("product_id")
+  supplierId            String?   @map("supplier_id")
+  productName           String?   @map("product_name")
+  sku                   String?
+  type                  String?
+  qty                   Int?
+  previousQuantity      Int?      @map("previous_quantity")
+  nextQuantity          Int?      @map("next_quantity")
+  previousTotalQuantity Int?      @map("previous_total_quantity")
+  nextTotalQuantity     Int?      @map("next_total_quantity")
+  location              String?
+  fromLocation          String?   @map("from_location")
+  toLocation            String?   @map("to_location")
+  reasonCode            String?   @map("reason_code")
+  reasonLabel           String?   @map("reason_label")
+  referenceNo           String?   @map("reference_no")
+  transferRequestId     String?   @map("transfer_request_id")
+  userId                String?   @map("user_id")
+  userName              String?   @map("user_name")
+  batchNo               String?   @map("batch_no")
+  skt                   String?
+  payload               Json?
+  createdAt             DateTime? @map("created_at")
+  updatedAt             DateTime? @map("updated_at")
+  product               Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  supplier              Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  user                  User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  transferRequest       StockTransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([referenceNo])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+model WarehouseLocation {
+  id             String    @id
+  rowNo          Int?      @map("row_no")
+  side           String?
+  shelfNo        Int?      @map("shelf_no")
+  levelNo        Int?      @map("level_no")
+  locationCode   String?   @unique @map("location_code")
+  storageType    String?   @map("storage_type")
+  status         String?
+  productId      String?   @map("product_id")
+  productName    String?   @map("product_name")
+  sku            String?
+  barcode        String?
+  supplierId     String?   @map("supplier_id")
+  supplierName   String?   @map("supplier_name")
+  batchNo        String?   @map("batch_no")
+  skt            String?
+  palletCount    Int?      @map("pallet_count")
+  palletCapacity Int?      @map("pallet_capacity")
+  occupancy      Decimal?  @db.Decimal(8, 3)
+  warehouseStock Int?      @map("warehouse_stock")
+  isReserved     Boolean?  @map("is_reserved")
+  isBlocked      Boolean?  @map("is_blocked")
+  payload        Json?
+  createdAt      DateTime? @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+  product        Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  supplier       Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  movements      WarehouseMovement[]
+
+  @@map("warehouse_locations")
+}
+
+model WarehouseMovement {
+  id            String             @id
+  productId     String?            @map("product_id")
+  productName   String?            @map("product_name")
+  sku           String?
+  barcode       String?
+  supplierId    String?            @map("supplier_id")
+  supplierName  String?            @map("supplier_name")
+  locationId    String?            @map("location_id")
+  locationCode  String?            @map("location_code")
+  batchNo       String?            @map("batch_no")
+  skt           String?
+  movementType  String?            @map("movement_type")
+  qty           Int?
+  createdBy     String?            @map("created_by")
+  createdByName String?            @map("created_by_name")
+  description   String?
+  payload       Json?
+  createdAt     DateTime?          @map("created_at")
+  product       Product?           @relation(fields: [productId], references: [id], onDelete: SetNull)
+  supplier      Supplier?          @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  location      WarehouseLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  creator       User?              @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@map("warehouse_movements")
+}
+
+model SupplierProduct {
+  id                  String    @id
+  productId           String?   @map("product_id")
+  supplierId          String?   @map("supplier_id")
+  supplierProductCode String?   @map("supplier_product_code")
+  supplierProductName String?   @map("supplier_product_name")
+  supplierSku         String?   @map("supplier_sku")
+  barcode             String?
+  purchasePrice       Decimal?  @map("purchase_price") @db.Decimal(14, 4)
+  currency            String?
+  minimumOrderQty     Int?      @map("minimum_order_qty")
+  minOrderQty         Int?      @map("min_order_qty")
+  leadTimeDays        Int?      @map("lead_time_days")
+  isDefault           Boolean?  @map("is_default")
+  isActive            Boolean?  @map("is_active")
+  source              String?
+  priceUnit           String?   @map("price_unit")
+  minOrderUnit        String?   @map("min_order_unit")
+  defaultOrderUnit    String?   @map("default_order_unit")
+  unitsPerCase        Int?      @map("units_per_case")
+  casesPerPallet      Int?      @map("cases_per_pallet")
+  payload             Json?
+  createdAt           DateTime? @map("created_at")
+  updatedAt           DateTime? @map("updated_at")
+  product             Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  supplier            Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@index([productId, supplierId])
+  @@map("supplier_products")
+}
+
+model PurchaseSuggestion {
+  id             String    @id
+  productId      String?   @map("product_id")
+  categoryId     String?   @map("category_id")
+  supplierId     String?   @map("supplier_id")
+  currentStock   Int?      @map("current_stock")
+  criticalStock  Int?      @map("critical_stock")
+  suggestedQty   Int?      @map("suggested_qty")
+  unitPrice      Decimal?  @map("unit_price") @db.Decimal(14, 4)
+  totalPrice     Decimal?  @map("total_price") @db.Decimal(14, 4)
+  status         String?
+  reason         String?
+  riskLevel      String?   @map("risk_level")
+  payload        Json?
+  createdAt      DateTime? @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+  product        Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  category       Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier       Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@map("purchase_suggestions")
+}
+
+model PurchaseOrder {
+  id                  String              @id
+  orderNumber         String?             @unique @map("order_number")
+  supplierId          String?             @map("supplier_id")
+  source              String?
+  status              String?
+  currentStatus       String?             @map("current_status")
+  currency            String?
+  subtotalAmount      Decimal?            @map("subtotal_amount") @db.Decimal(14, 4)
+  taxAmount           Decimal?            @map("tax_amount") @db.Decimal(14, 4)
+  shippingFee         Decimal?            @map("shipping_fee") @db.Decimal(14, 4)
+  discountAmount      Decimal?            @map("discount_amount") @db.Decimal(14, 4)
+  grandTotal          Decimal?            @map("grand_total") @db.Decimal(14, 4)
+  totalAmount         Decimal?            @map("total_amount") @db.Decimal(14, 4)
+  deliveryStatus      String?             @map("delivery_status")
+  goodsReceiptCompleted Boolean?          @map("goods_receipt_completed")
+  stockEntryMode      String?             @map("stock_entry_mode")
+  stockEntryCompleted Boolean?            @map("stock_entry_completed")
+  archived            Boolean?
+  createdBy           String?             @map("created_by")
+  warehouseCity       String?             @map("warehouse_city")
+  deliveryLocation    String?             @map("delivery_location")
+  orderReason         String?             @map("order_reason")
+  priority            String?
+  logisticsProvider   String?             @map("logistics_provider")
+  trackingNo          String?             @map("tracking_no")
+  estimatedDeliveryDate String?           @map("estimated_delivery_date")
+  payload             Json?
+  createdAt           DateTime?           @map("created_at")
+  updatedAt           DateTime?           @map("updated_at")
+  approvedAt          DateTime?           @map("approved_at")
+  deliveredAt         DateTime?           @map("delivered_at")
+  completedAt         DateTime?           @map("completed_at")
+  archivedAt          DateTime?           @map("archived_at")
+  supplier            Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  creator             User?               @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  items               PurchaseOrderItem[]
+  statusHistory       PurchaseOrderStatusHistory[]
+  activityLogs        PurchaseOrderActivityLog[]
+
+  @@index([supplierId])
+  @@index([createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderStatusHistory {
+  id        String        @id @default(uuid())
+  orderId   String        @map("order_id")
+  status    String?
+  at        DateTime?
+  by        String?
+  note      String?
+  payload   Json?
+  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor     User?         @relation(fields: [by], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([status])
+  @@index([at])
+  @@map("purchase_order_status_history")
+}
+
+model PurchaseOrderActivityLog {
+  id        String        @id @default(uuid())
+  orderId   String        @map("order_id")
+  type      String?
+  status    String?
+  at        DateTime?
+  by        String?
+  note      String?
+  payload   Json?
+  order     PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor     User?         @relation(fields: [by], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([type])
+  @@index([status])
+  @@index([at])
+  @@map("purchase_order_activity_logs")
+}
+
+model PurchaseOrderItem {
+  id          String         @id
+  orderId     String?        @map("order_id")
+  productId   String?        @map("product_id")
+  quantity    Int?
+  unitPrice   Decimal?       @map("unit_price") @db.Decimal(14, 4)
+  totalPrice  Decimal?       @map("total_price") @db.Decimal(14, 4)
+  unit        String?
+  taxRate     Decimal?       @map("tax_rate") @db.Decimal(8, 4)
+  taxAmount   Decimal?       @map("tax_amount") @db.Decimal(14, 4)
+  payload     Json?
+  createdAt   DateTime?      @map("created_at")
+  updatedAt   DateTime?      @map("updated_at")
+  order       PurchaseOrder? @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@map("purchase_order_items")
+}
+
+model Sale {
+  id             String    @id
+  referenceNo    String?   @unique @map("reference_no")
+  type           String?
+  deskCode       String?   @map("desk_code")
+  cashierId      String?   @map("cashier_id")
+  cashierName    String?   @map("cashier_name")
+  items          Json?
+  subtotal       Decimal?  @db.Decimal(14, 4)
+  discount       Decimal?  @db.Decimal(14, 4)
+  totalAmount    Decimal?  @map("total_amount") @db.Decimal(14, 4)
+  paymentMethod  String?   @map("payment_method")
+  payments       Json?
+  originalSaleRef String?  @map("original_sale_ref")
+  status         String?
+  customer       Json?
+  payload        Json?
+  createdAt      DateTime? @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+  cashier        User?     @relation(fields: [cashierId], references: [id], onDelete: SetNull)
+  saleItems      SaleItem[]
+
+  @@index([createdAt])
+  @@index([cashierId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String   @id @default(uuid())
+  saleId      String   @map("sale_id")
+  productId   String?  @map("product_id")
+  barcode     String?
+  name        String?
+  sku         String?
+  quantity    Int?
+  vatRate     Decimal? @map("vat_rate") @db.Decimal(8, 4)
+  unitPrice   Decimal? @map("unit_price") @db.Decimal(14, 4)
+  totalPrice  Decimal? @map("total_price") @db.Decimal(14, 4)
+  payload     Json?
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+model DailyStoreClosing {
+  id               String    @id
+  storeId          String    @map("store_id")
+  businessDate     DateTime  @map("business_date") @db.Date
+  timezone         String
+  salesCount       Int       @default(0) @map("sales_count")
+  returnCount      Int       @default(0) @map("return_count")
+  transactionCount Int       @default(0) @map("transaction_count")
+  grossSalesAmount Decimal   @default(0) @map("gross_sales_amount") @db.Decimal(14, 4)
+  returnAmount     Decimal   @default(0) @map("return_amount") @db.Decimal(14, 4)
+  netRevenue       Decimal   @default(0) @map("net_revenue") @db.Decimal(14, 4)
+  itemCount        Int       @default(0) @map("item_count")
+  source           String?
+  payload          Json?
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([storeId, businessDate])
+  @@index([businessDate])
+  @@map("daily_store_closings")
+}
+
+model Customer {
+  id          String          @id
+  customerNo  String?         @unique @map("customer_no")
+  name        String?
+  phone       String?
+  email       String?
+  passwordHash String?        @map("password_hash")
+  totalOrders Int?            @map("total_orders")
+  totalSpent  Decimal?        @map("total_spent") @db.Decimal(14, 4)
+  isActive    Boolean?        @map("is_active")
+  discounts   Json?
+  giftCards   Json?           @map("gift_cards")
+  city        String?
+  district    String?
+  payload     Json?
+  createdAt   DateTime?       @map("created_at")
+  updatedAt   DateTime?       @map("updated_at")
+  orders      CustomerOrder[]
+
+  @@map("customers")
+}
+
+model CustomerOrder {
+  id          String    @id
+  customerId  String?   @map("customer_id")
+  totalAmount Decimal?  @map("total_amount") @db.Decimal(14, 4)
+  items       Json?
+  status      String?
+  payload     Json?
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@map("customer_orders")
+}
+
+model Task {
+  id          String    @id
+  taskNo      String?   @unique @map("task_no")
+  title       String?
+  description String?
+  assignedTo  String?   @map("assigned_to")
+  priority    String?
+  dueDate     String?   @map("due_date")
+  status      String?
+  comments    Json?
+  createdBy   String?   @map("created_by")
+  payload     Json?
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+  assignee    User?     @relation("TaskAssignedTo", fields: [assignedTo], references: [id], onDelete: SetNull)
+  creator     User?     @relation("TaskCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  commentRows TaskComment[]
+
+  @@map("tasks")
+}
+
+model TaskComment {
+  id         String    @id
+  taskId     String    @map("task_id")
+  text       String?
+  authorId   String?   @map("author_id")
+  authorName String?   @map("author_name")
+  payload    Json?
+  createdAt  DateTime? @map("created_at")
+  task       Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author     User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([authorId])
+  @@map("task_comments")
+}
+
+model Notification {
+  id            String    @id
+  userId        String?   @map("user_id")
+  type          String?
+  title         String?
+  message       String?
+  severity      String?
+  isRead        Boolean?  @map("is_read")
+  relatedTaskId String?   @map("related_task_id")
+  dedupeKey     String?   @map("dedupe_key")
+  actionUrl     String?   @map("action_url")
+  actionType    String?   @map("action_type")
+  audience      Json?
+  delivery      Json?
+  payload       Json?
+  createdAt     DateTime? @map("created_at")
+  createdBy     String?   @map("created_by")
+  proximityDeliveries NotificationDelivery[]
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+model StockTransferRequest {
+  id                    String          @id
+  productId             String?         @map("product_id")
+  productName           String?         @map("product_name")
+  sku                   String?
+  barcode               String?
+  sectionId             String?         @map("section_id")
+  sectionName           String?         @map("section_name")
+  sectionNumber         Int?            @map("section_number")
+  sourceLocation        String?         @map("source_location")
+  targetLocation        String?         @map("target_location")
+  quantity              Int?
+  warehouseStockSnapshot Int?           @map("warehouse_stock_snapshot")
+  shelfStockSnapshot    Int?            @map("shelf_stock_snapshot")
+  status                String?
+  priority              String?
+  requestedBy           String?         @map("requested_by")
+  requestedByName       String?         @map("requested_by_name")
+  handledBy             String?         @map("handled_by")
+  handledByName         String?         @map("handled_by_name")
+  note                  String?
+  handledNote           String?         @map("handled_note")
+  payload               Json?
+  createdAt             DateTime?       @map("created_at")
+  completedAt           DateTime?       @map("completed_at")
+  updatedAt             DateTime?       @map("updated_at")
+  product               Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  section               Section?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  audits                TransferAudit[]
+  stockMovements        StockMovement[]
+  requester             User?           @relation("TransferRequestedBy", fields: [requestedBy], references: [id], onDelete: SetNull)
+  handler               User?           @relation("TransferHandledBy", fields: [handledBy], references: [id], onDelete: SetNull)
+
+  @@map("stock_transfer_requests")
+}
+
+model TransferAudit {
+  id                String                @id
+  transferRequestId String?               @map("transfer_request_id")
+  fromStatus        String?               @map("from_status")
+  toStatus          String?               @map("to_status")
+  note              String?
+  actorId           String?               @map("actor_id")
+  actorName         String?               @map("actor_name")
+  payload           Json?
+  createdAt         DateTime?             @map("created_at")
+  transferRequest   StockTransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: Cascade)
+  actor             User?                 @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@map("transfer_audits")
+}
+
+model EslDevice {
+  id                String       @id
+  name              String?
+  macAddress        String?      @unique @map("mac_address")
+  model             String?
+  firmwareVersion   String?      @map("firmware_version")
+  batteryLevel      Int?         @map("battery_level")
+  status            String?
+  assignedProductId String?      @map("assigned_product_id")
+  lastSyncAt        DateTime?    @map("last_sync_at")
+  location          String?
+  ipAddress         String?      @map("ip_address")
+  isDeleted         Boolean?     @map("is_deleted")
+  deletedAt         DateTime?    @map("deleted_at")
+  payload           Json?
+  createdAt         DateTime?    @map("created_at")
+  updatedAt         DateTime?    @map("updated_at")
+  assignedProduct   Product?     @relation(fields: [assignedProductId], references: [id], onDelete: SetNull)
+  history           EslHistory[]
+
+  @@map("esl_devices")
+}
+
+model EslHistory {
+  id             String     @id
+  deviceId       String?    @map("device_id")
+  deviceName     String?    @map("device_name")
+  productId      String?    @map("product_id")
+  productName    String?    @map("product_name")
+  productSku     String?    @map("product_sku")
+  productBarcode String?    @map("product_barcode")
+  salePrice      Decimal?   @map("sale_price") @db.Decimal(14, 4)
+  template       String?
+  customFields   Json?      @map("custom_fields")
+  status         String?
+  payload        Json?
+  createdAt      DateTime?  @map("created_at")
+  device         EslDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  product        Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@map("esl_history")
+}
+
+model BeaconDevice {
+  id             String    @id @default(uuid())
+  name           String?
+  deviceCode     String    @unique @map("device_code")
+  uuid           String?
+  major          Int?
+  minor          Int?
+  storeId        String?   @map("store_id")
+  locationZoneId String?   @map("location_zone_id")
+  sectionId      String?   @map("section_id")
+  status         String    @default("ACTIVE")
+  lastSeenAt     DateTime? @map("last_seen_at")
+  firmwareVersion String?  @map("firmware_version")
+  batteryLevel   Int?      @map("battery_level")
+  metadata       Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  locationZone   LocationZone? @relation(fields: [locationZoneId], references: [id], onDelete: SetNull)
+  section        Section?  @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  events         ProximityEvent[]
+  rules          NotificationRule[]
+  deliveries     NotificationDelivery[]
+
+  @@index([uuid, major, minor])
+  @@index([locationZoneId])
+  @@index([sectionId])
+  @@index([storeId])
+  @@map("beacon_devices")
+}
+
+model LocationZone {
+  id          String    @id @default(uuid())
+  name        String
+  code        String    @unique
+  type        String
+  storeId     String?   @map("store_id")
+  sectionId   String?   @map("section_id")
+  description String?
+  metadata    Json?
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  section     Section?  @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  beaconDevices BeaconDevice[]
+  events      ProximityEvent[]
+  rules       NotificationRule[]
+  deliveries  NotificationDelivery[]
+
+  @@index([type])
+  @@index([sectionId])
+  @@index([storeId])
+  @@map("location_zones")
+}
+
+model ProximityEvent {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  userType       String    @map("user_type")
+  beaconDeviceId String?   @map("beacon_device_id")
+  locationZoneId String?   @map("location_zone_id")
+  deviceCode     String?   @map("device_code")
+  uuid           String?
+  major          Int?
+  minor          Int?
+  rssi           Int
+  eventType      String    @map("event_type")
+  source         String
+  detectedAt     DateTime? @map("detected_at")
+  rawPayload     Json?     @map("raw_payload")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  beaconDevice   BeaconDevice? @relation(fields: [beaconDeviceId], references: [id], onDelete: SetNull)
+  locationZone   LocationZone? @relation(fields: [locationZoneId], references: [id], onDelete: SetNull)
+  deliveries     NotificationDelivery[]
+
+  @@index([userId, createdAt])
+  @@index([beaconDeviceId, createdAt])
+  @@index([locationZoneId, createdAt])
+  @@index([deviceCode])
+  @@map("proximity_events")
+}
+
+model NotificationRule {
+  id             String    @id @default(uuid())
+  name           String
+  targetType     String    @map("target_type")
+  trigger        String
+  locationZoneId String?   @map("location_zone_id")
+  beaconDeviceId String?   @map("beacon_device_id")
+  title          String
+  body           String
+  actionType     String?   @map("action_type")
+  actionUrl      String?   @map("action_url")
+  payload        Json?
+  cooldownMinutes Int      @default(30) @map("cooldown_minutes")
+  maxPerVisit    Int?      @map("max_per_visit")
+  priority       Int       @default(0)
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  locationZone   LocationZone? @relation(fields: [locationZoneId], references: [id], onDelete: SetNull)
+  beaconDevice   BeaconDevice? @relation(fields: [beaconDeviceId], references: [id], onDelete: SetNull)
+  deliveries     NotificationDelivery[]
+
+  @@index([targetType, trigger, isActive])
+  @@index([locationZoneId])
+  @@index([beaconDeviceId])
+  @@map("notification_rules")
+}
+
+model NotificationDelivery {
+  id                 String    @id @default(uuid())
+  userId             String    @map("user_id")
+  notificationRuleId String?   @map("notification_rule_id")
+  proximityEventId   String?   @map("proximity_event_id")
+  notificationId     String?   @map("notification_id")
+  locationZoneId     String?   @map("location_zone_id")
+  beaconDeviceId     String?   @map("beacon_device_id")
+  status             String
+  skipReason         String?   @map("skip_reason")
+  dedupeKey          String?   @map("dedupe_key")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  notificationRule   NotificationRule? @relation(fields: [notificationRuleId], references: [id], onDelete: SetNull)
+  proximityEvent     ProximityEvent? @relation(fields: [proximityEventId], references: [id], onDelete: SetNull)
+  notification       Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
+  locationZone       LocationZone? @relation(fields: [locationZoneId], references: [id], onDelete: SetNull)
+  beaconDevice       BeaconDevice? @relation(fields: [beaconDeviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, notificationRuleId, createdAt])
+  @@index([proximityEventId])
+  @@index([dedupeKey])
+  @@map("notification_deliveries")
+}
+
+model Setting {
+  id          String    @id @default("default")
+  systemName  String?   @map("system_name")
+  companyName String?   @map("company_name")
+  currency    String?
+  timezone    String?
+  payload     Json?
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("settings")
+}
+
+model AccessRequest {
+  id                       String    @id
+  userId                   String?   @map("user_id")
+  storeId                  String?   @map("store_id")
+  permission               String?
+  reason                   String?
+  requestedDurationMinutes Int?      @map("requested_duration_minutes")
+  status                   String?
+  createdBy                String?   @map("created_by")
+  reviewedBy               String?   @map("reviewed_by")
+  assignedTo               String?   @map("assigned_to")
+  reviewNote               String?   @map("review_note")
+  payload                  Json?
+  createdAt                DateTime? @map("created_at")
+  updatedAt                DateTime? @map("updated_at")
+  reviewedAt               DateTime? @map("reviewed_at")
+  user                     User?     @relation("AccessRequestUser", fields: [userId], references: [id], onDelete: SetNull)
+  creator                  User?     @relation("AccessRequestCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  reviewer                 User?     @relation("AccessRequestReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+  grants                   TemporaryPermissionGrant[]
+
+  @@map("access_requests")
+}
+
+model TemporaryPermissionGrant {
+  id          String         @id
+  userId      String?        @map("user_id")
+  permission  String?
+  storeId     String?        @map("store_id")
+  requestId   String?        @map("request_id")
+  status      String?
+  approvedBy  String?        @map("approved_by")
+  reason      String?
+  payload     Json?
+  createdAt   DateTime?      @map("created_at")
+  updatedAt   DateTime?      @map("updated_at")
+  expiresAt   DateTime?      @map("expires_at")
+  revokedAt   DateTime?      @map("revoked_at")
+  revokedBy   String?        @map("revoked_by")
+  user        User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  request     AccessRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  approver    User?          @relation("TemporaryGrantApprover", fields: [approvedBy], references: [id], onDelete: SetNull)
+  revoker     User?          @relation("TemporaryGrantRevoker", fields: [revokedBy], references: [id], onDelete: SetNull)
+
+  @@map("temporary_permission_grants")
+}
+
+model AccessAuditLog {
+  id         String    @id
+  action     String?
+  userId     String?   @map("user_id")
+  permission String?
+  storeId    String?   @map("store_id")
+  requestId  String?   @map("request_id")
+  actorId    String?   @map("actor_id")
+  actorIp    String?   @map("actor_ip")
+  metadata   Json?
+  payload    Json?
+  createdAt  DateTime? @map("created_at")
+
+  @@map("access_audit_logs")
+}
+
+model CatalogImport {
+  id               String    @id
+  supplierId       String?   @map("supplier_id")
+  supplierName     String?   @map("supplier_name")
+  fileName         String?   @map("file_name")
+  uploadedAt       DateTime? @map("uploaded_at")
+  uploadedBy       String?   @map("uploaded_by")
+  status           String?
+  validityStart    DateTime? @map("validity_start")
+  validityEnd      DateTime? @map("validity_end")
+  summary          Json?
+  rows             Json?
+  requiredApproval Boolean?  @map("required_approval")
+  columnsValidated Boolean?  @map("columns_validated")
+  payload          Json?
+  supplier         Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@map("catalog_imports")
+}
+
+model SupplierCatalogVersion {
+  id         String    @id
+  supplierId String?   @map("supplier_id")
+  status     String?
+  rows       Json?
+  payload    Json?
+  createdAt  DateTime? @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@map("supplier_catalog_versions")
+}
+
+model SupportTicket {
+  id          String    @id
+  subject     String?
+  description String?
+  userId      String?   @map("user_id")
+  user        String?
+  role        String?
+  page        String?
+  browser     String?
+  attachments Json?
+  status      String?
+  payload     Json?
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("support_tickets")
+}

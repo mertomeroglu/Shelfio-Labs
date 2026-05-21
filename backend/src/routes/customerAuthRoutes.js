@@ -1,0 +1,23 @@
+import { Router } from 'express';
+import { customerAuthController } from '../controllers/customerAuthController.js';
+import { authenticateCustomer } from '../middlewares/customerAuthMiddleware.js';
+
+const router = Router();
+router.post('/login', customerAuthController.login);
+router.post('/register', customerAuthController.register);
+router.post('/refresh', customerAuthController.refresh);
+router.get('/catalog', customerAuthController.catalog);
+router.get('/catalog/:id', customerAuthController.catalogDetail);
+router.get('/catalog/:id/stock-forecast', customerAuthController.catalogStockForecast);
+router.get('/store-map-public', customerAuthController.storeMapPublic);
+router.get('/me', authenticateCustomer, customerAuthController.me);
+router.patch('/profile', authenticateCustomer, customerAuthController.updateProfile);
+router.get('/dashboard', authenticateCustomer, customerAuthController.dashboard);
+router.get('/orders', authenticateCustomer, customerAuthController.orders);
+router.get('/cart', authenticateCustomer, customerAuthController.getCart);
+router.patch('/cart', authenticateCustomer, customerAuthController.updateCart);
+router.post('/orders', authenticateCustomer, customerAuthController.placeOrder);
+router.get('/notifications', authenticateCustomer, customerAuthController.notifications);
+router.patch('/notifications/read-all', authenticateCustomer, customerAuthController.markNotificationsAsRead);
+router.get('/store-map', authenticateCustomer, customerAuthController.storeMap);
+export default router;

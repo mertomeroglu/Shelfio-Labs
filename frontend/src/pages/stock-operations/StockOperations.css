@@ -1,0 +1,93 @@
+/* Phase C: moved from styles/dashboard.css; stock route-specific dashboard legacy blocks. */
+.movement-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.movement-summary-item {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+}
+
+.movement-summary-item strong {
+  font-size: 1.35rem;
+}
+
+.movement-summary-item span {
+  color: var(--muted);
+}
+
+@media (max-width: 991px) {
+.movement-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Stok progress bar (ürünler sayfası) */
+.stock-progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stock-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.stock-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}
+
+.stock-progress-fill.level-ok { background: #16a34a; }
+
+.stock-progress-fill.level-warning { background: #f59e0b; }
+
+.stock-progress-fill.level-danger { background: #ef4444; }
+
+.stock-progress-text {
+  font-size: 0.82rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Hareket tipi renkli badge override */
+.movement-type-in {
+  color: #16a34a;
+  background: #dcfce7;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.movement-type-out {
+  color: #ef4444;
+  background: #fef2f2;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.movement-type-adjustment {
+  color: #f59e0b;
+  background: #fffbeb;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
