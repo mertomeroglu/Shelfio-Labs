@@ -106,7 +106,22 @@ const TURKISH_TEXT_REPLACEMENTS = [
 export const normalizeTurkishText = (value, fallback = '-') => {
   const raw = String(value ?? '').trim();
   if (!raw) return fallback;
-  return TURKISH_TEXT_REPLACEMENTS.reduce((text, [from, to]) => text.replaceAll(from, to), raw);
+  return TURKISH_TEXT_REPLACEMENTS.reduce((text, [from, to]) => text.replaceAll(from, to), raw)
+    .replace(/\bSo\?uk\b/gi, 'Soğuk')
+    .replace(/\bMa\?aza\b/gi, 'Mağaza')
+    .replace(/\bUrun\b/gi, 'Ürün')
+    .replace(/\burun\b/gi, 'ürün')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+export const cleanSectionDisplayName = (value, fallback = '-') => {
+  const text = normalizeTurkishText(value, '');
+  const cleaned = text
+    .replace(/\s*\([^)]*(?:karma|ambiyans|°c|\/|❄|soğuk|sıcaklık|derece)[^)]*\)\s*/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || fallback;
 };
 
 export const joinDisplayParts = (parts = [], separator = ' • ') => {

@@ -312,9 +312,13 @@ const normalizeCampaignViewKey = (value, fallback = 'all') => {
 };
 
 const CAMPAIGN_STATUS_LABELS = {
-  active: 'Aktif',
-  paused: 'Beklemede',
-  archived: 'Arşiv',
+  active: 'Yayında',
+  scheduled: 'Planlandı',
+  paused: 'Yayında değil',
+  inactive: 'Yayında değil',
+  draft: 'Yayında değil',
+  archived: 'Yayında değil',
+  expired: 'Süresi bitti',
 };
 
 const CAMPAIGN_SUGGESTION_PRIORITY_LABELS = {
@@ -384,6 +388,17 @@ const formatCampaignRefreshDateTime = (value) => {
   return `${date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`;
 };
 const getCampaignRiskLabel = (value) => CAMPAIGN_SUGGESTION_PRIORITY_LABELS[String(value || '').toLowerCase()] || 'Orta';
+
+const CampaignChartTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  const count = Number(payload[0]?.value || 0);
+  return (
+    <div className="campaign-chart-tooltip">
+      <strong>{label}</strong>
+      <span>{formatNumber(count)} kayıt</span>
+    </div>
+  );
+};
 const getExpiryRiskLevel = (daysToExpiry) => {
   const days = Number(daysToExpiry);
   if (!Number.isFinite(days)) return 'low';
@@ -1441,13 +1456,6 @@ const formatCampaignDate = (value) => {
   return date.toLocaleDateString('tr-TR');
 };
 
-const normalizeCampaignConflictPolicyValue = (value) => {
-  const raw = String(value || 'best_price').trim().toLocaleLowerCase('tr-TR').replace(/[\s-]+/g, '_');
-  if (['highest_priority', 'priority', 'priority_wins', 'priority_first'].includes(raw)) return 'highest_priority';
-  if (['higher_discount_wins', 'highest_discount', 'highest_discount_wins', 'lowest_price', 'lowest_effective_price', 'customer_best_price', 'best', 'best_price'].includes(raw)) return 'best_price';
-  return 'best_price';
-};
-
 const normalizeCampaignBrandKey = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
 
 const getCampaignProductMatch = (campaign = {}, product = {}) => {
@@ -1469,90 +1477,6 @@ const getCampaignProductMatch = (campaign = {}, product = {}) => {
   if (['product', 'brand', 'category'].includes(type)) return null;
   if (!hasExplicitScope || type === 'general') return { scope: 'general', specificity: 1 };
   return null;
-};
-
-const resolveCampaignPreviewPrice = (campaign = {}, regularPrice = 0) => {
-  const base = Number(regularPrice || 0);
-  if (!Number.isFinite(base) || base <= 0) return null;
-  const discountRate = Math.max(0, Number(campaign.discountRate || 0) || 0);
-  const discountAmount = Math.max(0, Number(campaign.discountAmount || campaign.amountOff || campaign.fixedDiscountAmount || 0) || 0);
-  let effectivePrice = base;
-  if (discountAmount > 0) effectivePrice = base - discountAmount;
-  else if (discountRate > 0) effectivePrice = base * (1 - discountRate / 100);
-  effectivePrice = Number(Math.max(0.01, Math.min(base, effectivePrice)).toFixed(2));
-  if (!(effectivePrice > 0) || effectivePrice >= base) return null;
-  return {
-    effectivePrice,
-    discountAmount: Number((base - effectivePrice).toFixed(2)),
-    discountPercent: Number((((base - effectivePrice) / base) * 100).toFixed(2)),
-  };
-};
-
-const compareCampaignPreviewCandidates = (left, right, strategy) => {
-  if (strategy === 'highest_priority') {
-    if (right.priority !== left.priority) return right.priority - left.priority;
-    if (left.effectivePrice !== right.effectivePrice) return left.effectivePrice - right.effectivePrice;
-  } else {
-    if (left.effectivePrice !== right.effectivePrice) return left.effectivePrice - right.effectivePrice;
-    if (right.discountAmount !== left.discountAmount) return right.discountAmount - left.discountAmount;
-  }
-  if (right.specificity !== left.specificity) return right.specificity - left.specificity;
-  if (right.priority !== left.priority) return right.priority - left.priority;
-  return new Date(right.startsAt || 0).getTime() - new Date(left.startsAt || 0).getTime();
-};
-
-const buildCampaignOverlapAnalysis = ({ campaigns = [], products = [] } = {}) => {
-  const activeCampaigns = campaigns
-    .filter((campaign) => isCampaignCurrentlyActive(campaign))
-    .map((campaign) => ({
-      ...campaign,
-      conflictPolicy: normalizeCampaignConflictPolicyValue(campaign.conflictPolicy),
-      priority: Number(campaign.priority || 0) || 0,
-    }));
-
-  const overlaps = [];
-  for (const product of products) {
-    const regularPrice = Number(product?.regularPrice ?? product?.salePrice ?? product?.price ?? product?.currentPrice ?? 0) || 0;
-    const candidates = activeCampaigns
-      .map((campaign) => {
-        const match = getCampaignProductMatch(campaign, product);
-        if (!match) return null;
-        const price = resolveCampaignPreviewPrice(campaign, regularPrice);
-        if (!price) return null;
-        return {
-          id: campaign.id,
-          name: campaign.name,
-          priority: campaign.priority,
-          conflictPolicy: campaign.conflictPolicy,
-          startsAt: campaign.startsAt,
-          endsAt: campaign.endsAt,
-          ...match,
-          ...price,
-        };
-      })
-      .filter(Boolean);
-    if (candidates.length <= 1) continue;
-    const strategy = candidates.every((candidate) => candidate.conflictPolicy === 'highest_priority') ? 'highest_priority' : 'best_price';
-    const sorted = [...candidates].sort((left, right) => compareCampaignPreviewCandidates(left, right, strategy));
-    overlaps.push({
-      id: String(product?.id || product?.productId || product?.sku || product?.barcode || overlaps.length),
-      productName: product?.name || product?.productName || 'Ürün',
-      sku: product?.sku || product?.stockCode || '',
-      barcode: product?.barcode || '',
-      regularPrice,
-      activeCampaignCount: candidates.length,
-      campaignNames: sorted.map((item) => item.name).filter(Boolean),
-      candidateCampaigns: sorted,
-      winningCampaign: sorted[0] || null,
-      winningReason: strategy === 'highest_priority' ? 'highest_priority: priority, eşitlikte düşük fiyat' : 'best_price: en düşük efektif fiyat',
-      riskLevel: candidates.length >= 3 ? 'Yüksek' : 'Orta',
-    });
-  }
-
-  return {
-    conflictProductCount: overlaps.length,
-    sampleProducts: overlaps.slice(0, 10),
-  };
 };
 
 const normalizeAutomationCenter = (value) => {
@@ -3891,20 +3815,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const giftCards = form.customerRelations?.giftCards || [];
   const campaigns = form.customerRelations?.campaigns || [];
-  const campaignOverlapAnalysis = useMemo(() => buildCampaignOverlapAnalysis({
-    campaigns: [
-      ...campaigns,
-      ...(Number(campaignDraft?.discountRate || campaignDraft?.dynamicRule?.discountRate || 0) > 0 ? [{
-        ...campaignDraft,
-        id: campaignDraft?.id || '__campaign_draft_preview__',
-        name: campaignDraft?.name || 'Taslak kampanya',
-        discountRate: campaignDraft?.discountRate || campaignDraft?.dynamicRule?.discountRate || 0,
-        status: 'active',
-        isActive: true,
-      }] : []),
-    ],
-    products: availableProducts,
-  }), [availableProducts, campaignDraft, campaigns]);
   const automationCenter = normalizeAutomationCenter(form.customerRelations?.automationCenter);
   const automationRules = automationCenter.rules || [];
   const pricingRows = useMemo(() => (
@@ -4313,9 +4223,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   ]), [campaigns]);
 
   const campaignStatusChartData = useMemo(() => ([
-    { name: 'Aktif', count: campaignSummary.active },
+    { name: 'Yayında', count: campaignSummary.active },
     { name: 'Planlandı', count: campaignSummary.planned },
-    { name: 'Pasif', count: Math.max(0, campaignSummary.total - campaignSummary.active - campaignSummary.planned) },
+    { name: 'Yayında Değil', count: Math.max(0, campaignSummary.total - campaignSummary.active - campaignSummary.planned) },
     { name: 'Yakında Bitecek', count: campaignSummary.expiringSoon },
   ]), [campaignSummary]);
 
@@ -4342,6 +4252,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       { name: 'Düşük', count: buckets.low },
     ];
   }, [campaignSuggestions]);
+  const hasCampaignStatusChartData = campaignStatusChartData.some((item) => Number(item.count || 0) > 0);
+  const hasCampaignTypeChartData = campaignTypeChartData.some((item) => Number(item.count || 0) > 0);
+  const hasCampaignSuggestionChartData = campaignSuggestionChartData.some((item) => Number(item.count || 0) > 0);
 
   const isHomeCampaignView = campaignTypeView === 'all';
   const isCampaignBuilderView = ['general', 'product', 'category', 'brand'].includes(campaignTypeView);
@@ -4716,7 +4629,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           isActive: nextActive,
           status: nextActive ? (isCampaignPlanned(item) ? 'scheduled' : 'active') : 'paused',
           archivedAt: nextActive ? null : item.archivedAt || null,
-          archiveReason: nextActive ? '' : 'Pasife alındı',
+          archiveReason: nextActive ? '' : 'Yönetim tarafından sonlandırıldı',
           updatedAt: new Date().toISOString(),
         };
       }),
@@ -4728,7 +4641,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...(form.customerRelations || {}),
       campaigns: (form.customerRelations?.campaigns || []).map((item) => (
         item.id === campaignId
-          ? { ...item, isActive: false, status: 'archived', archivedAt: new Date().toISOString(), archiveReason: 'Manuel arşiv' }
+          ? { ...item, isActive: false, status: 'archived', archivedAt: new Date().toISOString(), archiveReason: 'Yönetim tarafından sonlandırıldı' }
           : item
       )),
     }, 'Kampanya arşive taşındı.', 'Kampanya arşive taşınamadı.');
@@ -5913,8 +5826,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     if (isError) {
       return {
-        label: 'Hata',
-        reason: archiveReason || 'İptal edildi',
+        label: 'Yayında değil',
+        reason: 'Sistem tarafından sonlandırıldı',
         badgeClassName: 'danger',
         isActive: false,
         canEdit: false,
@@ -5924,7 +5837,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     if (isPlanned) {
       return {
         label: 'Planlandı',
-        reason: `Başlangıç: ${formatCampaignDate(campaign?.startsAt)}. Henüz fiyatlara yansımaz.`,
+        reason: `Başlangıç: ${formatCampaignDate(campaign?.startsAt)}. Henüz yayında değil.`,
         badgeClassName: 'warning',
         isActive: false,
         canEdit: true,
@@ -5933,7 +5846,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     if (isActive) {
       return {
-        label: 'Aktif',
+        label: 'Yayında',
         reason: 'Yayında',
         badgeClassName: 'success',
         isActive: true,
@@ -5943,8 +5856,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     if (isExpired) {
       return {
-        label: 'Süresi Doldu',
-        reason: archiveReason || 'Kampanya süresi tamamlandı',
+        label: 'Yayında değil',
+        reason: 'Süresi bitti',
         badgeClassName: 'warning',
         isActive: false,
         canEdit: false,
@@ -5953,8 +5866,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     if (isArchived) {
       return {
-        label: 'Arşiv',
-        reason: archiveReason || 'Arşive alındı',
+        label: 'Yayında değil',
+        reason: archiveReason && /sistem|system/i.test(archiveReason)
+          ? 'Sistem tarafından sonlandırıldı'
+          : 'Yönetim tarafından sonlandırıldı',
         badgeClassName: 'neutral',
         isActive: false,
         canEdit: false,
@@ -5962,8 +5877,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
 
     return {
-      label: 'Pasif',
-      reason: archiveReason || 'Pasife alındı',
+      label: 'Yayında değil',
+      reason: rawStatus === 'draft' || rawStatus === 'paused' || rawStatus === 'inactive' || !archiveReason
+        ? 'Yayında değil'
+        : 'Yönetim tarafından sonlandırıldı',
       badgeClassName: 'neutral',
       isActive: false,
       canEdit: false,
@@ -6583,15 +6500,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
+                      {hasCampaignStatusChartData ? (
                       <ResponsiveContainer width="100%" height={180}>
                         <RBarChart data={campaignStatusChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} />
                           <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
                           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip />
+                          <RTooltip content={<CampaignChartTooltip />} />
                           <Bar dataKey="count" fill="#4f46e5" radius={[8, 8, 0, 0]} />
                         </RBarChart>
                       </ResponsiveContainer>
+                      ) : (
+                        <div className="campaign-chart-empty">Gösterilecek kampanya kaydı yok.</div>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -6606,15 +6527,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
+                      {hasCampaignTypeChartData ? (
                       <ResponsiveContainer width="100%" height={180}>
                         <RBarChart data={campaignTypeChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} />
                           <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
                           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip />
+                          <RTooltip content={<CampaignChartTooltip />} />
                           <Bar dataKey="count" fill="#059669" radius={[8, 8, 0, 0]} />
                         </RBarChart>
                       </ResponsiveContainer>
+                      ) : (
+                        <div className="campaign-chart-empty">Kampanya tipi verisi yok.</div>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -6629,15 +6554,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
+                      {hasCampaignSuggestionChartData ? (
                       <ResponsiveContainer width="100%" height={180}>
                         <RBarChart data={campaignSuggestionChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} />
                           <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
                           <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip />
+                          <RTooltip content={<CampaignChartTooltip />} />
                           <Bar dataKey="count" fill="#d97706" radius={[8, 8, 0, 0]} />
                         </RBarChart>
                       </ResponsiveContainer>
+                      ) : (
+                        <div className="campaign-chart-empty">Gösterilecek öneri verisi yok.</div>
+                      )}
                     </div>
                   </div>
                 </article>
@@ -7998,59 +7927,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 }) : null}
               </div>
             </div>
-
-            {campaignOverlapAnalysis.conflictProductCount > 0 ? (
-              <section className="campaign-table-stack campaign-table-stack--home" aria-label="Kampanya çakışma analizi">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-amber"><AlertTriangle size={18} /></div>
-                  <div>
-                    <h3>Kampanya Çakışma Uyarısı</h3>
-                    <p>
-                      {formatNumber(campaignOverlapAnalysis.conflictProductCount)} üründe birden fazla aktif kampanya var.
-                      Resolver kazanan kampanyayı deterministik olarak gösterir.
-                    </p>
-                  </div>
-                </div>
-                <div className="campaign-table-wrap">
-                  <table className="campaign-table">
-                    <thead>
-                      <tr>
-                        <th>Ürün</th>
-                        <th>Aktif kampanya</th>
-                        <th>Regular fiyat</th>
-                        <th>Aday fiyatlar</th>
-                        <th>Kazanan</th>
-                        <th>Risk</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {campaignOverlapAnalysis.sampleProducts.map((row) => (
-                        <tr key={row.id}>
-                          <td>
-                            <strong>{row.productName}</strong>
-                            <small>{[row.sku, row.barcode].filter(Boolean).join(' · ') || '-'}</small>
-                          </td>
-                          <td>{formatNumber(row.activeCampaignCount)}</td>
-                          <td>{formatCurrency(row.regularPrice)}</td>
-                          <td>
-                            {row.candidateCampaigns.slice(0, 4).map((campaign) => (
-                              <div key={`${row.id}-${campaign.id}`}>
-                                {campaign.name}: {formatCurrency(campaign.effectivePrice)}
-                              </div>
-                            ))}
-                          </td>
-                          <td>
-                            <strong>{row.winningCampaign?.name || '-'}</strong>
-                            <small>{row.winningReason}</small>
-                          </td>
-                          <td><span className={`campaign-signal-pill ${row.riskLevel === 'Yüksek' ? 'tone-critical' : 'tone-warning'}`}>{row.riskLevel}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            ) : null}
 
             {isHomeCampaignView ? (
               <div className="campaign-table-stack campaign-table-stack--home" aria-label="Kampanya listeleri">

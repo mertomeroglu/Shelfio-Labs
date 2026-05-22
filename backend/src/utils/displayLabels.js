@@ -80,6 +80,28 @@ const LOCATION_FALLBACK_LABELS = {
 const normalizePermissionKey = (value) => String(value || '').trim().toLowerCase();
 const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+export const cleanTurkishDisplayText = (value, fallback = '-') => {
+  const raw = normalizeTurkishText(String(value ?? '').trim());
+  if (!raw) return fallback;
+  return raw
+    .replace(/\bSo\?uk\b/gi, 'Soğuk')
+    .replace(/\bMa\?aza\b/gi, 'Mağaza')
+    .replace(/\bUrun\b/gi, 'Ürün')
+    .replace(/\burun\b/gi, 'ürün')
+    .replace(/\bDepo\b/g, 'Depo')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+export const cleanSectionDisplayName = (value, fallback = '-') => {
+  const text = cleanTurkishDisplayText(value, '');
+  const cleaned = text
+    .replace(/\s*\([^)]*(?:karma|ambiyans|ambiyans|°c|\/|❄|soğuk|sıcaklık|derece)[^)]*\)\s*/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || fallback;
+};
+
 export const normalizeStorageTypeCode = (value, fallback = 'Ortam') => {
   const raw = String(value || '').trim();
   const normalized = raw.toLocaleLowerCase('tr-TR');
@@ -98,13 +120,13 @@ export const formatReturnReasonLabel = (value, fallback = '-') => {
 export const formatStorageTypeLabel = (value, fallback = '-') => {
   const code = normalizeStorageTypeCode(value, '');
   if (!code) return fallback;
-  return STORAGE_TYPE_LABELS[code] || STORAGE_TYPE_LABELS[String(code).toLocaleLowerCase('tr-TR')] || code;
+  return cleanTurkishDisplayText(STORAGE_TYPE_LABELS[code] || STORAGE_TYPE_LABELS[String(code).toLocaleLowerCase('tr-TR')] || code, fallback);
 };
 
 export const formatDepotLocationLabel = (value, fallback = '-') => {
   const code = String(value || '').trim();
   if (!code) return fallback;
-  return DEPOT_LOCATION_LABELS[code] || code;
+  return cleanTurkishDisplayText(DEPOT_LOCATION_LABELS[code] || code, fallback);
 };
 
 export const formatPermissionLabel = (value, fallback = '-') => {
@@ -153,3 +175,4 @@ export const formatMovementRouteLabel = (movement = {}, fallback = '-') => {
   if (locationLabel) return locationLabel;
   return fallback;
 };
+import { normalizeTurkishText } from './turkishText.js';

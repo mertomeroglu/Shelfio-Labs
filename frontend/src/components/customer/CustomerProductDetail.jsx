@@ -1,6 +1,6 @@
 ﻿import { ArrowLeft, Heart, MapPin, Sparkles, Tag, Activity, Layers, CalendarClock, Package, ShieldCheck, Shapes } from 'lucide-react';
 import { Minus, Plus } from 'lucide-react';
-import { formatCurrency } from '../../services/formatters.js';
+import { cleanSectionDisplayName, formatCurrency } from '../../services/formatters.js';
 import { getProductDisplayPrice } from '../../services/productService.js';
 import { resolveCustomerProductStockPresentation } from './customerProductStockStatus.js';
 
@@ -314,7 +314,7 @@ export default function CustomerProductDetail({
         <div className="customer-product-info-grid">
           <ProductInfoCard icon={Shapes} label="Kategori" value={resolveDisplayCategory(product)} />
           <ProductInfoCard icon={Package} label="Birim" value={product.unit || 'Adet'} />
-          <ProductInfoCard icon={MapPin} label="Reyon" value={product.shelfCode || product.defaultShelfLocationCode || product.sectionName || '-'} />
+          <ProductInfoCard icon={MapPin} label="Reyon" value={cleanSectionDisplayName(product.shelfCode || product.defaultShelfLocationCode || product.sectionName || '-')} />
           <ProductInfoCard icon={CalendarClock} label={'Tahmini stok biti\u015fi'} value={stockPresentation.estimatedStockoutLabel} />
           <ProductInfoCard icon={CalendarClock} label="Son yenilenme" value={stockPresentation.replenishmentLabel} />
           <ProductInfoCard icon={ShieldCheck} label="Stok Durumu" value={stockPresentation.stockStatusLabel} valueClassName={stockPresentation.stockStatusClassName} />

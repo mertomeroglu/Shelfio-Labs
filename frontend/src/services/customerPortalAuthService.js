@@ -126,4 +126,5 @@ export const customerPortalAuthService = {
   placeOrder: (payload = {}) => request('/customer-auth/orders', { method: 'POST', body: JSON.stringify(payload) }),
   notifications: (limit = 40) => request(`/customer-auth/notifications?limit=${Number(limit) || 40}`),
   markNotificationsAsRead: () => request('/customer-auth/notifications/read-all', { method: 'PATCH' }),
+  clearNotifications: () => request('/customer-auth/notifications', { method: 'DELETE' }),
 };

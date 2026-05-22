@@ -834,4 +834,19 @@ export const customerService = {
     if (updatedCount > 0) await notificationRepo.writeData(nextNotifications);
     return { updatedCount };
   },
+
+  async clearCustomerNotifications(customerId) {
+    const allNotifications = await notificationRepo.getAll();
+    const customerNotificationIds = allNotifications
+      .filter((row) => {
+        const isCustomerNotification = row?.audience?.scope === 'customer'
+          || String(row?.actionType || '').toLowerCase() === 'customer';
+        return String(row?.userId || '') === String(customerId) && isCustomerNotification;
+      })
+      .map((row) => row.id)
+      .filter(Boolean);
+
+    await Promise.all(customerNotificationIds.map((id) => notificationRepo.deleteById(id)));
+    return { clearedCount: customerNotificationIds.length };
+  },
 };

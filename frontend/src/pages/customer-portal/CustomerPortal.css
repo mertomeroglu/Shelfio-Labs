@@ -1210,6 +1210,42 @@
 .notification-list-simple li strong { font-size: 0.95rem; color: #1e3a8a; }
 .notification-list-simple li p { font-size: 0.85rem; color: var(--c-ink); margin: 0; }
 .notification-list-simple li small { font-size: 0.75rem; color: #94a3b8; }
+.customer-notification-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.customer-notification-list-head h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1rem;
+}
+.customer-notification-clear-btn {
+  min-height: 32px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #475569;
+  background: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.customer-notification-action {
+  align-self: flex-start;
+  min-height: 34px;
+  margin-top: 6px;
+  border: 1px solid #0f172a;
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #ffffff;
+  background: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
 .customer-shopping-list-item {
   flex-direction: row !important;
   align-items: center;

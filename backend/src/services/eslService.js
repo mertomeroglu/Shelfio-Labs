@@ -175,6 +175,9 @@ const createAssignmentHash = (payload = {}) => crypto
 const normalizeBridgeLabel = (value = {}) => {
   const label = value && typeof value === 'object' ? value : {};
   const price = formatEslPrice(label.price ?? label.displayPrice ?? 0);
+  const previousPriceValue = label.previousPrice === undefined || label.previousPrice === null || label.previousPrice === ''
+    ? ''
+    : formatEslPrice(label.previousPrice);
 
   return {
     deviceId: toOptionalString(label.deviceId, 120),
@@ -189,7 +192,7 @@ const normalizeBridgeLabel = (value = {}) => {
     hasActiveCampaign: Boolean(label.hasActiveCampaign),
     campaignName: toOptionalString(label.campaignName || '', 160),
     priceSource: toOptionalString(label.priceSource || '', 40),
-    previousPrice: formatEslPrice(label.previousPrice ?? 0),
+    previousPrice: previousPriceValue,
     brand: toOptionalString(label.brand || '', 120),
     unit: toOptionalString(label.unit || '', 40),
     origin: toOptionalString(label.origin || 'Turkiye', 120) || 'Turkiye',
@@ -229,6 +232,9 @@ const resolveEslLabelPricing = (product = {}, activeCampaigns = []) => {
 
 const resolveTemplateForEslPricing = (template, eslPricing = {}) => {
   const requestedTemplate = toOptionalString(template || 'standard', 40) || 'standard';
+  if (!eslPricing.hasActiveCampaign && (requestedTemplate === 'campaign' || requestedTemplate === 'discount')) {
+    return 'standard';
+  }
   if (eslPricing.hasActiveCampaign && (requestedTemplate === 'standard' || requestedTemplate === 'campaign')) {
     return 'discount';
   }
@@ -252,15 +258,15 @@ const buildResolvedLabelPayload = async ({ device, product = null, activeCampaig
 
   const resolvedActiveCampaigns = Array.isArray(activeCampaigns) ? activeCampaigns : await listActiveCampaignDefinitions();
   const eslPricing = resolveEslLabelPricing(product, resolvedActiveCampaigns);
+  const effectiveTemplate = resolveTemplateForEslPricing(template, eslPricing);
   const computedFdtDate = resolveLastRealPriceChangeDate(product);
   const fallbackStoredFdt = product.lastPriceChangeDate || product.lastPriceChangeAt || '';
   const fdtDate = computedFdtDate || (fallbackStoredFdt ? String(fallbackStoredFdt).slice(0, 10) : '');
-  const previousSalePrice = resolvePreviousSalePrice(product);
-  const previousDisplayPrice = eslPricing.hasActiveCampaign ? eslPricing.regularPrice : previousSalePrice;
+  const previousDisplayPrice = eslPricing.hasActiveCampaign ? formatEslPrice(eslPricing.regularPrice) : '';
 
   return normalizeBridgeLabel({
     deviceId: device.id,
-    template,
+    template: effectiveTemplate,
     clearLabel: false,
     productName: product.name || 'Bilinmeyen Urun',
     barcode: product.barcode || '0000000000000',
@@ -271,7 +277,7 @@ const buildResolvedLabelPayload = async ({ device, product = null, activeCampaig
     hasActiveCampaign: eslPricing.hasActiveCampaign,
     campaignName: eslPricing.campaignName,
     priceSource: eslPricing.priceSource,
-    previousPrice: formatEslPrice(previousDisplayPrice),
+    previousPrice: previousDisplayPrice,
     brand: product.brand || '',
     unit: product.unit || 'Adet',
     origin: product.origin || 'Turkiye',
@@ -442,10 +448,15 @@ export const eslService = {
     };
     await eslDeviceRepo.updateById(deviceId, heartbeatedDevice);
 
-    if (!heartbeatedDevice.assignedProductId && heartbeatedDevice.bridgeAssignedLabel && typeof heartbeatedDevice.bridgeAssignedLabel === 'object') {
+    if (heartbeatedDevice.bridgeAssignedLabel && typeof heartbeatedDevice.bridgeAssignedLabel === 'object') {
+      const bridgeClearLabel = heartbeatedDevice.bridgeAssignedClearLabel
+        ?? heartbeatedDevice.bridgeAssignedLabel.clearLabel
+        ?? false;
       const cachedLabel = normalizeBridgeLabel({
         ...heartbeatedDevice.bridgeAssignedLabel,
         deviceId: heartbeatedDevice.id,
+        template: heartbeatedDevice.bridgeAssignedTemplate || heartbeatedDevice.bridgeAssignedLabel.template || 'standard',
+        clearLabel: bridgeClearLabel,
       });
       console.log('[ESL DEBUG] getCurrentLabel bridge cache response:', JSON.stringify({
         deviceId: cachedLabel.deviceId,
@@ -489,14 +500,14 @@ export const eslService = {
     const computedFdtDate = resolveLastRealPriceChangeDate(product);
     const fallbackStoredFdt = product.lastPriceChangeDate || product.lastPriceChangeAt || '';
     const fdtDate = computedFdtDate || (fallbackStoredFdt ? String(fallbackStoredFdt).slice(0, 10) : '');
-    const previousSalePrice = resolvePreviousSalePrice(product);
     const activeCampaigns = await listActiveCampaignDefinitions();
     const eslPricing = resolveEslLabelPricing(product, activeCampaigns);
-    const previousDisplayPrice = eslPricing.hasActiveCampaign ? eslPricing.regularPrice : previousSalePrice;
+    const previousDisplayPrice = eslPricing.regularPrice;
+    const effectiveTemplate = resolveTemplateForEslPricing(heartbeatedDevice.template || 'standard', eslPricing);
 
     const result = {
       deviceId: heartbeatedDevice.id,
-      template: heartbeatedDevice.template || 'standard',
+      template: effectiveTemplate,
       clearLabel: false,
       productName: product.name || 'Bilinmeyen Urun',
       barcode: product.barcode || '0000000000000',
@@ -507,7 +518,7 @@ export const eslService = {
       hasActiveCampaign: eslPricing.hasActiveCampaign,
       campaignName: eslPricing.campaignName,
       priceSource: eslPricing.priceSource,
-      previousPrice: formatEslPrice(previousDisplayPrice),
+      previousPrice: eslPricing.hasActiveCampaign ? formatEslPrice(previousDisplayPrice) : '',
       origin: product.origin || 'Turkiye',
       expiryDate: fdtDate,
       lastPriceChangeDate: fdtDate,

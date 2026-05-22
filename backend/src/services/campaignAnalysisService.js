@@ -17,7 +17,7 @@ const normalizeCampaignRow = (row = {}) => {
   return {
     id: String(row.productId || row.id || ''),
     productId: String(row.productId || row.id || ''),
-    productName: row.productName || row.name || 'Bilinmeyen urun',
+    productName: row.productName || row.name || 'Bilinmeyen ürün',
     sku: row.sku || '',
     categoryId: row.categoryId || '',
     category: row.categoryName || row.category || '-',
@@ -70,12 +70,12 @@ const buildSuggestion = ({ id, title, reason, rows, recommendedDiscount, type = 
     rows,
     source: 'backend_analysis_engine',
     signalBullets: [
-      `Ortalama gunluk satis: ${summary.avgDailySales}.`,
+      `Ortalama günlük satış: ${summary.avgDailySales}.`,
       `Ortalama stok: ${summary.avgStockLevel}.`,
-      summary.minDaysToExpiry == null ? 'Gercek SKT sinyali bulunmayan urunler ayrica isaretlendi.' : `En yakin SKT: ${summary.minDaysToExpiry} gun.`,
+      summary.minDaysToExpiry == null ? 'Gerçek SKT sinyali bulunmayan ürünler ayrıca işaretlendi.' : `En yakın SKT: ${summary.minDaysToExpiry} gün.`,
     ],
-    impactSummary: 'Satis hizi, stok, SKT, marj ve risk skoru birlikte degerlendirildi.',
-    riskSummary: 'Indirim uygulanmadan once marj ve stok yeterliligi kontrol edilmelidir.',
+    impactSummary: 'Satış hızı, stok, SKT, marj ve risk skoru birlikte değerlendirildi.',
+    riskSummary: 'İndirim uygulanmadan önce marj ve stok yeterliliği kontrol edilmelidir.',
   };
 };
 
@@ -101,24 +101,24 @@ const buildSuggestionsFromRows = (rows = []) => {
   return [
     slowRows.length && buildSuggestion({
       id: 'slow-moving',
-      title: `${slowRows.length} yavas satan urun icin indirim kampanyasi`,
-      reason: 'Satis hizi dusuk ve stok bekleme riski yuksek urunler secildi.',
+      title: `${slowRows.length} yavaş satan ürün için indirim kampanyası`,
+      reason: 'Satış hızı düşük ve stok bekleme riski yüksek ürünler seçildi.',
       rows: slowRows,
       recommendedDiscount: 16,
       priority: slowRows.some((row) => row.riskLevel === 'critical' || row.riskLevel === 'high') ? 'high' : 'medium',
     }),
     expiryRows.length && buildSuggestion({
       id: 'near-expiry',
-      title: `${expiryRows.length} urunde SKT odakli hizli kampanya`,
-      reason: 'Gercek batch SKT bilgisine gore SKT baskisi olan urunler onceliklendirildi.',
+      title: `${expiryRows.length} üründe SKT odaklı hızlı kampanya`,
+      reason: 'Gerçek batch SKT bilgisine göre SKT baskısı olan ürünler önceliklendirildi.',
       rows: expiryRows,
       recommendedDiscount: expiryRows.some((row) => row.daysToExpiry <= 3) ? 25 : 18,
       priority: expiryRows.some((row) => row.daysToExpiry <= 3) ? 'critical' : 'high',
     }),
     overstockRows.length && buildSuggestion({
       id: 'overstock',
-      title: `${overstockRows.length} urun icin stok eritme kampanyasi`,
-      reason: 'Stok seviyesi mevcut satis hizina gore yuksek.',
+      title: `${overstockRows.length} ürün için stok eritme kampanyası`,
+      reason: 'Stok seviyesi mevcut satış hızına göre yüksek.',
       rows: overstockRows,
       recommendedDiscount: 14,
       type: 'category',
@@ -126,8 +126,8 @@ const buildSuggestionsFromRows = (rows = []) => {
     }),
     lowMarginRows.length && buildSuggestion({
       id: 'margin-watch',
-      title: `${lowMarginRows.length} dusuk marjli urunde kontrollu aksiyon`,
-      reason: 'Marj riski dusuk indirim veya fiyat koruma gerektiriyor.',
+      title: `${lowMarginRows.length} düşük marjlı üründe kontrollü aksiyon`,
+      reason: 'Marj riski düşük indirim veya fiyat koruma gerektiriyor.',
       rows: lowMarginRows,
       recommendedDiscount: 6,
       priority: 'medium',
@@ -162,7 +162,7 @@ export const calculateCampaignImpact = ({
       affectedProductCount: resolvedScopeProductCount,
       analysisCandidateCount: 0,
       previewProductCount: 0,
-      recommendation: 'Simulasyon icin backend analiz verisi bulunamadi.',
+      recommendation: 'Simülasyon için backend analiz verisi bulunamadı.',
       riskLevel: 'Bilgi yok',
       salesIncreasePct: 0,
       revenueChange: 0,
@@ -239,11 +239,11 @@ export const calculateCampaignImpact = ({
     riskLevel,
     modelName: 'analiz_oneri_motoru',
     recommendation: riskLevel === 'Kritik'
-      ? 'Indirim marj veya stok riskini artiriyor; kapsam daraltilmali.'
-      : 'Analiz motoru indirim etkisini stok, satis hizi, SKT ve marj sinyallerine gore hesaplandi.',
+      ? 'İndirim marj veya stok riskini artırıyor; kapsam daraltılmalı.'
+      : 'Analiz motoru indirim etkisini stok, satış hızı, SKT ve marj sinyallerine göre hesaplandı.',
     metricsSummary: resolvedScopeProductCount > scopedRows.length
-      ? `${resolvedScopeProductCount} urun kapsami - ${scopedRows.length} analiz adayi`
-      : `${scopedRows.length} urun - backend analiz verisi`,
+      ? `${resolvedScopeProductCount} ürün kapsamı - ${scopedRows.length} analiz adayı`
+      : `${scopedRows.length} ürün - backend analiz verisi`,
   };
 };
 
@@ -271,3 +271,4 @@ export const campaignAnalysisService = {
     return calculateCampaignImpact(payload);
   },
 };
+

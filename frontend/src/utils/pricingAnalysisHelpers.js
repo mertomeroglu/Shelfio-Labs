@@ -20,8 +20,8 @@ export const salesSpeedToneMap = {
 };
 
 export const salesTrendLabelMap = {
-  up: 'Yukselen',
-  down: 'Dusen',
+  up: 'Yükselen',
+  down: 'Düşen',
   flat: 'Dengeli',
 };
 
@@ -47,15 +47,15 @@ export function toRiskLabel(level) {
 
 export function toSktLabel(status) {
   if (status === 'critical') return 'Kritik';
-  if (status === 'soon') return 'Yaklasiyor';
-  if (status === 'safe') return 'Guvenli';
+  if (status === 'soon') return 'Yaklaşıyor';
+  if (status === 'safe') return 'Güvenli';
   return 'Bilinmiyor';
 }
 
 export function formatDaysLabel(days) {
   if (days === null || days === undefined) return '-';
-  if (days < 0) return `Gecmis ${Math.abs(Math.round(days))} gun`;
-  return `${Math.round(days)} gun`;
+  if (days < 0) return `Geçmiş ${Math.abs(Math.round(days))} gün`;
+  return `${Math.round(days)} gün`;
 }
 
 export function formatPercent(value) {

@@ -104,6 +104,7 @@ export const customerAuthService = {
   async placeOrder(id, payload) { return customerService.placeOrder(id, payload); },
   async notifications(id, limit) { return customerService.listCustomerNotifications(id, limit); },
   async markNotificationsAsRead(id) { return customerService.markCustomerNotificationsAsRead(id); },
+  async clearNotifications(id) { return customerService.clearCustomerNotifications(id); },
   async storeMap() { return storeMapService.getCustomerStoreMap(); },
   async storeMapPublic() { return storeMapService.getCustomerStoreMap(); },
 };

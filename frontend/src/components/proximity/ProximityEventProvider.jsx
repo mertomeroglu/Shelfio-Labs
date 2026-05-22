@@ -12,6 +12,7 @@ const NATIVE_BEACON_EVENT = 'shelfio:beacon-detected';
 const CUSTOMER_PREFS_KEY = 'shelfio.customer.preferences';
 const CUSTOMER_USER_KEY = 'shelfio_customer_user';
 const CUSTOMER_PREFS_UPDATED_EVENT = 'shelfio:customer-preferences-updated';
+const CUSTOMER_NOTIFICATIONS_REFRESH_EVENT = 'shelfio:customer-notifications-refresh';
 const FRONTEND_COOLDOWN_MS = 1 * 1000;
 const DISMISS_COOLDOWN_MS = 60 * 1000;
 
@@ -68,6 +69,8 @@ const getNotificationSignature = (notification = {}) => [
   notification.title || '',
   notification.body || '',
   notification.actionUrl || '',
+  notification.payload?.productId || '',
+  notification.payload?.barcode || '',
 ].join(':');
 
 const canNavigateToCustomerRoute = (actionUrl) => {
@@ -141,11 +144,13 @@ function ProximityNotificationCard({ notification, onClose, onAction }) {
   const displayPrice = formatTryPrice(displayPriceValue);
   const productName = normalizeText(payload.productName);
   const aisleName = normalizeText(payload.aisleName || payload.sectionName);
+  const productDiscountTitle = aisleName.toLocaleLowerCase('tr-TR') === 'bu reyon'
+    ? 'Bu reyondasın'
+    : (aisleName ? `${aisleName} reyonundasın` : title);
   const cardTitle = isProductDiscount
-    ? (aisleName ? `${aisleName} reyonundasın` : title)
+    ? productDiscountTitle
     : title;
-  const productSubtitle = normalizeText(payload.subtitle) || (productName ? `${productName} indirimde` : '');
-  const description = isProductDiscount ? 'İndirimli ürünü detaylı görüntüle.' : body;
+  const description = isProductDiscount ? '' : body;
   const productImage = normalizeText(payload.imageUrl || payload.productImageUrl || payload.thumbnailUrl);
 
   return (
@@ -159,7 +164,7 @@ function ProximityNotificationCard({ notification, onClose, onAction }) {
         </div>
         <div className="proximity-copy">
           <h3>{cardTitle}</h3>
-          {isProductDiscount && productSubtitle ? <strong className="proximity-product-name">{productSubtitle}</strong> : null}
+          {isProductDiscount && productName ? <strong className="proximity-product-name">{productName}</strong> : null}
           {isProductDiscount && (regularPrice || displayPrice) ? (
             <div className="proximity-price-row">
               {regularPrice ? <span className="proximity-old-price">{regularPrice}</span> : null}
@@ -271,6 +276,13 @@ export default function ProximityEventProvider({ children }) {
           });
         }
         dispatchNativeNotificationEvent(response.notification, notificationPrefs);
+        try {
+          window.dispatchEvent(new CustomEvent(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, {
+            detail: { notification: response.notification, eventId: response.eventId || null },
+          }));
+        } catch {
+          // Notification center refresh is best-effort for web/native shells.
+        }
       } catch (error) {
         if (isDev()) console.debug('[proximity] customer event delivery failed', error?.message || error);
       }

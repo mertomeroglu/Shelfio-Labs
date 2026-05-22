@@ -1,4 +1,5 @@
 import { settingsRepo } from '../repositories/settingsRepository.js';
+import { normalizeTurkishText } from '../utils/turkishText.js';
 import { validateCampaignLifecycleIntegrity } from './dataIntegrityService.js';
 
 const ALLOWED_PRICE_CENTS = [0, 25, 50, 75, 90, 95, 99];
@@ -6,6 +7,27 @@ const INACTIVE_STATUSES = new Set(['paused', 'inactive', 'passive', 'archived', 
 const MIN_NON_ZERO_PRICE = 0.01;
 
 const normalizeString = (value) => String(value || '').trim();
+
+const CAMPAIGN_WORD_REPLACEMENTS = [
+  [/\byavas\b/gi, 'yavaş'],
+  [/\burun\b/gi, 'ürün'],
+  [/\burunde\b/gi, 'üründe'],
+  [/\burunlerde\b/gi, 'ürünlerde'],
+  [/\bicin\b/gi, 'için'],
+  [/\bkampanyasi\b/gi, 'kampanyası'],
+  [/\bsatis\b/gi, 'satış'],
+  [/\bdusuk\b/gi, 'düşük'],
+  [/\boneri\b/gi, 'öneri'],
+  [/\bkampanyali\b/gi, 'kampanyalı'],
+];
+
+const cleanCampaignDisplayText = (value) => {
+  let text = normalizeTurkishText(normalizeString(value));
+  CAMPAIGN_WORD_REPLACEMENTS.forEach(([pattern, replacement]) => {
+    text = text.replace(pattern, replacement);
+  });
+  return text;
+};
 
 const toNumber = (value) => {
   if (value === null || value === undefined || value === '') return null;
@@ -161,7 +183,7 @@ export const resolveCustomerCampaignTitle = (campaign = {}) => {
     campaign.customerDisplayName,
     campaign.displayName,
   ].map(normalizeString).find((value) => value && !isInternalCampaignTitle(value));
-  if (explicitTitle) return explicitTitle;
+  if (explicitTitle) return cleanCampaignDisplayText(explicitTitle);
 
   const rawName = normalizeString(campaign.name || campaign.internalName || '');
   const titleKey = normalizeCampaignTitleKey(rawName);
@@ -169,11 +191,11 @@ export const resolveCustomerCampaignTitle = (campaign = {}) => {
   if (/\b(dinamik talep|talep sinyali|sinyal)\b/.test(titleKey)) return 'Haftanın Fırsatları';
 
   for (const rule of CAMPAIGN_PUBLIC_TITLE_RULES) {
-    if (rule.keys.some((key) => campaignTitleMatchesRule(titleKey, key))) return rule.title;
+    if (rule.keys.some((key) => campaignTitleMatchesRule(titleKey, key))) return cleanCampaignDisplayText(rule.title);
   }
 
   if (isInternalCampaignTitle(rawName)) return 'Seçili Ürünlerde İndirim';
-  return rawName.replace(/\s+\d{1,3}$/, '').trim() || 'Kampanya';
+  return cleanCampaignDisplayText(rawName.replace(/\s+\d{1,3}$/, '').trim()) || 'Kampanya';
 };
 
 const normalizeCampaign = (campaign = {}, now = new Date()) => {
@@ -378,11 +400,11 @@ const summarizeCampaignCandidate = (candidate, resolutionStrategy) => ({
 const getAppliedCampaignReason = (strategy, conflictCount = 0) => {
   if (strategy === 'highest_priority') {
     return conflictCount > 0
-      ? 'highest_priority: once priority, esitlikte en dusuk efektif fiyat uygulandi'
+      ? 'highest_priority: önce öncelik, eşitlikte en düşük efektif fiyat uygulandı'
       : 'highest_priority: kampanya fiyatı uygulandı';
   }
   return conflictCount > 0
-    ? 'best_price: en dusuk efektif fiyat uygulandi'
+    ? 'best_price: en düşük efektif fiyat uygulandı'
     : 'best_price: kampanya fiyatı uygulandı';
 };
 
@@ -534,7 +556,7 @@ export const applyCampaignPricingToProduct = (product = {}, activeCampaigns = []
   const candidateCampaigns = summarizedCampaigns.map((campaign, index) => ({
     ...campaign,
     isWinner: index === 0,
-    appliedCampaignReason: index === 0 ? appliedCampaignReason : `${resolutionStrategy}: aday kampanya secilmedi`,
+    appliedCampaignReason: index === 0 ? appliedCampaignReason : `${resolutionStrategy}: aday kampanya seçilmedi`,
   }));
 
   return {
@@ -653,3 +675,4 @@ export const buildCampaignSummariesFromProducts = (products = []) => {
       return String(left.name || '').localeCompare(String(right.name || ''), 'tr');
     });
 };
+

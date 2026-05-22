@@ -19,5 +19,6 @@ router.patch('/cart', authenticateCustomer, customerAuthController.updateCart);
 router.post('/orders', authenticateCustomer, customerAuthController.placeOrder);
 router.get('/notifications', authenticateCustomer, customerAuthController.notifications);
 router.patch('/notifications/read-all', authenticateCustomer, customerAuthController.markNotificationsAsRead);
+router.delete('/notifications', authenticateCustomer, customerAuthController.clearNotifications);
 router.get('/store-map', authenticateCustomer, customerAuthController.storeMap);
 export default router;

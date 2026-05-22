@@ -531,6 +531,16 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
     section: { select: { id: true, name: true, number: true } },
     category: { select: { id: true, name: true, mainSectionName: true, mainSectionNo: true } },
   };
+  const barcode = normalizeText(label.barcode);
+  let barcodeProduct = null;
+  if (!isPlaceholderBarcode(barcode)) {
+    barcodeProduct = await prisma.product.findFirst({
+      where: { barcode, isListed: { not: false }, isActive: { not: false } },
+      select: productSelect,
+    });
+    if (barcodeProduct) return barcodeProduct;
+  }
+
   const assignedProductId = normalizeText(
     eslDevice.assignedProductId
     || eslDevice.bridgeAssignedProductId
@@ -543,14 +553,6 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
       select: productSelect,
     });
     if (product) return product;
-  }
-
-  const barcode = normalizeText(label.barcode);
-  if (!isPlaceholderBarcode(barcode)) {
-    return prisma.product.findFirst({
-      where: { barcode, isListed: { not: false }, isActive: { not: false } },
-      select: productSelect,
-    });
   }
 
   return null;
@@ -589,8 +591,6 @@ const resolveDiscountPrices = (label = {}) => {
   return { regularPrice, displayPrice, campaignPrice, effectivePrice };
 };
 
-const buildProductDiscountBody = () => 'İndirimli ürünü detaylı görüntüle.';
-
 const normalizeAisleName = (value) => {
   const text = normalizeText(value);
   if (!text) return '';
@@ -602,7 +602,8 @@ const resolveProductAisle = ({ product = {}, context = {} } = {}) => {
     || normalizeText(product?.category?.mainSectionName)
     || normalizeText(context.sectionName)
     || normalizeText(context.zoneName)
-    || normalizeText(context.zoneCode);
+    || normalizeText(context.zoneCode)
+    || 'Bu reyon';
   const sectionId = normalizeText(product?.sectionId || product?.section?.id || context.sectionId) || null;
   const sectionName = normalizeText(product?.section?.name || product?.category?.mainSectionName || context.sectionName) || null;
   return {
@@ -613,11 +614,9 @@ const resolveProductAisle = ({ product = {}, context = {} } = {}) => {
 };
 
 const buildProductDiscountTitle = ({ aisleName }) => {
-  if (!aisleName) return 'Bu reyon yakınındasın';
+  if (!aisleName || normalizeLower(aisleName) === 'bu reyon') return 'Bu reyondasın';
   return `${aisleName} reyonundasın`;
 };
-
-const buildProductDiscountSubtitle = ({ productName }) => `${normalizeText(productName) || 'Bu ürün'} indirimde`;
 
 const ruleConfigScore = (rule = {}, context = {}) => {
   if (rule.beaconDeviceId && rule.beaconDeviceId === context.beaconDeviceId) return 400;
@@ -698,7 +697,7 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
       notification: {
         type: 'PROXIMITY_PRODUCT_DISCOUNT',
         title: buildProductDiscountTitle({ aisleName: productAisle.aisleName }),
-        body: buildProductDiscountBody(),
+        body: null,
         severity: 'info',
         actionType: 'route',
         actionLabel: 'Ürüne Git',
@@ -717,8 +716,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           sectionId: productAisle.sectionId,
           sectionName: productAisle.sectionName,
           aisleName: productAisle.aisleName || null,
-          subtitle: buildProductDiscountSubtitle({ productName }),
           actionUrl,
+          actionLabel: 'Ürüne Git',
           eslDeviceId,
           beaconDeviceId: context.beaconDeviceId,
           beaconDeviceCode: beaconDevice?.deviceCode || null,

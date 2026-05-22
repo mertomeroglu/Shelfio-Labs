@@ -1,234 +1,9 @@
-﻿/* Phase C: moved from styles/dashboard.css; settings route-specific dashboard legacy blocks. */
+/* Phase C: moved from styles/dashboard.css; settings route-specific dashboard legacy blocks. */
 .campaign-mode-nav-shell {
   display: grid;
   gap: 10px;
   margin: 2px 0 6px;
   padding: 0;
-}
-
-/* Sales campaign center: align with the finalized SKT campaign section system. */
-.campaign-management-page .sales-campaign-page,
-.campaign-management-page .campaign-module-insight-card--sales.sales-campaign-page {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 18px !important;
-  width: 100% !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control,
-.campaign-management-page .campaign-module-insight-card--sales .campaign-sales-control-section.sales-campaign-control {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 12px !important;
-  width: 100% !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header {
-  min-height: 0 !important;
-  margin: 0 !important;
-  padding: 14px !important;
-  align-items: center !important;
-  border: 1px solid #dbe6f4 !important;
-  border-radius: 14px !important;
-  background: #fff !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .campaign-analysis-header-main {
-  align-items: center !important;
-  gap: 12px !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .mod-card-icon {
-  width: 34px !important;
-  height: 34px !important;
-  flex: 0 0 34px !important;
-  border-radius: 10px !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header h3 {
-  margin: 0 0 3px !important;
-  color: #0f172a !important;
-  font-size: 1.16rem !important;
-  line-height: 1.14 !important;
-  font-weight: 650 !important;
-  letter-spacing: 0 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header p {
-  max-width: 760px !important;
-  margin: 0 !important;
-  color: #52627a !important;
-  font-size: 0.82rem !important;
-  line-height: 1.45 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .campaign-analysis-header-actions {
-  align-items: center !important;
-  min-height: 34px !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics {
-  margin: 0 !important;
-  padding: 0 !important;
-  display: block !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics > .campaign-insight-panel-head {
-  display: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics-grid {
-  grid-column: 1 / -1 !important;
-  grid-row: auto !important;
-  width: 100% !important;
-  margin: 0 !important;
-  display: grid !important;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  gap: 12px !important;
-  align-items: stretch !important;
-  justify-content: stretch !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card {
-  min-width: 0 !important;
-  min-height: 92px !important;
-  display: grid !important;
-  grid-template-columns: 34px minmax(0, 1fr) !important;
-  grid-template-rows: auto auto auto !important;
-  column-gap: 12px !important;
-  row-gap: 4px !important;
-  padding: 13px !important;
-  border: 1px solid #dbe6f4 !important;
-  border-radius: 12px !important;
-  background: #fff !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card .campaign-module-summary-icon {
-  grid-row: 1 / 4 !important;
-  width: 34px !important;
-  height: 34px !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  align-self: center !important;
-  line-height: 0 !important;
-  border-radius: 10px !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card .campaign-module-summary-icon svg {
-  display: block !important;
-  flex: 0 0 auto !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > span:not(.campaign-module-summary-icon) {
-  align-self: end !important;
-  color: #64748b !important;
-  font-size: 0.75rem !important;
-  font-weight: 700 !important;
-  line-height: 1.2 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > strong {
-  align-self: center !important;
-  color: #0f172a !important;
-  font-size: 1.22rem !important;
-  font-weight: 700 !important;
-  line-height: 1.05 !important;
-  overflow-wrap: anywhere !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > small {
-  align-self: start !important;
-  color: #64748b !important;
-  font-size: 0.75rem !important;
-  line-height: 1.25 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters {
-  margin-top: 0 !important;
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) auto !important;
-  align-items: end !important;
-  gap: 14px !important;
-  padding: 14px !important;
-  border: 1px solid #d7e3f3 !important;
-  border-radius: 12px !important;
-  background: #fff !important;
-  box-shadow: none !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-filter-panel-head {
-  grid-column: 1 / -1 !important;
-  grid-row: 1 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-filter-panel-head h4 {
-  margin: 0 !important;
-  color: #0f172a !important;
-  font-size: 0.92rem !important;
-  font-weight: 800 !important;
-  line-height: 1.25 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid {
-  grid-column: 1 !important;
-  grid-row: 2 !important;
-  display: grid !important;
-  grid-template-columns: minmax(150px, 1.25fr) repeat(6, minmax(0, 1fr)) !important;
-  gap: 10px !important;
-  align-items: end !important;
-  min-width: 0 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field {
-  min-width: 0 !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field span {
-  font-size: 0.68rem !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field select,
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field input {
-  width: 100% !important;
-  height: 36px !important;
-  min-height: 36px !important;
-  border-radius: 8px !important;
-  font-size: 0.78rem !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-module-filter-actions {
-  grid-column: 2 !important;
-  grid-row: 2 !important;
-  align-self: end !important;
-  justify-content: flex-end !important;
-  margin: 0 !important;
-  gap: 8px !important;
-  white-space: nowrap !important;
-}
-
-.campaign-management-page .sales-campaign-page .sales-campaign-scenario,
-.campaign-management-page .sales-campaign-page .sales-campaign-simulation {
-  display: none !important;
 }
 
 @media (max-width: 1280px) {
@@ -6082,6 +5857,75 @@
 
 .campaign-management-page .campaign-chart-grid.campaign-section .recharts-tooltip-wrapper {
   outline: none;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section {
+  grid-template-columns: repeat(5, minmax(150px, 1fr)) !important;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section .mod-stat {
+  min-height: 112px;
+  padding: 14px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section .mod-stat-body {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  text-align: left;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section .mod-stat-value {
+  line-height: 1;
+}
+
+.campaign-management-page .campaign-chart-grid.campaign-section {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.campaign-management-page .campaign-chart-grid.campaign-section > .campaign-chart-card {
+  min-height: 286px;
+  border-radius: 8px;
+}
+
+.campaign-chart-tooltip {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #dbe4f1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.campaign-chart-tooltip span {
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.campaign-chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 @media (max-width: 1180px) {
@@ -14176,3 +14020,287 @@
   }
 }
 
+/* Sales campaign center: align with the finalized SKT campaign section system. */
+.campaign-management-page .sales-campaign-page,
+.campaign-management-page .campaign-module-insight-card--sales.sales-campaign-page {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+  width: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control,
+.campaign-management-page .campaign-module-insight-card--sales .campaign-sales-control-section.sales-campaign-control {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  width: 100% !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header {
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 14px !important;
+  align-items: center !important;
+  border: 1px solid #dbe6f4 !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .campaign-analysis-header-main {
+  align-items: center !important;
+  gap: 12px !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .mod-card-icon {
+  width: 34px !important;
+  height: 34px !important;
+  flex: 0 0 34px !important;
+  border-radius: 10px !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header h3 {
+  margin: 0 0 3px !important;
+  color: #0f172a !important;
+  font-size: 1.16rem !important;
+  line-height: 1.14 !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header p {
+  max-width: 760px !important;
+  margin: 0 !important;
+  color: #52627a !important;
+  font-size: 0.82rem !important;
+  line-height: 1.45 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-header .campaign-analysis-header-actions {
+  align-items: center !important;
+  min-height: 34px !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics > .campaign-insight-panel-head {
+  display: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metrics-grid {
+  grid-column: 1 / -1 !important;
+  grid-row: auto !important;
+  width: 100% !important;
+  margin: 0 !important;
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card {
+  min-width: 0 !important;
+  min-height: 92px !important;
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr) !important;
+  grid-template-rows: auto auto auto !important;
+  column-gap: 12px !important;
+  row-gap: 4px !important;
+  padding: 13px !important;
+  border: 1px solid #dbe6f4 !important;
+  border-radius: 12px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card .campaign-module-summary-icon {
+  grid-row: 1 / 4 !important;
+  width: 34px !important;
+  height: 34px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  align-self: center !important;
+  line-height: 0 !important;
+  border-radius: 10px !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card .campaign-module-summary-icon svg {
+  display: block !important;
+  flex: 0 0 auto !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > span:not(.campaign-module-summary-icon) {
+  align-self: end !important;
+  color: #64748b !important;
+  font-size: 0.75rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > strong {
+  align-self: center !important;
+  color: #0f172a !important;
+  font-size: 1.22rem !important;
+  font-weight: 700 !important;
+  line-height: 1.05 !important;
+  overflow-wrap: anywhere !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-metric-card > small {
+  align-self: start !important;
+  color: #64748b !important;
+  font-size: 0.75rem !important;
+  line-height: 1.25 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters {
+  margin-top: 0 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: end !important;
+  gap: 14px !important;
+  padding: 14px !important;
+  border: 1px solid #d7e3f3 !important;
+  border-radius: 12px !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-filter-panel-head {
+  grid-column: 1 / -1 !important;
+  grid-row: 1 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-filter-panel-head h4 {
+  margin: 0 !important;
+  color: #0f172a !important;
+  font-size: 0.92rem !important;
+  font-weight: 800 !important;
+  line-height: 1.25 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+  display: grid !important;
+  grid-template-columns: minmax(150px, 1.25fr) repeat(6, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  align-items: end !important;
+  min-width: 0 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field {
+  min-width: 0 !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field span {
+  font-size: 0.68rem !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field select,
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filter-grid .campaign-control-field input {
+  width: 100% !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-radius: 8px !important;
+  font-size: 0.78rem !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-control .sales-campaign-filters .campaign-module-filter-actions {
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  align-self: end !important;
+  justify-content: flex-end !important;
+  margin: 0 !important;
+  gap: 8px !important;
+  white-space: nowrap !important;
+}
+
+.campaign-management-page .sales-campaign-page .sales-campaign-scenario,
+.campaign-management-page .sales-campaign-page .sales-campaign-simulation {
+  display: none !important;
+}
+
+/* Campaign home layout final override */
+.campaign-management-page .campaign-summary-grid.campaign-section {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(150px, 1fr)) !important;
+  gap: 12px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section .mod-stat {
+  min-width: 0 !important;
+  min-height: 112px !important;
+  padding: 14px !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+  border-radius: 8px !important;
+}
+
+.campaign-management-page .campaign-summary-grid.campaign-section .mod-stat-body {
+  display: grid !important;
+  gap: 4px !important;
+  justify-items: start !important;
+  text-align: left !important;
+}
+
+.campaign-management-page .campaign-chart-grid.campaign-section {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.campaign-management-page .campaign-chart-grid.campaign-section > .campaign-chart-card {
+  min-height: 286px !important;
+  border-radius: 8px !important;
+}
+
+@media (max-width: 1180px) {
+  .campaign-management-page .campaign-summary-grid.campaign-section {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .campaign-management-page .campaign-chart-grid.campaign-section {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .campaign-management-page .campaign-summary-grid.campaign-section,
+  .campaign-management-page .campaign-chart-grid.campaign-section {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

@@ -110,6 +110,9 @@ const resolveEslDisplayPricing = (product = {}) => {
 
 const resolveTemplateForPricing = (template, pricing) => {
   const requestedTemplate = String(template || '').trim();
+  if (!pricing?.hasActiveCampaign && (requestedTemplate === 'campaign' || requestedTemplate === 'discount')) {
+    return 'standard';
+  }
   if (pricing?.hasActiveCampaign && (!requestedTemplate || requestedTemplate === 'standard' || requestedTemplate === 'campaign')) {
     return 'discount';
   }
@@ -831,7 +834,7 @@ export default function ESLManagement() {
                   name: selectedProduct.name,
                   barcode: selectedProduct.barcode || '',
                   salePrice: selectedProductPricing.displayPrice,
-                  previousSalePrice: selectedProductPricing.hasActiveCampaign ? selectedProductPricing.regularPrice : resolvePreviousSalePrice(selectedProduct),
+                  previousSalePrice: selectedProductPricing.hasActiveCampaign ? selectedProductPricing.regularPrice : 0,
                   origin: selectedProduct.origin || 'Türkiye',
                   expiryDate: selectedProduct.lastPriceChangeDate || selectedProduct.lastPriceChangeAt || '',
                 } : null}

@@ -1,5 +1,5 @@
 import { Heart, MapPin, PackageOpen, ShoppingCart } from 'lucide-react';
-import { formatCurrency } from '../../services/formatters.js';
+import { cleanSectionDisplayName, formatCurrency } from '../../services/formatters.js';
 import { getProductDisplayPrice } from '../../services/productService.js';
 
 function resolveAvailableStock(product) {
@@ -14,7 +14,7 @@ function resolveAvailableStock(product) {
 }
 
 function resolveLocation(product) {
-  return product?.shelfCode || product?.defaultShelfLocationCode || '-';
+  return cleanSectionDisplayName(product?.shelfCode || product?.defaultShelfLocationCode || product?.sectionName || '-');
 }
 
 function resolveDisplayCategory(product = {}) {

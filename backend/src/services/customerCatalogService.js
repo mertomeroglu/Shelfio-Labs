@@ -7,6 +7,7 @@ import { stockRepo } from '../repositories/stockRepository.js';
 import { AppError } from '../utils/appError.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
 import { normalizeUnit } from '../utils/unitSystem.js';
+import { cleanSectionDisplayName } from '../utils/displayLabels.js';
 import { enrichBatchExpiryState, summarizeBatchAvailability } from '../utils/batchExpiry.js';
 import {
   applyCampaignPricingToProduct,
@@ -276,9 +277,9 @@ const toCustomerListProduct = (product = {}) => {
     campaignBadge: campaignLabel,
     etiket: product.etiket || product.tag || '',
     tags: product.tags || product.labels || [],
-    shelfCode: product.shelfCode || product.defaultShelfLocationCode || product.sectionName || '',
+    shelfCode: product.shelfCode || product.defaultShelfLocationCode || cleanSectionDisplayName(product.sectionName, ''),
     defaultShelfLocationCode: product.defaultShelfLocationCode || product.shelfCode || '',
-    sectionName: product.sectionName || '',
+    sectionName: cleanSectionDisplayName(product.sectionName, ''),
     available: Number(product.available ?? stockSummary.available ?? product.currentStock ?? product.totalStock ?? product.onHand ?? 0) || 0,
     currentStock: Number(product.currentStock ?? product.totalStock ?? product.onHand ?? stockSummary.available ?? 0) || 0,
     totalStock: Number(product.totalStock ?? product.onHand ?? product.currentStock ?? stockSummary.available ?? 0) || 0,
@@ -594,8 +595,8 @@ const mapPostgresCatalogProduct = (product = {}, activeCampaigns = []) => {
     categoryName: resolveProductDisplayCategory(product),
     categoryLabelName: resolveProductDisplayCategory(product),
     displayCategory: resolveProductDisplayCategory(product),
-    sectionName: product.section?.name || '',
-    shelfCode: product.shelfCode || product.section?.name || '',
+    sectionName: cleanSectionDisplayName(product.section?.name, ''),
+    shelfCode: product.shelfCode || cleanSectionDisplayName(product.section?.name, ''),
     defaultShelfLocationCode: product.shelfCode || '',
     unit: product.unit || 'adet',
     salePrice,

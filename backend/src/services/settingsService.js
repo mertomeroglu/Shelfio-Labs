@@ -1,4 +1,5 @@
-﻿import { settingsRepo } from '../repositories/settingsRepository.js';
+import { settingsRepo } from '../repositories/settingsRepository.js';
+import { productRepo } from '../repositories/productRepository.js';
 import { userRepo } from '../repositories/userRepository.js';
 import { sanitizeSettingsInput, validateSettingsPayload } from '../utils/validators.js';
 import { AppError } from '../utils/appError.js';
@@ -148,6 +149,222 @@ const appendDeveloperLog = (settings, entry) => {
   return [entry, ...current].slice(0, MAX_DEVELOPER_LOGS);
 };
 
+const toNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'object' && typeof value.toNumber === 'function') {
+    const numeric = value.toNumber();
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const pricesEqual = (left, right) => {
+  const a = toNumber(left);
+  const b = toNumber(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.round(a * 100) === Math.round(b * 100);
+};
+
+const dateOnlyFromIso = (value) => {
+  const parsed = value ? new Date(value) : null;
+  return parsed && Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : null;
+};
+
+const getEffectiveCampaignPrice = (product, campaigns) => {
+  const pricedProduct = applyCampaignPricingToProduct(product, campaigns, { includeGeneralCampaigns: true });
+  const basePrice = toNumber(product?.salePrice ?? product?.price ?? product?.currentPrice) || 0;
+  const effectivePrice = toNumber(pricedProduct?.campaignPrice ?? pricedProduct?.discountedPrice ?? pricedProduct?.currentPrice ?? basePrice) || basePrice;
+  return { pricedProduct, effectivePrice };
+};
+
+const buildCampaignPriceEvent = ({ product, previousPrice, nextPrice, pricedProduct, transition, actorId, actorName }) => {
+  const at = new Date().toISOString();
+  const productId = String(product?.id || '').trim();
+  const activeCampaign = pricedProduct?.activeCampaign || pricedProduct?.appliedCampaign || null;
+  const campaignId = activeCampaign?.id || pricedProduct?.activeCampaignId || null;
+  const id = `campaign-price-${productId}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const previous = toNumber(previousPrice);
+  const next = toNumber(nextPrice);
+  const changeDirection = next > previous ? 'increase' : next < previous ? 'decrease' : 'stable';
+  const source = transition === 'restore' ? 'campaign_price_restored' : 'campaign_price_applied';
+  const changePercent = Number.isFinite(previous) && previous > 0
+    ? Number((((next - previous) / previous) * 100).toFixed(2))
+    : 0;
+
+  return {
+    id,
+    priceEventId: id,
+    productId,
+    sku: product?.sku || null,
+    previousSalePrice: previous,
+    previousPrice: previous,
+    salePrice: next,
+    price: next,
+    newPrice: next,
+    source,
+    at,
+    eventDate: at,
+    date: at,
+    currency: 'TRY',
+    changeDirection,
+    changePercent,
+    isSyntheticHistory: false,
+    createdAt: at,
+    payload: {
+      priceEventId: id,
+      productId,
+      sku: product?.sku || null,
+      eventDate: at,
+      previousPrice: previous,
+      newPrice: next,
+      changeDirection,
+      changePercent,
+      currency: 'TRY',
+      source,
+      campaignId,
+      campaignName: activeCampaign?.name || activeCampaign?.publicName || activeCampaign?.displayName || pricedProduct?.activeCampaignName || '',
+      transition,
+      actorId,
+      actorName,
+    },
+  };
+};
+
+const loadCampaignPriceProducts = async () => {
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    return prisma.product.findMany({
+      include: { priceEvents: true },
+      where: {
+        isActive: { not: false },
+        isListed: { not: false },
+      },
+    });
+  }
+  return productRepo.getAll();
+};
+
+const persistCampaignPriceEvent = async ({ product, event }) => {
+  const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+  const existingHistory = Array.isArray(product?.priceHistory)
+    ? product.priceHistory
+    : (Array.isArray(payload.priceHistory) ? payload.priceHistory : []);
+  const nextHistory = [...existingHistory, event];
+  const nextPayload = { ...payload, priceHistory: nextHistory };
+  const atDate = new Date(event.at);
+  const lastPriceChangeDate = dateOnlyFromIso(event.at);
+
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    await prisma.product.update({
+      where: { id: product.id },
+      data: {
+        payload: nextPayload,
+        priceUpdatedAt: atDate,
+        lastPriceChangeDate: lastPriceChangeDate ? new Date(`${lastPriceChangeDate}T00:00:00.000Z`) : atDate,
+        lastPriceChangeAt: atDate,
+        lastPriceChangeSource: event.source,
+      },
+    });
+    await prisma.productPriceEvent.create({
+      data: {
+        id: event.id,
+        productId: product.id,
+        previousSalePrice: event.previousSalePrice,
+        salePrice: event.salePrice,
+        source: event.source,
+        payload: event.payload,
+        createdAt: atDate,
+      },
+    });
+    return;
+  }
+
+  await productRepo.updateById(product.id, {
+    ...product,
+    payload: nextPayload,
+    priceHistory: nextHistory,
+    priceUpdatedAt: event.at,
+    lastPriceChangeDate,
+    lastPriceChangeAt: event.at,
+    lastPriceChangeSource: event.source,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+const getLatestRecordedPrice = (product = {}) => {
+  const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+  const rows = [
+    ...(Array.isArray(product.priceEvents) ? product.priceEvents : []),
+    ...(Array.isArray(product.priceHistory) ? product.priceHistory : []),
+    ...(Array.isArray(payload.priceHistory) ? payload.priceHistory : []),
+  ]
+    .filter(Boolean)
+    .sort((left, right) => new Date(left.createdAt || left.at || left.eventDate || 0).getTime() - new Date(right.createdAt || right.at || right.eventDate || 0).getTime());
+  const latest = rows[rows.length - 1] || null;
+  const recorded = toNumber(latest?.salePrice ?? latest?.price ?? latest?.newPrice ?? latest?.payload?.salePrice ?? latest?.payload?.newPrice);
+  return Number.isFinite(recorded) ? recorded : (toNumber(product?.salePrice ?? product?.price ?? product?.currentPrice) || 0);
+};
+
+const syncCampaignPriceHistoryForCurrentState = async ({ settings, actorId = 'system', actorName = 'Sistem' }) => {
+  const activeCampaigns = await listActiveCampaignDefinitions({ settings });
+  const products = await loadCampaignPriceProducts();
+  const events = [];
+
+  for (const product of products) {
+    const recordedPrice = getLatestRecordedPrice(product);
+    const current = getEffectiveCampaignPrice(product, activeCampaigns);
+    if (pricesEqual(recordedPrice, current.effectivePrice)) continue;
+
+    const basePrice = toNumber(product?.salePrice ?? product?.price ?? product?.currentPrice) || 0;
+    const transition = current.pricedProduct?.hasActiveCampaign || current.pricedProduct?.hasActiveDiscount || !pricesEqual(current.effectivePrice, basePrice)
+      ? 'apply'
+      : 'restore';
+    const event = buildCampaignPriceEvent({
+      product,
+      previousPrice: recordedPrice,
+      nextPrice: current.effectivePrice,
+      pricedProduct: current.pricedProduct,
+      transition,
+      actorId,
+      actorName,
+    });
+    await persistCampaignPriceEvent({ product, event });
+    events.push(event);
+  }
+
+  return { eventCount: events.length };
+};
+
+const syncCampaignPriceHistory = async ({ previousSettings, nextSettings, actorId, actorName }) => {
+  const previousCampaigns = await listActiveCampaignDefinitions({ settings: previousSettings });
+  const nextCampaigns = await listActiveCampaignDefinitions({ settings: nextSettings });
+  const products = await loadCampaignPriceProducts();
+  const events = [];
+
+  for (const product of products) {
+    const before = getEffectiveCampaignPrice(product, previousCampaigns);
+    const after = getEffectiveCampaignPrice(product, nextCampaigns);
+    if (pricesEqual(before.effectivePrice, after.effectivePrice)) continue;
+
+    const transition = after.pricedProduct?.hasActiveCampaign || after.pricedProduct?.hasActiveDiscount ? 'apply' : 'restore';
+    const event = buildCampaignPriceEvent({
+      product,
+      previousPrice: before.effectivePrice,
+      nextPrice: after.effectivePrice,
+      pricedProduct: after.pricedProduct,
+      transition,
+      actorId,
+      actorName,
+    });
+    await persistCampaignPriceEvent({ product, event });
+    events.push(event);
+  }
+
+  return { eventCount: events.length };
+};
+
 const LOG_GROUP_FIELDS = {
   activity: 'loginActivities',
   login: 'loginActivities',
@@ -164,6 +381,13 @@ const assertFourDigitPin = (pin, message = 'PIN 4 haneli sayisal formatta olmali
 export const settingsService = {
   async get(currentUser) {
     const settings = await settingsRepo.getSettings();
+    void syncCampaignPriceHistoryForCurrentState({
+      settings,
+      actorId: 'system',
+      actorName: 'Sistem',
+    }).catch((error) => {
+      console.error('[campaign-price-history-current-sync:error]', error);
+    });
     const base = {
       ...settings,
       posPin: undefined,
@@ -231,6 +455,21 @@ export const settingsService = {
 
     await settingsRepo.updateSettings(nextSettings);
     if (Object.prototype.hasOwnProperty.call(payload?.customerRelations || {}, 'campaigns')) {
+      try {
+        await syncCampaignPriceHistory({
+          previousSettings: current,
+          nextSettings,
+          actorId,
+          actorName,
+        });
+        await syncCampaignPriceHistoryForCurrentState({
+          settings: nextSettings,
+          actorId,
+          actorName,
+        });
+      } catch (error) {
+        console.error('[campaign-price-history-sync:error]', error);
+      }
       void eslService.syncCampaignLabels({ actorUser: currentUser }).catch((error) => {
         console.error('[campaign-esl-sync:error]', error);
       });

@@ -12,6 +12,7 @@ import CustomerCartFull from '../../components/customer/CustomerCartFull.jsx';
 import ProductResultCard from '../../components/customer/ProductResultCard.jsx';
 import BottomNavigationDock from '../../components/customer/BottomNavigationDock.jsx';
 import PageLoading from '../../components/PageLoading.jsx';
+import ConfirmModal from '../../components/ConfirmModal.jsx';
 import { customerPortalAuthService } from '../../services/customerPortalAuthService.js';
 import { customerCatalogService } from '../../services/customerCatalogService.js';
 import { SUPPORT_CONTACT } from '../../constants/contact.js';
@@ -21,6 +22,7 @@ import { CAMERA_PERMISSION_HELP_TEXT, getCameraErrorMessage, logCameraError, sta
 const RECENT_STORAGE_KEY = 'shelfio.customer.recent.products';
 const CUSTOMER_PREFS_KEY = 'shelfio.customer.preferences';
 const CUSTOMER_PREFS_UPDATED_EVENT = 'shelfio:customer-preferences-updated';
+const CUSTOMER_NOTIFICATIONS_REFRESH_EVENT = 'shelfio:customer-notifications-refresh';
 const SHOPPING_LIST_STORAGE_KEY = 'shelfio.customer.shopping.list';
 const FAVORITES_STORAGE_KEY = 'shelfio.customer.favorites';
 const ORDER_HISTORY_STORAGE_KEY = 'shelfio.customer.order.history';
@@ -1083,6 +1085,7 @@ export default function CustomerPortal() {
   const [productsLoaded, setProductsLoaded] = useState(false);
   const [productsLoading, setProductsLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [clearNotificationsConfirmOpen, setClearNotificationsConfirmOpen] = useState(false);
   const [campaignDefinitions, setCampaignDefinitions] = useState([]);
   const [settingsData, setSettingsData] = useState(null);
   const [storefrontResolved, setStorefrontResolved] = useState(false);
@@ -1831,6 +1834,24 @@ export default function CustomerPortal() {
       .slice(0, 8);
   }, [debouncedSearchQuery, products]);
 
+  const refreshCustomerNotifications = useCallback(async () => {
+    if (!isCustomerLoggedIn) return;
+    const res = await customerPortalAuthService.notifications(40);
+    if (Array.isArray(res)) {
+      setNotifications(res.map((item) => normalizeNotification(item)));
+    }
+  }, [isCustomerLoggedIn]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      void refreshCustomerNotifications();
+    };
+    window.addEventListener(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, handleRefresh);
+    return () => {
+      window.removeEventListener(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, handleRefresh);
+    };
+  }, [refreshCustomerNotifications]);
+
   const customerNotifications = useMemo(() => notifications.filter(isCustomerFacingNotification), [notifications]);
   const unreadCustomerNotificationCount = useMemo(
     () => customerNotifications.filter((item) => !item?.isRead).length,
@@ -1847,6 +1868,32 @@ export default function CustomerPortal() {
       // Keep the screen usable; the next fetch will reconcile the unread state if needed.
     }
   }, [isCustomerLoggedIn, unreadCustomerNotificationCount]);
+
+  const handleNotificationAction = useCallback((item) => {
+    const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+    const actionUrl = String(item?.actionUrl || payload.actionUrl || '').trim();
+    if (!actionUrl || !actionUrl.startsWith('/musteri')) return;
+
+    if (actionUrl.includes('/musteri/urun/')) {
+      const productId = extractProductIdFromPath(actionUrl);
+      if (productId) {
+        setDetailReturnState({ view: 'notifications', tab: activeBottomTab });
+        setDetailProductId(productId);
+        setView('detail');
+      }
+    } else {
+      setView(pathToView(actionUrl));
+    }
+    navigate(actionUrl);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [activeBottomTab, navigate, pathToView]);
+
+  const handleClearNotifications = useCallback(async () => {
+    if (!isCustomerLoggedIn) return;
+    await customerPortalAuthService.clearNotifications();
+    setNotifications((current) => current.filter((item) => !isCustomerFacingNotification(item)));
+    setClearNotificationsConfirmOpen(false);
+  }, [isCustomerLoggedIn]);
   const productsById = useMemo(() => new Map(products.map((item) => [String(item.id), item])), [products]);
 
   useEffect(() => {
@@ -2720,17 +2767,36 @@ export default function CustomerPortal() {
   const renderNotifications = () => (
     <div className="customer-subpage">
       <section className="customer-section">
+        <div className="customer-notification-list-head">
+          <h3>Bildirimler</h3>
+          {customerNotifications.length > 0 ? (
+            <button type="button" className="customer-notification-clear-btn" onClick={() => setClearNotificationsConfirmOpen(true)}>
+              Bildirimleri Temizle
+            </button>
+          ) : null}
+        </div>
         {customerNotifications.length === 0 ? (
-          <div className="empty-state-box">Bildiriminiz bulunmuyor.</div>
+          <div className="empty-state-box">Gösterilecek bildirim bulunmuyor.</div>
         ) : (
           <ul className="notification-list-simple">
-            {customerNotifications.map((item) => (
-              <li key={item.id}>
-                <strong>{item.title}</strong>
-                <p>{item.description}</p>
-                <small>{item.createdAt ? new Date(item.createdAt).toLocaleString('tr-TR') : '-'}</small>
-              </li>
-            ))}
+            {customerNotifications.map((item) => {
+              const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+              const actionUrl = String(item?.actionUrl || payload.actionUrl || '').trim();
+              const canOpenAction = actionUrl.startsWith('/musteri');
+              const actionLabel = item.actionLabel || payload.actionLabel || (item.type === 'PROXIMITY_PRODUCT_DISCOUNT' ? 'Ürüne Git' : 'İncele');
+              return (
+                <li key={item.id}>
+                  <strong>{item.title}</strong>
+                  {item.description ? <p>{item.description}</p> : null}
+                  <small>{item.createdAt ? new Date(item.createdAt).toLocaleString('tr-TR') : '-'}</small>
+                  {canOpenAction ? (
+                    <button type="button" className="customer-notification-action" onClick={() => handleNotificationAction(item)}>
+                      {actionLabel}
+                    </button>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -3448,6 +3514,16 @@ export default function CustomerPortal() {
           </div>
         </div>
       ) : null}
+      <ConfirmModal
+        isOpen={clearNotificationsConfirmOpen}
+        title="Bildirimler temizlensin mi?"
+        description="Bu işlem müşteri bildirim görünümünüzdeki bildirimleri temizler."
+        confirmText="Temizle"
+        cancelText="Vazgeç"
+        tone="danger"
+        onConfirm={handleClearNotifications}
+        onCancel={() => setClearNotificationsConfirmOpen(false)}
+      />
     </CustomerAppShell>
   );
 }

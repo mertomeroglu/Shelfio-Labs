@@ -258,8 +258,13 @@ function inferActionUrl(actionType, item) {
 }
 
 function inferActionLabel(actionType, item) {
+  const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+  const explicitLabel = String(item?.actionLabel || payload.actionLabel || '').trim();
+  if (explicitLabel) return explicitLabel;
+
   const type = String(item?.type || '').toLowerCase();
   const title = String(item?.title || '').toLocaleLowerCase('tr-TR');
+  if (type === 'proximity_product_discount') return 'Ürüne Git';
   if (actionType === 'mobile_order_draft' || title.includes('mobil sipariş tasla')) return 'Detay Görüntüle';
   if (actionType === 'task') return 'Göreve Git';
   if (actionType === 'stock') return 'Stokları Gör';
@@ -271,6 +276,7 @@ function inferActionLabel(actionType, item) {
     if (type.includes('approval') || type.includes('onay') || type.includes('bekliyor')) return 'Onaya Git';
     return 'Siparişleri Gör';
   }
+  if (actionType === 'route') return type === 'proximity_product_discount' ? 'Ürüne Git' : 'İncele';
   return 'İncele';
 }
 

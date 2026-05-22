@@ -16,6 +16,7 @@ export const customerAuthController = {
   async placeOrder(req, res, next) { try { res.status(201).json({ success: true, data: await customerAuthService.placeOrder(req.customer.id, req.body || {}) }); } catch (e) { next(e); } },
   async notifications(req, res, next) { try { res.json({ success: true, data: await customerAuthService.notifications(req.customer.id, req.query?.limit) }); } catch (e) { next(e); } },
   async markNotificationsAsRead(req, res, next) { try { res.json({ success: true, data: await customerAuthService.markNotificationsAsRead(req.customer.id) }); } catch (e) { next(e); } },
+  async clearNotifications(req, res, next) { try { res.json({ success: true, data: await customerAuthService.clearNotifications(req.customer.id) }); } catch (e) { next(e); } },
   async storeMap(req, res, next) { try { res.json({ success: true, data: await customerAuthService.storeMap(req.customer.id) }); } catch (e) { next(e); } },
   async storeMapPublic(_req, res, next) { try { res.json({ success: true, data: await customerAuthService.storeMapPublic() }); } catch (e) { next(e); } },
 };
