@@ -48,6 +48,29 @@ const shouldTryStartTlsFallback = (error) => {
   return ['ESOCKET', 'ECONNECTION', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPROTO'].includes(code);
 };
 
+const shouldTryFromAddressFallback = (error, message = {}) => {
+  const configuredFrom = String(config.supportMailFromEmail || '').trim().toLowerCase();
+  const authUser = String(config.smtpUser || '').trim().toLowerCase();
+  if (!configuredFrom || !authUser || configuredFrom === authUser) return false;
+
+  const code = String(error?.code || '').toUpperCase();
+  const responseCode = Number(error?.responseCode || 0);
+  const text = `${error?.response || ''} ${error?.message || ''}`.toLowerCase();
+  const fromText = String(message?.from || '').toLowerCase();
+  const hasConfiguredFrom = !fromText || fromText.includes(configuredFrom);
+  if (!hasConfiguredFrom) return false;
+
+  return code === 'EAUTH'
+    || [535, 550, 553, 554].includes(responseCode)
+    || text.includes('sender')
+    || text.includes('from')
+    || text.includes('envelope')
+    || text.includes('not owned')
+    || text.includes('not authorized')
+    || text.includes('not permitted')
+    || text.includes('rejected');
+};
+
 const classifyTransportError = (error) => {
   const code = String(error?.code || '').toUpperCase();
   const responseCode = Number(error?.responseCode || 0);
@@ -133,11 +156,16 @@ const buildTransportOptions = ({ port, secure }) => ({
   },
 });
 
-const buildFromValue = () => {
-  const fromEmail = config.supportMailFromEmail || config.smtpUser;
+const buildFromValue = (fromEmailOverride = '') => {
+  const fromEmail = fromEmailOverride || config.supportMailFromEmail || config.smtpUser;
   const fromName = config.supportMailFromName || 'Shelfio';
   return fromEmail ? `${fromName} <${fromEmail}>` : '';
 };
+
+const buildAuthUserFromMessage = (message = {}) => ({
+  ...message,
+  from: buildFromValue(config.smtpUser),
+});
 
 const summarizeAttachments = (attachments = [], attachmentNote = '') => {
   if (attachmentNote) {
@@ -183,7 +211,7 @@ const createMessage = ({
     from: buildFromValue(),
     to: toList(config.supportMailTo),
     subject: title,
-    replyTo: replyTo || undefined,
+    replyTo: replyTo || config.supportMailReplyTo || undefined,
     attachments,
     text: [
       title,
@@ -261,6 +289,7 @@ const createSystemErrorMessage = ({
     from: buildFromValue(),
     to: toList(config.supportMailTo),
     subject: title,
+    replyTo: config.supportMailReplyTo || undefined,
     text: lines.join('\n'),
     html: [
       '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">',
@@ -340,6 +369,22 @@ const sendMail = async (message, { context = 'mail' } = {}) => {
     return mapSendResult(result, expectedRecipients, false);
   } catch (error) {
     console.error(`[mail:${context}:primary-failed]`, redactErrorForLog(error, primaryOptions));
+
+    if (shouldTryFromAddressFallback(error, message)) {
+      const fromFallbackMessage = buildAuthUserFromMessage(message);
+      try {
+        const result = await sendWithTransport(fromFallbackMessage, primaryOptions);
+        return mapSendResult(result, expectedRecipients, true);
+      } catch (fromFallbackError) {
+        console.error(`[mail:${context}:from-fallback-failed]`, redactErrorForLog(fromFallbackError, primaryOptions));
+        const classified = classifyTransportError(fromFallbackError);
+        throw new MailServiceError(classified.code, classified.userMessage, {
+          statusCode: 503,
+          userMessage: classified.userMessage,
+          details: redactErrorForLog(fromFallbackError, primaryOptions),
+        });
+      }
+    }
 
     if (config.smtpPort === 465 && shouldTryStartTlsFallback(error)) {
       const fallbackOptions = buildTransportOptions({

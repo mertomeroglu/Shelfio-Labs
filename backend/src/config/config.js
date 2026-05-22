@@ -2,16 +2,17 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const srcDir = path.resolve(__dirname, '..');
 const backendRootDir = path.resolve(srcDir, '..');
 const repoRootDir = path.resolve(backendRootDir, '..');
+const nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase();
+const isProductionRuntime = nodeEnv === 'production';
+const shouldOverrideDotenv = !isProductionRuntime;
 
-dotenv.config({ path: path.resolve(backendRootDir, '.env') });
-dotenv.config({ path: path.resolve(repoRootDir, '.env') });
+dotenv.config({ path: path.resolve(repoRootDir, '.env'), override: false });
+dotenv.config({ path: path.resolve(backendRootDir, '.env'), override: shouldOverrideDotenv });
 
 const parseBoolean = (value, fallback = false) => {
   if (typeof value === 'boolean') {
@@ -46,6 +47,27 @@ const parseOptionalBoolean = (value) => {
 const parsePort = (value, fallback = 0) => {
   const parsed = Number.parseInt(String(value || '').trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const toList = (value) => String(value || '')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const maskEmail = (value = '') => {
+  const text = String(value || '').trim();
+  const atIndex = text.lastIndexOf('@');
+  if (atIndex <= 0) return text ? '***' : '';
+  const local = text.slice(0, atIndex);
+  const domain = text.slice(atIndex + 1);
+  const visibleLocal = local.length <= 2 ? `${local[0] || ''}***` : `${local.slice(0, 2)}***`;
+  return `${visibleLocal}@${domain}`;
+};
+
+const emailDomain = (value = '') => {
+  const text = String(value || '').trim();
+  const atIndex = text.lastIndexOf('@');
+  return atIndex > -1 ? text.slice(atIndex + 1).toLowerCase() : '';
 };
 
 const requestedDataStore = String(process.env.DATA_STORE || process.env.STORAGE_DRIVER || '').trim().toLowerCase();
@@ -110,8 +132,9 @@ export const config = {
   customerRefreshSecret: process.env.CUSTOMER_REFRESH_SECRET || process.env.JWT_SECRET || 'stok-takip-sistemi-default-secret',
   customerRefreshExpiresIn: process.env.CUSTOMER_REFRESH_EXPIRES_IN || '30d',
   supportMailTo: process.env.SUPPORT_TO_EMAIL || process.env.SUPPORT_MAIL_TO || '',
-  supportMailFromName: process.env.SMTP_FROM_NAME || 'Shelfio',
-  supportMailFromEmail: process.env.SMTP_FROM_EMAIL || process.env.SUPPORT_MAIL_FROM || process.env.SMTP_USER || '',
+  supportMailFromName: process.env.SMTP_FROM_NAME || 'Shelfio Personel',
+  supportMailFromEmail: process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || process.env.SUPPORT_MAIL_FROM || '',
+  supportMailReplyTo: process.env.SMTP_REPLY_TO || '',
   smtpHost: process.env.SMTP_HOST || '',
   smtpPort,
   smtpSecure,
@@ -128,12 +151,18 @@ export const config = {
 };
 
 console.info('SMTP config loaded:', {
-  host: config.smtpHost || '',
-  port: config.smtpPort || 0,
-  secure: Boolean(config.smtpSecure),
-  user: config.smtpUser || '',
-  fromEmail: config.supportMailFromEmail || '',
-  supportToEmail: config.supportMailTo || '',
+  dotenvOverride: shouldOverrideDotenv,
+  nodeEnv: nodeEnv || '(unset)',
+  smtpHost: config.smtpHost || '',
+  smtpPort: config.smtpPort || 0,
+  smtpSecure: Boolean(config.smtpSecure),
+  smtpUser: maskEmail(config.smtpUser),
+  smtpUserDomain: emailDomain(config.smtpUser),
+  fromEmail: maskEmail(config.supportMailFromEmail),
+  fromEmailDomain: emailDomain(config.supportMailFromEmail),
+  replyTo: maskEmail(config.supportMailReplyTo),
+  supportToEmail: toList(config.supportMailTo).map(maskEmail),
+  supportToEmailDomain: toList(config.supportMailTo).map(emailDomain),
   hasPassword: Boolean(config.smtpPass),
 });
 
