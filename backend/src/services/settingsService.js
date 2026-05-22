@@ -1,10 +1,13 @@
 import { settingsRepo } from '../repositories/settingsRepository.js';
 import { productRepo } from '../repositories/productRepository.js';
 import { userRepo } from '../repositories/userRepository.js';
+import { config } from '../config/config.js';
+import { getPrisma } from '../providers/postgresProvider.js';
 import { sanitizeSettingsInput, validateSettingsPayload } from '../utils/validators.js';
 import { AppError } from '../utils/appError.js';
 import { logisticsTariffService } from './logisticsTariffService.js';
 import { eslService } from './eslService.js';
+import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
 
 const DEFAULT_DESK_PINS = {
   B1: '1234',
@@ -307,8 +310,27 @@ const getLatestRecordedPrice = (product = {}) => {
   return Number.isFinite(recorded) ? recorded : (toNumber(product?.salePrice ?? product?.price ?? product?.currentPrice) || 0);
 };
 
+let campaignDefinitionListWarningLogged = false;
+
+const safeListActiveCampaignDefinitions = async ({ settings } = {}) => {
+  try {
+    const definitions = await listActiveCampaignDefinitions({ settings });
+    return Array.isArray(definitions) ? definitions : [];
+  } catch (error) {
+    if (!campaignDefinitionListWarningLogged) {
+      campaignDefinitionListWarningLogged = true;
+      console.error('[campaign-price-history-definitions:error]', {
+        code: error?.code || null,
+        name: error?.name || 'Error',
+        message: error?.message || 'Campaign definitions could not be listed.',
+      });
+    }
+    return [];
+  }
+};
+
 const syncCampaignPriceHistoryForCurrentState = async ({ settings, actorId = 'system', actorName = 'Sistem' }) => {
-  const activeCampaigns = await listActiveCampaignDefinitions({ settings });
+  const activeCampaigns = await safeListActiveCampaignDefinitions({ settings });
   const products = await loadCampaignPriceProducts();
   const events = [];
 
@@ -338,8 +360,8 @@ const syncCampaignPriceHistoryForCurrentState = async ({ settings, actorId = 'sy
 };
 
 const syncCampaignPriceHistory = async ({ previousSettings, nextSettings, actorId, actorName }) => {
-  const previousCampaigns = await listActiveCampaignDefinitions({ settings: previousSettings });
-  const nextCampaigns = await listActiveCampaignDefinitions({ settings: nextSettings });
+  const previousCampaigns = await safeListActiveCampaignDefinitions({ settings: previousSettings });
+  const nextCampaigns = await safeListActiveCampaignDefinitions({ settings: nextSettings });
   const products = await loadCampaignPriceProducts();
   const events = [];
 
