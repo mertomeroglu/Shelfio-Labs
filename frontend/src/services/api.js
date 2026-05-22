@@ -68,8 +68,40 @@ const parseBodyForLog = (body) => {
 
 const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
 
+export const isRequestCancellation = (error) => {
+  if (!error) return false;
+  if (typeof error === 'object' && error.__CANCEL__ === true) return true;
+  const name = String(error.name || error.constructor?.name || '').trim();
+  const code = String(error.code || '').trim();
+  const message = String(error.message || '').trim().toLowerCase();
+  const cause = error.cause && error.cause !== error ? error.cause : null;
+
+  return name === 'AbortError'
+    || name === 'CanceledError'
+    || code === 'ERR_CANCELED'
+    || message.includes('signal is aborted')
+    || message.includes('aborted')
+    || message.includes('aborterror')
+    || (cause ? isRequestCancellation(cause) : false);
+};
+
+const createCancellationError = (sourceError) => {
+  if (sourceError instanceof Error) {
+    sourceError.isRequestCancellation = true;
+    return sourceError;
+  }
+  const error = new DOMException('The operation was aborted.', 'AbortError');
+  error.cause = sourceError;
+  error.isRequestCancellation = true;
+  return error;
+};
+
 const queueDeveloperLog = (payload) => {
   if (!payload || String(payload.endpoint || '').includes('/settings/developer-logs')) {
+    return;
+  }
+
+  if (isRequestCancellation(payload.error || payload.cause || payload)) {
     return;
   }
 
@@ -294,6 +326,13 @@ async function request(path, options = {}) {
       headers,
     });
   } catch (networkError) {
+    if (isRequestCancellation(networkError) || options.signal?.aborted) {
+      if (import.meta.env.DEV) {
+        console.debug('[api] request cancelled', { method, path, message: networkError?.message });
+      }
+      throw createCancellationError(networkError);
+    }
+
     const friendlyMessage =
       networkError?.name === 'TypeError' || String(networkError?.message || '').toLowerCase().includes('failed to fetch') ?
         'Sunucuya baglanilamadi. Backend servisinin calistigindan emin olun.'

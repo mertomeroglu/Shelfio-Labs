@@ -4,7 +4,7 @@ import { DialogProvider } from './components/ConfirmModal.jsx';
 import { AuthProvider } from './hooks/useAuth.js';
 import { ErrorFallbackView } from './pages/_shared/route-error/RouteError.jsx';
 import { router } from './router/router.jsx';
-import { getStoredUser } from './services/api.js';
+import { getStoredUser, isRequestCancellation } from './services/api.js';
 import { settingsService } from './services/settingsService.js';
 import { supportService } from './services/supportService.js';
 
@@ -34,6 +34,9 @@ class AppErrorBoundary extends Component {
 	}
 
 	static getDerivedStateFromError(error) {
+		if (isRequestCancellation(error)) {
+			return null;
+		}
 		return {
 			hasError: true,
 			errorMessage: error?.message || 'Bilinmeyen hata',
@@ -41,6 +44,12 @@ class AppErrorBoundary extends Component {
 	}
 
 	componentDidCatch(error) {
+		if (isRequestCancellation(error)) {
+			if (import.meta.env.DEV) {
+				console.debug('[error-boundary] cancelled request ignored', error);
+			}
+			return;
+		}
 		console.error('Global runtime error:', error);
 		supportService.reportSystemError(buildRuntimeErrorReport(error, 'React ErrorBoundary')).catch(() => {
 			// Destek bildirimi uygulamanın toparlanmasını engellememeli.
@@ -69,6 +78,9 @@ class AppErrorBoundary extends Component {
 export default function App() {
 	useEffect(() => {
 		const onWindowError = (event) => {
+			if (isRequestCancellation(event?.error) || isRequestCancellation(event)) {
+				return;
+			}
 			settingsService.sendDeveloperLog({
 				level: 'error',
 				source: 'frontend',
@@ -84,6 +96,13 @@ export default function App() {
 
 		const onUnhandledRejection = (event) => {
 			const reason = event?.reason;
+			if (isRequestCancellation(reason)) {
+				event?.preventDefault?.();
+				if (import.meta.env.DEV) {
+					console.debug('[unhandledrejection] cancelled request ignored', reason);
+				}
+				return;
+			}
 			settingsService.sendDeveloperLog({
 				level: 'error',
 				source: 'frontend',

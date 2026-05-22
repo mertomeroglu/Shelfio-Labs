@@ -44,6 +44,7 @@ import PageLoading from '../../components/PageLoading.jsx';
 import { reportService } from '../../services/reportService.js';
 import { customerAdminService } from '../../services/customerAdminService.js';
 import { formatCurrency, formatDateInTimeZone, joinDisplayParts, normalizeTurkishText } from '../../services/formatters.js';
+import { isRequestCancellation } from '../../services/api.js';
 import '../../styles/dashboard_redesign.css';
 
 const STATUS_LABELS = {
@@ -398,7 +399,7 @@ export default function Dashboard() {
         finishRequest();
         return;
       }
-      if (err?.name === 'AbortError') {
+      if (isRequestCancellation(err)) {
         finishRequest();
         return;
       }

@@ -15,6 +15,7 @@ import {
 } from '../../services/formatters.js';
 import { reportService } from '../../services/reportService.js';
 import { productService } from '../../services/productService.js';
+import { isRequestCancellation } from '../../services/api.js';
 
 const INITIAL_REPORT = {
   overview: {},
@@ -231,8 +232,9 @@ export default function Reports() {
   const [sectionStates, setSectionStates] = useState(() => createSectionStates('idle'));
   const exportResetTimerRef = useRef(null);
   const requestSequenceRef = useRef(0);
+  const activeControllerRef = useRef(null);
 
-  const loadSection = async (section, page = 1, nextFilters = activeFilters, requestId = requestSequenceRef.current) => {
+  const loadSection = async (section, page = 1, nextFilters = activeFilters, requestId = requestSequenceRef.current, signal = null) => {
     const reportKey = SECTION_REPORT_KEYS[section];
     if (!reportKey) return;
 
@@ -252,9 +254,9 @@ export default function Reports() {
         page,
         pageSize: REPORT_PAGE_SIZE,
         ...nextFilters,
-      });
+      }, signal ? { signal } : {});
 
-      if (requestSequenceRef.current !== requestId) {
+      if (requestSequenceRef.current !== requestId || signal?.aborted) {
         return;
       }
 
@@ -278,6 +280,9 @@ export default function Reports() {
         },
       }));
     } catch (error) {
+      if (isRequestCancellation(error) || signal?.aborted) {
+        return;
+      }
       if (requestSequenceRef.current !== requestId) {
         return;
       }
@@ -294,17 +299,20 @@ export default function Reports() {
     }
   };
 
-  const loadDeferredSections = async (requestId, nextFilters) => {
+  const loadDeferredSections = async (requestId, nextFilters, signal = null) => {
     for (const section of SECTION_LOAD_ORDER) {
-      if (requestSequenceRef.current !== requestId) {
+      if (requestSequenceRef.current !== requestId || signal?.aborted) {
         return;
       }
-      await loadSection(section, 1, nextFilters, requestId);
+      await loadSection(section, 1, nextFilters, requestId, signal);
       await waitForDeferredSlot();
     }
   };
 
   const loadData = async (nextFilters = activeFilters) => {
+    activeControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
     const requestId = requestSequenceRef.current + 1;
     requestSequenceRef.current = requestId;
 
@@ -313,14 +321,20 @@ export default function Reports() {
       setLoadError('');
       setSectionStates(createSectionStates('pending'));
       setReport(INITIAL_REPORT);
-      const summaryData = await reportService.getSummary({ includeDetails: false, ...nextFilters });
-      if (requestSequenceRef.current !== requestId) {
+      const summaryData = await reportService.getSummary({ includeDetails: false, ...nextFilters }, { signal: controller.signal });
+      if (requestSequenceRef.current !== requestId || controller.signal.aborted) {
         return;
       }
       setReport(mergeReportState(INITIAL_REPORT, summaryData || {}));
       setIsLoading(false);
-      loadDeferredSections(requestId, nextFilters);
+      loadDeferredSections(requestId, nextFilters, controller.signal);
     } catch (error) {
+      if (isRequestCancellation(error) || controller.signal.aborted) {
+        if (requestSequenceRef.current === requestId) {
+          setIsLoading(false);
+        }
+        return;
+      }
       if (requestSequenceRef.current !== requestId) {
         return;
       }
@@ -333,6 +347,9 @@ export default function Reports() {
 
   useEffect(() => {
     loadData(activeFilters);
+    return () => {
+      activeControllerRef.current?.abort();
+    };
   }, [activeFilters.startDate, activeFilters.endDate]);
 
   useEffect(() => {

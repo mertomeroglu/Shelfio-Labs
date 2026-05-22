@@ -1,6 +1,6 @@
 import { isRouteErrorResponse, useRouteError } from 'react-router-dom';
 import { useEffect } from 'react';
-import { clearAuthToken, getStoredUser } from '../../../services/api.js';
+import { clearAuthToken, getStoredUser, isRequestCancellation } from '../../../services/api.js';
 import { supportService } from '../../../services/supportService.js';
 
 const ADMIN_LOGIN_ROUTE = '/giris';
@@ -97,10 +97,17 @@ export function ErrorFallbackView() {
 export default function RouteError() {
   const error = useRouteError();
   useEffect(() => {
+    if (isRequestCancellation(error)) {
+      return;
+    }
     supportService.reportSystemError(buildErrorReportPayload(error)).catch(() => {
       // Hata bildirimi uygulamanın toparlanmasını engellememeli.
     });
   }, [error]);
+
+  if (isRequestCancellation(error)) {
+    return null;
+  }
 
   return <ErrorFallbackView />;
 }
