@@ -84,17 +84,48 @@ const getLabelLocationDisplay = (device) => (
   hasAssignedProduct(device) ? (device.location || '-') : UNASSIGNED_LABEL_LOCATION
 );
 
+const getProductNameLabel = (product) => formatUnit(product?.name || product?.productName || 'Ürün seçilmedi');
+
+const getProductSkuLabel = (product) => product?.sku || product?.barcode || 'SKU yok';
+
+const getProductBarcodeLabel = (product) => product?.barcode || product?.sku || '-';
+
+const getProductPriceLabel = (pricing) => `₺${(Number(pricing?.displayPrice) || 0).toFixed(2)}`;
+
+const isRecord = (value) => Boolean(value && typeof value === 'object');
+
+const normalizeEslProduct = (product) => (isRecord(product) ? product : null);
+
+const normalizeEslDevice = (device) => (
+  isRecord(device) ? { ...device, product: normalizeEslProduct(device.product) } : null
+);
+
+const normalizeEslHistoryEntry = (entry) => {
+  if (!isRecord(entry)) return null;
+  const product = normalizeEslProduct(entry.product);
+  return {
+    ...entry,
+    productName: entry.productName || product?.name || product?.productName || 'Ürün seçilmedi',
+    productSku: entry.productSku || getProductSkuLabel(product),
+  };
+};
+
+const normalizeEslList = (items, mapper) => (
+  Array.isArray(items) ? items.map(mapper).filter(Boolean) : []
+);
+
 const resolveEslDisplayPricing = (product = {}) => {
-  const regularPrice = Number(product.salePrice ?? product.regularPrice ?? product.price ?? 0) || 0;
+  const source = product && typeof product === 'object' ? product : {};
+  const regularPrice = Number(source.salePrice ?? source.regularPrice ?? source.price ?? 0) || 0;
   const campaignPrice = Number(
-    product.campaignPrice
-    ?? product.discountedPrice
-    ?? product.activeCampaign?.price
-    ?? product.activeCampaign?.campaignPrice
-    ?? product.currentPrice
+    source.campaignPrice
+    ?? source.discountedPrice
+    ?? source.activeCampaign?.price
+    ?? source.activeCampaign?.campaignPrice
+    ?? source.currentPrice
     ?? 0
   ) || 0;
-  const hasActiveCampaign = Boolean(product.hasActiveDiscount || product.hasActiveCampaign)
+  const hasActiveCampaign = Boolean(source.hasActiveDiscount || source.hasActiveCampaign)
     && campaignPrice > 0
     && Math.round(campaignPrice * 100) < Math.round(regularPrice * 100);
   const displayPrice = hasActiveCampaign ? campaignPrice : regularPrice;
@@ -194,9 +225,9 @@ export default function ESLManagement() {
       const statsData = statsResult.status === 'fulfilled' ? statsResult.value : null;
 
       if (!isMountedRef.current) return;
-      setDevices(Array.isArray(devicesData) ? devicesData : []);
-      setProducts(Array.isArray(productsData) ? productsData : []);
-      setHistory(Array.isArray(historyData) ? historyData : []);
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
+      setProducts(normalizeEslList(productsData, normalizeEslProduct));
+      setHistory(normalizeEslList(historyData, normalizeEslHistoryEntry));
       setStats(statsData);
 
       if (!silent && historyResult.status === 'rejected') {
@@ -258,7 +289,7 @@ export default function ESLManagement() {
         'Etiket durumları zaman aşımına uğradı.'
       );
       if (!isMountedRef.current) return;
-      setDevices(Array.isArray(devicesData) ? devicesData : []);
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
       setStats(statsData);
     } catch (err) {
       showToast('error', 'Yenileme Hatası', err?.message || 'Etiket durumları yenilenemedi.');
@@ -276,8 +307,8 @@ export default function ESLManagement() {
         eslService.getStats(),
       ]);
       if (!isMountedRef.current) return;
-      setDevices(devicesData);
-      setHistory(historyData);
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
+      setHistory(normalizeEslList(historyData, normalizeEslHistoryEntry));
       setStats(statsData);
     } catch (_) { /* ignore */ }
   }, []);
@@ -296,7 +327,7 @@ export default function ESLManagement() {
   const previewProduct = selectedProduct || lastPreview?.product || null;
   const previewPricing = selectedProduct ? selectedProductPricing : lastPreview?.pricing;
   const previewTemplate = selectedProduct ? effectiveSelectedTemplate : (lastPreview?.template || effectiveSelectedTemplate || 'standard');
-  const isProductSelected = Boolean(selectedProductId);
+  const isProductSelected = Boolean(selectedProduct);
   const isDeviceSelected = Boolean(selectedDeviceId);
   const isTemplateSelected = Boolean(effectiveSelectedTemplate);
 
@@ -318,7 +349,8 @@ export default function ESLManagement() {
     return tokens.some((token) => token.startsWith(query));
   };
 
-  const filteredProducts = products.filter((p) => {
+  const filteredProducts = products.filter((product) => {
+    const p = product || {};
     if (!productSearch.trim()) return true;
     const q = normalizeSearchText(productSearch);
     return (
@@ -351,8 +383,13 @@ export default function ESLManagement() {
       : selectedTemplate;
     const effectiveTemplate = resolveTemplateForPricing(requestedTemplate, selectedProductPricing);
 
-    if (!selectedDeviceId || !selectedProductId || !effectiveTemplate) {
-      showToast('error', 'Eksik Bilgi', 'Lütfen cihaz, ürün ve şablon seçimi yapın.');
+    if (!selectedProductId || !selectedProduct || !selectedProductPricing) {
+      showToast('error', 'Ürün Seçilmedi', 'Etikete göndermek için önce geçerli bir ürün seçin.');
+      return;
+    }
+
+    if (!selectedDeviceId || !effectiveTemplate) {
+      showToast('error', 'Eksik Bilgi', 'Lütfen cihaz ve şablon seçimi yapın.');
       return;
     }
 
@@ -724,10 +761,10 @@ export default function ESLManagement() {
                       onClick={() => handleProductSelect(p.id)}
                     >
                       <div className="esl-search-item-info">
-                        <strong>{formatUnit(p.name)}</strong>
-                        <small>{p.sku} · {p.barcode || '-'}</small>
+                        <strong>{getProductNameLabel(p)}</strong>
+                        <small>{getProductSkuLabel(p)} · {getProductBarcodeLabel(p)}</small>
                       </div>
-                      <span className="esl-search-item-price">₺{resolveEslDisplayPricing(p).displayPrice.toFixed(2)}</span>
+                      <span className="esl-search-item-price">{getProductPriceLabel(resolveEslDisplayPricing(p))}</span>
                     </button>
                   ))}
                   {filteredProducts.length === 0 && (
@@ -741,8 +778,8 @@ export default function ESLManagement() {
                 <div className="esl-selected-product">
                   <CheckCircle2 size={16} />
                   <div>
-                    <strong>{formatUnit(previewProduct.name)}</strong>
-                    <small>{selectedProduct.sku} · ₺{selectedProductPricing.displayPrice.toFixed(2)}</small>
+                    <strong>{getProductNameLabel(previewProduct)}</strong>
+                    <small>{getProductSkuLabel(previewProduct)} · {getProductPriceLabel(previewPricing)}</small>
                   </div>
                 </div>
               )}
@@ -752,7 +789,7 @@ export default function ESLManagement() {
                   <select value={selectedProductId} onChange={(e) => setSelectedProductId(e.target.value)}>
                     <option value="">Ürün seçin...</option>
                     {products.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+                      <option key={p.id} value={p.id}>{getProductNameLabel(p)} ({getProductSkuLabel(p)})</option>
                     ))}
                   </select>
                 </label>
@@ -800,7 +837,7 @@ export default function ESLManagement() {
 
                     {device.product && (
                       <div className="esl-device-assigned">
-                        <Tag size={11} /> {formatUnit(device.product.name)}
+                        <Tag size={11} /> {getProductNameLabel(device.product)}
                       </div>
                     )}
                   </button>
@@ -852,8 +889,8 @@ export default function ESLManagement() {
               <ESLPreview
                 key={`${selectedDeviceId || lastPreview?.deviceId || 'no-device'}-${selectedProductId || lastPreview?.product?.id || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
                 product={previewProduct && previewPricing ? {
-                  name: previewProduct.name,
-                  barcode: previewProduct.barcode || '',
+                  name: getProductNameLabel(previewProduct),
+                  barcode: getProductBarcodeLabel(previewProduct),
                   salePrice: previewPricing.displayPrice,
                   previousSalePrice: previewPricing.hasActiveCampaign ? previewPricing.regularPrice : 0,
                   origin: previewProduct.origin || 'Türkiye',
@@ -866,19 +903,19 @@ export default function ESLManagement() {
                 <div className="esl-preview-info">
                   <div className="esl-preview-info-row">
                     <span>Ürün:</span>
-                    <strong>{formatUnit(previewProduct.name)}</strong>
+                    <strong>{getProductNameLabel(previewProduct)}</strong>
                   </div>
                   <div className="esl-preview-info-row">
                     <span>SKU:</span>
-                    <strong>{previewProduct.sku}</strong>
+                    <strong>{getProductSkuLabel(previewProduct)}</strong>
                   </div>
                   <div className="esl-preview-info-row">
                     <span>Barkod:</span>
-                    <strong>{previewProduct.barcode || '-'}</strong>
+                    <strong>{getProductBarcodeLabel(previewProduct)}</strong>
                   </div>
                   <div className="esl-preview-info-row">
                     <span>Etikete gidecek fiyat:</span>
-                    <strong>₺{previewPricing.displayPrice.toFixed(2)}</strong>
+                    <strong>{getProductPriceLabel(previewPricing)}</strong>
                   </div>
                   {previewPricing.hasActiveCampaign ? (
                     <div className="esl-preview-info-row">
@@ -902,7 +939,7 @@ export default function ESLManagement() {
                 <button
                   className="btn btn-primary esl-send-btn"
                   onClick={() => handleSendToDevice()}
-                  disabled={!selectedProductId || !selectedDeviceId || sending || (selectedDevice && selectedDevice.status !== 'online')}
+                  disabled={!selectedProduct || !selectedDeviceId || sending || (selectedDevice && selectedDevice.status !== 'online')}
                 >
                   <Send size={16} /> {sending ? 'Gönderiliyor...' : selectedDevice && selectedDevice.status !== 'online' ? 'Cihaz Çevrimdışı' : 'Cihaza Gönder'}
                 </button>
@@ -1026,13 +1063,13 @@ export default function ESLManagement() {
                   </td>
                 </tr>
               ) : (
-                pagedHistory.map((entry) => (
-                  <tr key={entry.id}>
+                pagedHistory.map((entry, index) => (
+                  <tr key={entry.id || `history-${index}`}>
                     <td>{formatDate(entry.createdAt)}</td>
-                    <td>{entry.deviceName}</td>
-                    <td>{formatUnit(entry.productName)}</td>
-                    <td><code>{entry.productSku}</code></td>
-                    <td className="text-right">₺{(entry.salePrice || 0).toFixed(2)}</td>
+                    <td>{entry.deviceName || '-'}</td>
+                    <td>{getProductNameLabel({ name: entry.productName })}</td>
+                    <td><code>{entry.productSku || 'SKU yok'}</code></td>
+                    <td className="text-right">{getProductPriceLabel({ displayPrice: entry.salePrice })}</td>
                     <td>
                       <span className="esl-template-badge-sm">{entry.template}</span>
                     </td>
