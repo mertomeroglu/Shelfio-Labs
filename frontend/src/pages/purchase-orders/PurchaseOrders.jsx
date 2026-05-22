@@ -243,7 +243,9 @@ const initialFilters = {
   createdBy: '',
 };
 
-const ARCHIVE_STATUSES = new Set(['archived', 'cancelled', 'closed']);
+const ARCHIVE_STATUSES = new Set(['archived', 'closed']);
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled', 'iptal', 'iptal_edildi']);
+const ORDER_CANCEL_ARCHIVE_DELAY_MS = 24 * 60 * 60 * 1000;
 const APPROVAL_PENDING_STATUSES = new Set(['submitted_for_approval']);
 const DELIVERY_REACHED_STATUSES = new Set(['delivered', 'goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending', 'completed', 'archived', 'closed', 'partially_delivered']);
 const canManageOrderStatus = (order = {}) => {
@@ -292,6 +294,14 @@ const isTruthyFlag = (value) => value === true || value === 'true' || value === 
 const isArchivedOrder = (order = {}) => {
   const normalizedStatus = normalizeOrderStatus(order.status);
   if (normalizedStatus === 'archived' || ARCHIVE_STATUSES.has(normalizedStatus)) return true;
+  if (CANCELLED_STATUSES.has(normalizedStatus)) {
+    const history = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+    const cancelledEntry = [...history]
+      .reverse()
+      .find((entry) => CANCELLED_STATUSES.has(normalizeOrderStatus(entry?.status)));
+    const cancelledAt = new Date(cancelledEntry?.at || order.cancelledAt || order.canceledAt || order.updatedAt || order.createdAt || 0).getTime();
+    return Number.isFinite(cancelledAt) && Date.now() - cancelledAt >= ORDER_CANCEL_ARCHIVE_DELAY_MS;
+  }
   return isTruthyFlag(order.archived) || Boolean(order.archivedAt);
 };
 

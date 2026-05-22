@@ -14257,10 +14257,13 @@
 }
 
 .campaign-management-page .campaign-summary-grid.campaign-section .mod-stat {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  column-gap: 12px !important;
   min-width: 0 !important;
-  min-height: 112px !important;
-  padding: 14px !important;
-  align-items: flex-start !important;
+  min-height: 118px !important;
+  padding: 16px !important;
+  align-items: center !important;
   justify-content: flex-start !important;
   text-align: left !important;
   border-radius: 8px !important;
@@ -14268,9 +14271,11 @@
 
 .campaign-management-page .campaign-summary-grid.campaign-section .mod-stat-body {
   display: grid !important;
-  gap: 4px !important;
+  gap: 5px !important;
   justify-items: start !important;
   text-align: left !important;
+  min-width: 0 !important;
+  line-height: 1.25 !important;
 }
 
 .campaign-management-page .campaign-chart-grid.campaign-section {
@@ -14284,8 +14289,79 @@
 }
 
 .campaign-management-page .campaign-chart-grid.campaign-section > .campaign-chart-card {
+  display: grid !important;
+  grid-template-rows: auto 1fr !important;
+  gap: 14px !important;
   min-height: 286px !important;
+  padding: 18px !important;
   border-radius: 8px !important;
+}
+
+.campaign-management-page .campaign-chart-head {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 12px !important;
+  margin: 0 !important;
+}
+
+.campaign-management-page .campaign-chart-head h4 {
+  margin: 0 0 4px !important;
+  line-height: 1.25 !important;
+}
+
+.campaign-management-page .campaign-chart-desc {
+  margin: 0 !important;
+  line-height: 1.45 !important;
+}
+
+.campaign-management-page .campaign-chart-badge {
+  display: inline-flex !important;
+  width: 34px !important;
+  height: 34px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+}
+
+.campaign-management-page .campaign-chart-body,
+.campaign-management-page .campaign-chart-canvas {
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+.campaign-management-page .campaign-chart-empty {
+  min-height: 180px !important;
+  display: grid !important;
+  place-items: center !important;
+  text-align: center !important;
+}
+
+.campaign-management-page .campaign-refresh-toolbar {
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.campaign-management-page .campaign-clear-history-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  min-height: 36px !important;
+  padding: 0 12px !important;
+  white-space: nowrap !important;
+}
+
+.campaign-management-page .campaign-signal-pill,
+.campaign-management-page .campaign-action-pill,
+.campaign-management-page .campaign-inline-kicker,
+.campaign-management-page .status-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  line-height: 1.2 !important;
+  vertical-align: middle !important;
 }
 
 @media (max-width: 1180px) {

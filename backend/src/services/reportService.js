@@ -60,12 +60,40 @@ const toNumberValue = (value) => {
 
 const fromDateValue = (value) => (value instanceof Date ? value.toISOString() : value ?? null);
 
-const CLOSED_TASK_STATUSES = new Set(['completed', 'done', 'closed', 'cancelled', 'canceled', 'archived']);
-const OPEN_TASK_STATUSES = new Set(['pending', 'open', 'in_progress', 'overdue', 'assigned', 'todo', 'new']);
-const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['delivered', 'cancelled', 'canceled', 'completed', 'archived', 'rejected']);
+const CLOSED_TASK_STATUSES = new Set([
+  'completed',
+  'complete',
+  'done',
+  'closed',
+  'resolved',
+  'cancelled',
+  'canceled',
+  'archived',
+  'tamamlandi',
+  'tamamlandı',
+  'Tamamlandı',
+  'Tamamlandi',
+  'kapandi',
+  'kapandı',
+  'Kapandı',
+  'Kapandi',
+  'iptal',
+  'iptal_edildi',
+  'İptal',
+  'Iptal',
+  'İptal Edildi',
+  'Iptal Edildi',
+  'arsiv',
+  'arşiv',
+  'Arşiv',
+  'Arsiv',
+]);
+const OPEN_TASK_STATUSES = new Set(['pending', 'open', 'in_progress', 'overdue', 'assigned', 'todo', 'new', 'beklemede', 'acik', 'açık']);
+const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['delivered', 'completed', 'archived', 'rejected']);
 const WAITING_DELIVERY_PURCHASE_ORDER_STATUSES = new Set(['approved', 'supplier_notified', 'sent_to_supplier', 'in_transit', 'shipped']);
+const CANCELLED_PURCHASE_ORDER_STATUSES = new Set(['cancelled', 'canceled', 'iptal', 'iptal_edildi', 'rejected']);
 
-const normalizeStatusKey = (value) => String(value || '').trim().toLowerCase();
+const normalizeStatusKey = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
 
 const isTaskCompletedStatus = (value) => CLOSED_TASK_STATUSES.has(normalizeStatusKey(value));
 
@@ -78,12 +106,31 @@ const isTaskOpenStatus = (value) => {
 
 const isPurchaseOrderOpenStatus = (value) => {
   const normalized = normalizeStatusKey(value);
-  return normalized ? !COMPLETED_PURCHASE_ORDER_STATUSES.has(normalized) : true;
+  return normalized ? !COMPLETED_PURCHASE_ORDER_STATUSES.has(normalized) && !CANCELLED_PURCHASE_ORDER_STATUSES.has(normalized) : true;
 };
 
 const isPurchaseOrderWaitingDeliveryStatus = (value) => {
   const normalized = normalizeStatusKey(value);
   return WAITING_DELIVERY_PURCHASE_ORDER_STATUSES.has(normalized);
+};
+
+const getPurchaseOrderCancelledAt = (order = {}) => {
+  const history = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+  const cancellationEntry = [...history]
+    .reverse()
+    .find((entry) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizeStatusKey(entry?.status)));
+  return cancellationEntry?.at || order.cancelledAt || order.canceledAt || order.updatedAt || order.completedAt || order.createdAt || null;
+};
+
+const isPurchaseOrderCancelledStatus = (value) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizeStatusKey(value));
+
+const isPurchaseOrderArchivedForDashboard = (order = {}, now = new Date()) => {
+  const status = normalizeStatusKey(order?.status || order?.currentStatus);
+  if (status === 'archived' || order?.archived === true || order?.archivedAt) return true;
+  if (!isPurchaseOrderCancelledStatus(status)) return false;
+  const cancelledAt = new Date(getPurchaseOrderCancelledAt(order) || 0);
+  if (!Number.isFinite(cancelledAt.getTime())) return false;
+  return now.getTime() - cancelledAt.getTime() >= MS_PER_DAY;
 };
 
 const toPositiveInt = (value, fallback = 0) => {
@@ -1826,7 +1873,7 @@ const buildFastDashboardReport = async () => {
     prisma.sale.aggregate({ where: { type: 'sale', createdAt: { gte: previousStart, lt: previousEnd } }, _sum: { totalAmount: true }, _count: { id: true } }),
     prisma.saleItem.aggregate({ where: { sale: { type: 'sale', createdAt: { gte: start, lt: end } } }, _sum: { quantity: true } }),
     prisma.purchaseSuggestion.count({ where: { status: 'pending' } }),
-    prisma.purchaseOrder.count({ where: { status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES] } } }),
+    prisma.purchaseOrder.count({ where: { status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES, ...CANCELLED_PURCHASE_ORDER_STATUSES] } } }),
     prisma.purchaseOrder.count({ where: { status: 'in_transit' } }),
     prisma.stockMovement.findMany({
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1861,7 +1908,17 @@ const buildFastDashboardReport = async () => {
     prisma.purchaseOrder.findMany({
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 20,
-      select: { id: true, orderNumber: true, status: true, createdAt: true, supplier: { select: { name: true } } },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        archived: true,
+        archivedAt: true,
+        statusHistory: { orderBy: { at: 'asc' }, select: { status: true, at: true } },
+        supplier: { select: { name: true } },
+      },
     }),
     prisma.accessRequest.count({ where: { status: 'pending' } }),
     prisma.notification.count({ where: { severity: { in: ['critical', 'high'] }, isRead: { not: true } } }),
@@ -1877,12 +1934,24 @@ const buildFastDashboardReport = async () => {
         dueDate: { lt: new Date().toISOString() },
       },
     }),
-    prisma.purchaseOrder.count({ where: { status: { in: [...COMPLETED_PURCHASE_ORDER_STATUSES] } } }),
+    prisma.purchaseOrder.count({
+      where: {
+        OR: [
+          { status: { in: [...COMPLETED_PURCHASE_ORDER_STATUSES] } },
+          { archived: true },
+          { archivedAt: { not: null } },
+          {
+            status: { in: [...CANCELLED_PURCHASE_ORDER_STATUSES] },
+            updatedAt: { lt: new Date(Date.now() - MS_PER_DAY) },
+          },
+        ],
+      },
+    }),
     prisma.purchaseOrder.count({ where: { status: { in: ['submitted_for_approval', 'approval_pending'] } } }),
     prisma.purchaseOrder.count({ where: { status: { in: [...WAITING_DELIVERY_PURCHASE_ORDER_STATUSES] } } }),
     prisma.purchaseOrder.count({
       where: {
-        status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES] },
+        status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES, ...CANCELLED_PURCHASE_ORDER_STATUSES] },
         estimatedDeliveryDate: { lt: new Date().toISOString().slice(0, 10) },
       },
     }),
@@ -2109,12 +2178,15 @@ const buildFastDashboardReport = async () => {
     customerOverview,
     topDecreasing: [],
     supplierPerformanceReport,
-    orderApprovalLeadReport: orderApprovalLeadReport.map((row) => ({
+    orderApprovalLeadReport: orderApprovalLeadReport
+      .filter((row) => !isPurchaseOrderArchivedForDashboard(row))
+      .map((row) => ({
       orderId: row.id,
       orderNumber: formatOrderReference(row.orderNumber, row.id),
       supplierName: row.supplier?.name || '-',
       currentStatus: row.status,
       createdAt: fromDateValue(row.createdAt),
+      cancelledAt: isPurchaseOrderCancelledStatus(row.status) ? fromDateValue(getPurchaseOrderCancelledAt(row)) : null,
     })),
     goodsReceiptPerformanceReport: [{
       productId: 'summary',

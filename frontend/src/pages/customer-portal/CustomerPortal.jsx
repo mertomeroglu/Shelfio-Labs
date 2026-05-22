@@ -4,7 +4,7 @@ import { ArrowLeft, Bell, BellRing, ChevronRight, Clock, Eye, Flame, Heart, Hist
 import './CustomerPortal.css';
 import './MobileShopping.css';
 import logoPng from '../../assets/logo.png';
-import { formatCurrency, formatCustomerOrderDisplayId, joinDisplayParts, normalizeTurkishText } from '../../services/formatters.js';
+import { cleanSectionDisplayName, formatCurrency, formatCustomerOrderDisplayId, joinDisplayParts, normalizeTurkishText } from '../../services/formatters.js';
 import { normalizeNotification } from '../../services/notificationService.js';
 import CustomerAppShell from '../../components/customer/CustomerAppShell.jsx';
 import CustomerProductDetail from '../../components/customer/CustomerProductDetail.jsx';
@@ -358,7 +358,7 @@ const dedupeTags = (tags = []) => {
   });
   return result;
 };
-const resolveLocationLabel = (product) => product?.shelfCode || product?.defaultShelfLocationCode || product?.sectionName || '-';
+const resolveLocationLabel = (product) => cleanSectionDisplayName(product?.shelfCode || product?.defaultShelfLocationCode || product?.sectionName || '-');
 const resolveSupportContact = (settings = {}) => ({
   email: String(settings?.storeEmail || settings?.supportEmail || settings?.email || settings?.contactEmail || SUPPORT_CONTACT.email || '').trim(),
   phone: String(settings?.storePhone || settings?.supportPhone || settings?.phone || settings?.contactPhone || SUPPORT_CONTACT.phone || '').trim(),
@@ -1843,7 +1843,14 @@ export default function CustomerPortal() {
   }, [isCustomerLoggedIn]);
 
   useEffect(() => {
-    const handleRefresh = () => {
+    const handleRefresh = (event) => {
+      const incoming = event?.detail?.notification ? normalizeNotification(event.detail.notification) : null;
+      if (incoming?.id) {
+        setNotifications((current) => {
+          if (current.some((item) => String(item.id) === String(incoming.id))) return current;
+          return [incoming, ...current].slice(0, 40);
+        });
+      }
       void refreshCustomerNotifications();
     };
     window.addEventListener(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, handleRefresh);

@@ -16,6 +16,10 @@ const ROW_COUNT = 3;
 const SIDES = ['L', 'R'];
 const SHELF_COUNT = 15;
 const LEVEL_COUNT = 10;
+const SECTION_SIDES = ['L', 'R'];
+const SECTION_SHELF_COUNT = 10;
+const SECTION_LEVEL_COUNT = 5;
+const SECTION_TOTAL_PHYSICAL_SLOTS = SECTION_SIDES.length * SECTION_SHELF_COUNT * SECTION_LEVEL_COUNT;
 
 const MOVEMENT_TYPES = new Set([
   'MAL_KABUL',
@@ -31,6 +35,27 @@ const normalizeStorageType = (value) => {
 };
 
 const storageLabel = (value) => formatStorageTypeLabel(value);
+
+const toNonNegativeNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+};
+
+const clampPercent = (value) => Math.max(0, Math.min(100, toNonNegativeNumber(value, 0)));
+
+const sectionSlotKey = (item = {}) => {
+  if (!item.sectionId || !item.shelfSide || !item.shelfNo || !item.shelfLevel) return null;
+  return `${item.sectionId}-${String(item.shelfSide).toUpperCase()}-${Number(item.shelfNo)}-${Number(item.shelfLevel)}`;
+};
+
+const isVirtualDepotAssignment = (item = {}) => {
+  if (item.isVirtualLocation === true) return true;
+  const capacityMode = String(item.capacityMode || '').toLowerCase();
+  if (['unbounded_virtual', 'no_capacity', 'not_applicable'].includes(capacityMode)) return true;
+  const locationCode = String(item.depotLocationCode || item.defaultWarehouseLocationCode || '').toUpperCase();
+  return /^OVR-|^DIRECT-SUPPLY$|^NO-BACKROOM$/.test(locationCode);
+};
 
 const resolveStatus = (location) => {
   if (Number(location.palletCount || 0) > 0) return 'Dolu';
@@ -229,8 +254,12 @@ const buildShelfPlan = ({ products, sections, stocks }) => {
         productName: product.name,
         sku: product.sku,
         storageType: product.requiredStorageType || 'Ortam',
-        shelfStock: Number(stock?.shelfQuantity || 0),
-        maxShelfStock: Number(product.maxShelfStock || 0),
+        shelfStock: toNonNegativeNumber(stock?.shelfQuantity, 0),
+        maxShelfStock: toNonNegativeNumber(product.maxShelfStock, 0),
+        averageDesi: toNonNegativeNumber(product.averageDesi, 0),
+        isVirtualLocation: product.isVirtualLocation === true,
+        capacityMode: product.capacityMode || null,
+        stockingStrategy: product.stockingStrategy || null,
       };
     })
     .sort((left, right) => String(left.locationCode || '').localeCompare(String(right.locationCode || ''), 'tr'));
@@ -243,26 +272,139 @@ const buildShelfZones = ({ sections, shelfPlan }) => {
       sectionId: section.id,
       sectionNumber: section.number,
       sectionName: section.name,
-      totalSlots: 100,
+      totalPhysicalSlots: SECTION_TOTAL_PHYSICAL_SLOTS,
+      occupiedPhysicalSlots: 0,
+      emptyPhysicalSlots: SECTION_TOTAL_PHYSICAL_SLOTS,
+      totalSlots: SECTION_TOTAL_PHYSICAL_SLOTS,
       occupiedSlots: 0,
+      emptySlots: SECTION_TOTAL_PHYSICAL_SLOTS,
       assignedSkuCount: 0,
+      skuCount: 0,
+      productVarietyCount: 0,
+      virtualSkuCount: 0,
+      shelfStockTotal: 0,
+      shelfCapacityTotal: 0,
+      stockUsageRate: null,
+      currentDesi: null,
+      maxDesi: null,
+      desiUsageRate: null,
+      hasDesiData: false,
+      missingAverageDesiCount: 0,
+      missingDesiCapacityCount: 0,
+      slotKeys: new Set(),
+      skuKeys: new Set(),
+      desiStockTotal: 0,
+      desiCapacityTotal: 0,
     });
   }
 
   for (const item of shelfPlan) {
     const row = group.get(item.sectionId);
     if (!row) continue;
-    row.occupiedSlots += 1;
     row.assignedSkuCount += 1;
+    row.skuKeys.add(String(item.sku || item.productId || ''));
+    const slotKey = sectionSlotKey(item);
+    if (slotKey) row.slotKeys.add(slotKey);
+    if (item.isVirtualLocation === true) row.virtualSkuCount += 1;
+
+    const shelfStock = toNonNegativeNumber(item.shelfStock, 0);
+    const shelfCapacity = toNonNegativeNumber(item.maxShelfStock, 0);
+    const averageDesi = toNonNegativeNumber(item.averageDesi, 0);
+    row.shelfStockTotal += shelfStock;
+    row.shelfCapacityTotal += shelfCapacity;
+
+    if (averageDesi > 0) {
+      row.desiStockTotal += averageDesi * shelfStock;
+      if (shelfCapacity > 0) {
+        row.desiCapacityTotal += averageDesi * shelfCapacity;
+      } else {
+        row.missingDesiCapacityCount += 1;
+      }
+    } else {
+      row.missingAverageDesiCount += 1;
+    }
   }
 
   return [...group.values()]
-    .map((row) => ({
-      ...row,
-      emptySlots: Math.max(0, Number(row.totalSlots || 0) - Number(row.occupiedSlots || 0)),
-      occupancyRate: row.totalSlots ? (Number(row.occupiedSlots || 0) / Number(row.totalSlots || 1)) * 100 : 0,
-    }))
+    .map((row) => {
+      const occupiedPhysicalSlots = Math.min(row.slotKeys.size, row.totalPhysicalSlots);
+      const emptyPhysicalSlots = Math.max(0, row.totalPhysicalSlots - occupiedPhysicalSlots);
+      const physicalOccupancyRate = row.totalPhysicalSlots
+        ? clampPercent((row.slotKeys.size / row.totalPhysicalSlots) * 100)
+        : null;
+      const stockUsageRate = row.shelfCapacityTotal > 0
+        ? clampPercent((row.shelfStockTotal / row.shelfCapacityTotal) * 100)
+        : null;
+      const hasDesiData = row.desiCapacityTotal > 0;
+      const currentDesi = hasDesiData ? Number(row.desiStockTotal.toFixed(2)) : null;
+      const maxDesi = hasDesiData ? Number(row.desiCapacityTotal.toFixed(2)) : null;
+      const desiUsageRate = hasDesiData ? clampPercent((row.desiStockTotal / row.desiCapacityTotal) * 100) : null;
+
+      return {
+        sectionId: row.sectionId,
+        sectionNumber: row.sectionNumber,
+        sectionName: row.sectionName,
+        totalPhysicalSlots: row.totalPhysicalSlots,
+        occupiedPhysicalSlots,
+        emptyPhysicalSlots,
+        physicalOccupancyRate,
+        totalSlots: row.totalPhysicalSlots,
+        occupiedSlots: occupiedPhysicalSlots,
+        emptySlots: emptyPhysicalSlots,
+        occupancyRate: physicalOccupancyRate,
+        assignedSkuCount: row.assignedSkuCount,
+        skuCount: row.skuKeys.size,
+        productVarietyCount: row.skuKeys.size,
+        virtualSkuCount: row.virtualSkuCount,
+        shelfStockTotal: Number(row.shelfStockTotal.toFixed(2)),
+        shelfCapacityTotal: Number(row.shelfCapacityTotal.toFixed(2)),
+        stockUsageRate,
+        currentDesi,
+        maxDesi,
+        desiUsageRate,
+        hasDesiData,
+        missingAverageDesiCount: row.missingAverageDesiCount,
+        missingDesiCapacityCount: row.missingDesiCapacityCount,
+      };
+    })
     .sort((left, right) => Number(left.sectionNumber || 0) - Number(right.sectionNumber || 0));
+};
+
+const buildVirtualOverflowSummary = ({ products, stocks }) => {
+  const stockMap = new Map(stocks.map((stock) => [stock.productId, stock]));
+  const rows = products.filter((product) => isActiveRetailProduct(product) && isVirtualDepotAssignment(product));
+  const byZone = new Map();
+
+  for (const product of rows) {
+    const zoneCode = product.depotZoneCode || product.depotLocationCode || product.capacityMode || 'virtual_overflow';
+    const stock = stockMap.get(product.id);
+    const shelfQuantity = toNonNegativeNumber(stock?.shelfQuantity, 0);
+    const warehouseQuantity = toNonNegativeNumber(stock?.warehouseQuantity, 0);
+    if (!byZone.has(zoneCode)) {
+      byZone.set(zoneCode, {
+        zoneCode,
+        skuCount: 0,
+        shelfQuantity: 0,
+        warehouseQuantity: 0,
+        totalQuantity: 0,
+        capacityMode: product.capacityMode || null,
+        stockingStrategy: product.stockingStrategy || null,
+        isVirtualLocation: true,
+      });
+    }
+    const row = byZone.get(zoneCode);
+    row.skuCount += 1;
+    row.shelfQuantity += shelfQuantity;
+    row.warehouseQuantity += warehouseQuantity;
+    row.totalQuantity += shelfQuantity + warehouseQuantity;
+  }
+
+  return {
+    skuCount: rows.length,
+    shelfQuantity: rows.reduce((sum, product) => sum + toNonNegativeNumber(stockMap.get(product.id)?.shelfQuantity, 0), 0),
+    warehouseQuantity: rows.reduce((sum, product) => sum + toNonNegativeNumber(stockMap.get(product.id)?.warehouseQuantity, 0), 0),
+    zones: [...byZone.values()],
+  };
 };
 
 const applyFilters = (locations, query) => {
@@ -349,6 +491,7 @@ export const warehouseService = {
     const depotZones = buildDepotZones(locations);
     const shelfPlan = buildShelfPlan({ products, sections, stocks });
     const shelfZones = buildShelfZones({ sections, shelfPlan });
+    const virtualOverflowSummary = buildVirtualOverflowSummary({ products, stocks });
 
     return {
       rows: filtered.map(enrichLocationRow),
@@ -358,6 +501,7 @@ export const warehouseService = {
       depotZones,
       shelfPlan,
       shelfZones,
+      virtualOverflowSummary,
       suggestedLocation: suggested ? {
         id: suggested.id,
         locationCode: suggested.locationCode,

@@ -7,6 +7,27 @@ import { notificationService } from './notificationService.js';
 import { parseBooleanQuery, parsePagePagination, resolveWhitelistedSort } from '../utils/pagination.js';
 
 const TASK_NO_PREFIX = 'GV';
+const CLOSED_TASK_STATUSES = new Set([
+  'completed',
+  'complete',
+  'done',
+  'closed',
+  'resolved',
+  'cancelled',
+  'canceled',
+  'archived',
+  'tamamlandi',
+  'tamamlandı',
+  'kapandi',
+  'kapandı',
+  'iptal',
+  'iptal_edildi',
+  'arsiv',
+  'arşiv',
+]);
+
+const normalizeTaskStatus = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+const isTaskClosed = (task = {}) => CLOSED_TASK_STATUSES.has(normalizeTaskStatus(task.status));
 
 const parseTaskNumber = (taskNo) => {
   const match = String(taskNo || '').trim().match(/^GV-(\d+)$/i);
@@ -96,7 +117,7 @@ const filterTasks = (tasks = [], query = {}) => {
     const matchesAssigned = !query.assignedTo || task.assignedTo === query.assignedTo;
     const matchesAssignedToMe = !assignedToMe || task.assignedTo === query.userId;
     const dueMs = task.dueDate ? new Date(task.dueDate).getTime() : null;
-    const matchesOverdue = !overdueOnly || (Number.isFinite(dueMs) && dueMs < now && task.status !== 'completed');
+    const matchesOverdue = !overdueOnly || (Number.isFinite(dueMs) && dueMs < now && !isTaskClosed(task));
     return matchesSearch && matchesStatus && matchesPriority && matchesAssigned && matchesAssignedToMe && matchesOverdue;
   });
 };
@@ -150,11 +171,11 @@ export const taskService = {
     const now = Date.now();
     return {
       totalCount: filtered.length,
-      activeCount: filtered.filter((task) => task.status !== 'completed').length,
-      completedCount: filtered.filter((task) => task.status === 'completed').length,
+      activeCount: filtered.filter((task) => !isTaskClosed(task)).length,
+      completedCount: filtered.filter((task) => isTaskClosed(task)).length,
       overdueCount: filtered.filter((task) => {
         const dueMs = task.dueDate ? new Date(task.dueDate).getTime() : null;
-        return Number.isFinite(dueMs) && dueMs < now && task.status !== 'completed';
+        return Number.isFinite(dueMs) && dueMs < now && !isTaskClosed(task);
       }).length,
       byPriority: filtered.reduce((acc, task) => {
         const key = task.priority || 'low';

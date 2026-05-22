@@ -11,6 +11,7 @@ import { config } from '../config/config.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
 import { isActiveRetailProduct } from '../utils/retailStockPolicy.js';
+import { cleanSectionDisplayName } from '../utils/displayLabels.js';
 
 const transferRequestRepo = createFileRepository({ fileName: 'stockTransferRequests.json', defaultData: [] });
 const transferRequestAuditRepo = createFileRepository({ fileName: 'stockTransferRequestAudits.json', defaultData: [] });
@@ -94,6 +95,7 @@ const enrichSection = async (section) => {
 
   return {
     ...section,
+    name: cleanSectionDisplayName(section.name, section.name || '-'),
     productCount: sectionProducts.length,
     shelfStockTotal,
   };
@@ -135,7 +137,7 @@ const listSectionsFromPostgres = async () => {
     ...(section.payload && typeof section.payload === 'object' ? section.payload : {}),
     id: section.id,
     number: section.number,
-    name: section.name,
+    name: cleanSectionDisplayName(section.name, section.name || '-'),
     description: section.description,
     isActive: section.isActive !== false,
       productCount: section._count?.products || 0,
@@ -212,7 +214,7 @@ export const sectionService = {
     const now = new Date().toISOString();
     const section = {
       id: uuidv4(),
-      name: input.name,
+      name: cleanSectionDisplayName(input.name, input.name),
       number: input.number,
       description: input.description,
       isActive: input.isActive,
@@ -263,7 +265,7 @@ export const sectionService = {
       sku: product.sku,
       barcode: product.barcode || '',
       sectionId: section.id,
-      sectionName: section.name,
+      sectionName: cleanSectionDisplayName(section.name, section.name),
       sectionNumber: section.number,
       sourceLocation: 'depo',
       targetLocation: 'reyon',
@@ -426,7 +428,7 @@ export const sectionService = {
 
     const updated = {
       ...existing,
-      name: input.name,
+      name: cleanSectionDisplayName(input.name, input.name),
       number: input.number,
       description: input.description,
       isActive: input.isActive,

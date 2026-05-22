@@ -745,6 +745,42 @@ const buildCampaignSimulationSnapshot = ({
 
   const totalStock = scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row?.stockLevel || 0)), 0);
   const totalDailySales = scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row?.salesVelocity || 0)), 0);
+  if (totalDailySales <= 0) {
+    const scopeCountText = productCount > analysisCandidateCount
+      ? `${formatNumber(productCount)} ürün kapsamı ve ${formatNumber(analysisCandidateCount)} analiz adayı`
+      : `${formatNumber(analysisCandidateCount)} ürün`;
+    return {
+      isEmpty: false,
+      scopeLabel,
+      currency,
+      productCount,
+      eligibleProductCount: productCount,
+      affectedProductCount: productCount,
+      analysisCandidateCount,
+      previewProductCount: analysisCandidateCount,
+      avgPrice,
+      avgCost,
+      avgDailySales,
+      avgStockLevel,
+      avgDaysToExpiry,
+      inventoryCoverageDays: null,
+      salesIncreasePct: null,
+      revenueChange: null,
+      marginImpact: null,
+      stockDepletionDays: null,
+      stockTurnEffect: null,
+      riskReductionScore: null,
+      hasEnoughSalesData: false,
+      dataQuality: {
+        status: 'insufficient_data',
+        reason: 'missing_sales_velocity',
+      },
+      riskLevel: 'Bilgi yok',
+      recommendation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.',
+      explanation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.',
+      metricsSummary: `${scopeCountText} • satış geçmişi yok`,
+    };
+  }
   const zeroStockShare = scopedRows.filter((row) => Number(row?.stockLevel || 0) <= 0).length / scopedRows.length;
   const lowStockShare = scopedRows.filter((row) => {
     const sales = Number(row?.salesVelocity || 0);
@@ -2003,6 +2039,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [backendCampaignRows, setBackendCampaignRows] = useState([]);
   const [backendCampaignSuggestions, setBackendCampaignSuggestions] = useState([]);
   const [campaignEligibleProductCount, setCampaignEligibleProductCount] = useState(0);
+  const [backendCampaignSimulation, setBackendCampaignSimulation] = useState(null);
+  const [campaignSimulationLoading, setCampaignSimulationLoading] = useState(false);
+  const [campaignSimulationError, setCampaignSimulationError] = useState('');
   const [orderSuggestionSignals, setOrderSuggestionSignals] = useState([]);
   const [crossModuleLoading, setCrossModuleLoading] = useState(false);
   const [crossModuleError, setCrossModuleError] = useState('');
@@ -4088,7 +4127,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
     return campaignDraftScopeRows.length;
   }, [campaignDraft.type, campaignDraftScopeRows.length, campaignEligibleProductCount]);
-  const campaignSimulation = useMemo(() => buildCampaignSimulationSnapshot({
+  const campaignSimulationFallback = useMemo(() => buildCampaignSimulationSnapshot({
     rows: campaignDraftScopeRows,
     discountRate: Number(campaignDraft.discountRate || 0),
     durationDays: campaignSimulationDurationDays,
@@ -4107,8 +4146,94 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         ? 'Simülasyon için en az bir kategori seçin.'
         : campaignDraft.type === 'brand'
           ? 'Simülasyon için en az bir marka seçin.'
-          : 'Simülasyon için Ürün verisi bulunamadı.',
+      : 'Simülasyon için Ürün verisi bulunamadı.',
   }), [campaignDraft.discountRate, campaignDraft.type, campaignDraftScopeProductCount, campaignDraftScopeRows, campaignSimulationDurationDays, campaignTypeView, form.currency]);
+  const campaignSimulationRequest = useMemo(() => ({
+    type: campaignDraft.type || campaignTypeView || 'general',
+    discountRate: Number(campaignDraft.discountRate || 0),
+    durationDays: campaignSimulationDurationDays,
+    startsAt: campaignDraft.startsAt || '',
+    endsAt: campaignDraft.endsAt || '',
+    isIndefinite: Boolean(campaignDraft.isIndefinite),
+    targetProductIds: Array.isArray(campaignDraft.targetProductIds) ? campaignDraft.targetProductIds : [],
+    targetCategoryIds: Array.isArray(campaignDraft.targetCategoryIds) ? campaignDraft.targetCategoryIds : [],
+    targetBrands: selectedCampaignBrands,
+    scopeLabel: campaignTypeView === 'product'
+      ? 'Ürün Bazlı Kampanya'
+      : campaignTypeView === 'category'
+        ? 'Kategori Bazlı Kampanya'
+        : campaignTypeView === 'brand'
+          ? 'Marka Bazlı Kampanya'
+          : 'Genel Mağaza İndirimi',
+    currency: form.currency,
+  }), [
+    campaignDraft.discountRate,
+    campaignDraft.endsAt,
+    campaignDraft.isIndefinite,
+    campaignDraft.startsAt,
+    campaignDraft.targetCategoryIds,
+    campaignDraft.targetProductIds,
+    campaignDraft.type,
+    campaignSimulationDurationDays,
+    campaignTypeView,
+    form.currency,
+    selectedCampaignBrands,
+  ]);
+  const campaignSimulationRequestKey = useMemo(
+    () => JSON.stringify(campaignSimulationRequest),
+    [campaignSimulationRequest],
+  );
+
+  useEffect(() => {
+    if (!isCampaignPage) return;
+    let cancelled = false;
+
+    const loadCampaignSimulation = async () => {
+      setCampaignSimulationLoading(true);
+      setCampaignSimulationError('');
+      try {
+        const result = await campaignAnalysisService.simulate(campaignSimulationRequest);
+        if (cancelled) return;
+        setBackendCampaignSimulation(result || null);
+      } catch (error) {
+        if (cancelled) return;
+        setBackendCampaignSimulation(null);
+        setCampaignSimulationError(error?.message || 'Simülasyon hesaplanamadı.');
+      } finally {
+        if (!cancelled) setCampaignSimulationLoading(false);
+      }
+    };
+
+    loadCampaignSimulation();
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignSimulationRequestKey, isCampaignPage]);
+
+  const campaignSimulation = useMemo(() => {
+    if (backendCampaignSimulation) {
+      return {
+        ...backendCampaignSimulation,
+        salesIncreasePct: backendCampaignSimulation.salesIncreasePct ?? backendCampaignSimulation.estimatedSalesIncrease,
+        revenueChange: backendCampaignSimulation.revenueChange ?? backendCampaignSimulation.estimatedRevenueChange,
+        marginImpact: backendCampaignSimulation.marginImpact ?? backendCampaignSimulation.estimatedMarginImpact,
+        stockDepletionDays: backendCampaignSimulation.stockDepletionDays ?? backendCampaignSimulation.estimatedStockDepletionDays,
+        stockTurnEffect: backendCampaignSimulation.stockTurnEffect ?? backendCampaignSimulation.stockTurnoverImpact,
+        riskReductionScore: backendCampaignSimulation.riskReductionScore ?? backendCampaignSimulation.riskReductionImpact,
+        isBackendSimulation: true,
+        isLoading: campaignSimulationLoading,
+        error: campaignSimulationError,
+      };
+    }
+
+    return {
+      ...campaignSimulationFallback,
+      isBackendSimulation: false,
+      isPreviewFallback: true,
+      isLoading: campaignSimulationLoading,
+      error: campaignSimulationError,
+    };
+  }, [backendCampaignSimulation, campaignSimulationError, campaignSimulationFallback, campaignSimulationLoading]);
 
   const dynamicRulePreview = useMemo(() => previewDynamicRuleImpact({
     rule: {
@@ -4214,13 +4339,38 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     [filteredCampaigns],
   );
 
-  const campaignTypeChartData = useMemo(() => ([
-    { name: 'Genel', count: campaigns.filter((item) => item.type === 'general').length },
-    { name: 'Ürün', count: campaigns.filter((item) => item.type === 'product').length },
-    { name: 'Kategori', count: campaigns.filter((item) => item.type === 'category').length },
-    { name: 'Marka', count: campaigns.filter((item) => item.type === 'brand').length },
-    { name: 'Dinamik', count: campaigns.filter((item) => item.type === 'dynamic').length },
-  ]), [campaigns]);
+  const campaignTypeChartData = useMemo(() => {
+    const buckets = {
+      general: 0,
+      product: 0,
+      category: 0,
+      brand: 0,
+      expiry: 0,
+      sales: 0,
+      dynamic: 0,
+    };
+
+    campaigns.forEach((item) => {
+      const moduleKey = classifyCampaignModule(item);
+      const typeKey = String(item?.type || '').trim().toLowerCase();
+      const key = buckets[moduleKey] !== undefined ? moduleKey : typeKey;
+      if (buckets[key] !== undefined) {
+        buckets[key] += 1;
+      } else {
+        buckets.general += 1;
+      }
+    });
+
+    return [
+      { name: 'Genel', count: buckets.general },
+      { name: 'Ürün', count: buckets.product },
+      { name: 'Kategori', count: buckets.category },
+      { name: 'Marka', count: buckets.brand },
+      { name: 'SKT', count: buckets.expiry },
+      { name: 'Satış', count: buckets.sales },
+      { name: 'Dinamik', count: buckets.dynamic },
+    ];
+  }, [campaigns]);
 
   const campaignStatusChartData = useMemo(() => ([
     { name: 'Yayında', count: campaignSummary.active },
@@ -4609,6 +4759,26 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...(form.customerRelations || {}),
       campaigns: (form.customerRelations?.campaigns || []).filter((item) => item.id !== campaignId),
     }, 'Kampanya silindi.', 'Kampanya silinemedi.');
+  };
+
+  const clearPastCampaigns = async () => {
+    const currentCampaigns = form.customerRelations?.campaigns || [];
+    const removableCampaigns = currentCampaigns.filter((item) => !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item));
+    if (!removableCampaigns.length) {
+      setToast({ type: 'info', title: 'Kampanya Yönetimi', message: 'Temizlenecek geçmiş kampanya bulunmuyor.' });
+      return;
+    }
+
+    const keptCampaigns = currentCampaigns.filter((item) => isCampaignCurrentlyActive(item) || isCampaignPlanned(item));
+    const persisted = await persistCustomerRelations({
+      ...(form.customerRelations || {}),
+      campaigns: keptCampaigns,
+    }, `${removableCampaigns.length} geçmiş kampanya temizlendi.`, 'Geçmiş kampanyalar temizlenemedi.');
+
+    if (persisted) {
+      setSelectedCampaignIds([]);
+      setCampaignStatusView('all');
+    }
   };
 
   const toggleCampaignStatus = async (campaignId) => {
@@ -5662,7 +5832,18 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         </>
       ) : (
         (() => {
-          const hasStockDepletion = Number.isFinite(Number(simulation?.stockDepletionDays)) && Number(simulation?.stockDepletionDays) > 0;
+          const hasEnoughSimulationData = simulation?.hasEnoughSalesData !== false && simulation?.dataQuality?.status !== 'insufficient_data';
+          const hasStockDepletion = hasEnoughSimulationData && Number.isFinite(Number(simulation?.stockDepletionDays)) && Number(simulation?.stockDepletionDays) > 0;
+          const formatSimulationPercent = (value) => {
+            if (!hasEnoughSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? `%${formatNumber(numeric)}` : 'Hesaplanamadı';
+          };
+          const formatSimulationMoney = (value) => {
+            if (!hasEnoughSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+            const numeric = Number(value);
+            return Number.isFinite(numeric) ? `${formatNumber(numeric)} ${form.currency}` : 'Hesaplanamadı';
+          };
           return (
         <>
           <div className="campaign-form-group-head campaign-form-group-head--simulation">
@@ -5681,12 +5862,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </div>
           </div>
           <div className="campaign-preview-stats campaign-preview-stats--compact">
-            <div><span>Tahmini satış artışı</span><strong>%{formatNumber(simulation?.salesIncreasePct ?? 0)}</strong></div>
-            <div><span>Tahmini ciro etkisi</span><strong>{formatNumber(simulation?.revenueChange ?? 0)} {form.currency}</strong></div>
-            <div><span>Tahmini marj etkisi</span><strong>%{formatNumber(simulation?.marginImpact ?? 0)}</strong></div>
-            <div><span>Stok devir etkisi</span><strong>%{formatNumber(simulation?.stockTurnEffect ?? 0)}</strong></div>
+            <div><span>Tahmini satış artışı</span><strong>{formatSimulationPercent(simulation?.salesIncreasePct)}</strong></div>
+            <div><span>Tahmini ciro etkisi</span><strong>{formatSimulationMoney(simulation?.revenueChange)}</strong></div>
+            <div><span>Tahmini marj etkisi</span><strong>{formatSimulationPercent(simulation?.marginImpact)}</strong></div>
+            <div><span>Stok devir etkisi</span><strong>{formatSimulationPercent(simulation?.stockTurnEffect)}</strong></div>
             <div><span>Risk seviyesi</span><strong>{simulation?.riskLevel || '-'}</strong></div>
-            <div><span>Ortalama stok tükenme</span><strong>{hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays ?? 0)} gün` : 'Satış verisi yok'}</strong></div>
+            <div><span>Ortalama stok tükenme</span><strong>{hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays)} gün` : 'Yeterli satış verisi yok'}</strong></div>
           </div>
           <div className="campaign-form-tip campaign-simulation-note" style={{ marginTop: '12px' }}>
             <strong>{simulation?.recommendation || 'Öneri üretilemedi.'}</strong>
@@ -5741,17 +5922,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           );
           const affectedCount = scopeCount > 0 ? scopeCount : candidateCount;
           const hasSeparateCandidateCount = candidateCount > 0 && affectedCount > candidateCount;
-          const hasEnoughSalesData = Number(simulation?.avgDailySales || 0) > 0 || hasStockDepletion;
+          const hasEnoughSalesData = simulation?.hasEnoughSalesData !== false
+            && simulation?.dataQuality?.status !== 'insufficient_data'
+            && (Number(simulation?.avgDailySales || 0) > 0 || hasStockDepletion || simulation?.isBackendSimulation);
           const formatSimulationPercent = (value) => {
             const numeric = Number(value);
+            if (!hasEnoughSalesData || value === null || value === undefined) return 'Yeterli satış verisi yok';
             if (!Number.isFinite(numeric)) return 'Hesaplanamadı';
-            if (numeric === 0 && !hasEnoughSalesData) return 'Yeterli veri yok';
             return `%${formatNumber(numeric)}`;
           };
           const formatSimulationMoney = (value) => {
             const numeric = Number(value);
+            if (!hasEnoughSalesData || value === null || value === undefined) return 'Yeterli satış verisi yok';
             if (!Number.isFinite(numeric)) return 'Hesaplanamadı';
-            if (numeric === 0 && !hasEnoughSalesData) return 'Yeterli veri yok';
             return formatCurrency(numeric, form.currency);
           };
           const rawRecommendationText = normalizeCampaignInsightText(advisoryText || simulation?.recommendation || '');
@@ -5794,8 +5977,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <div><span>Tahmini ciro etkisi</span><strong>{formatSimulationMoney(simulation?.revenueChange)}</strong></div>
                   <div><span>Tahmini marj etkisi</span><strong>{formatSimulationPercent(simulation?.marginImpact)}</strong></div>
                   <div><span>Stok devir etkisi</span><strong>{formatSimulationPercent(simulation?.stockTurnEffect)}</strong></div>
-                  <div><span>{metricTailLabel === 'SKT riski' ? 'SKT riski' : 'Risk seviyesi'}</span><strong>{metricTailLabel === 'SKT riski' ? `%${formatNumber(simulation?.riskReductionScore ?? 0)} azalma` : normalizeCampaignInsightText(simulation?.riskLevel || '-')}</strong></div>
-                  <div><span>{metricTailLabel === 'SKT riski' ? 'Etkilenen ürün sayısı' : 'Ortalama stok tükenme'}</span><strong>{metricTailLabel === 'SKT riski' ? formatNumber(affectedCount) : (hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays ?? 0)} gün` : 'Yeterli satış verisi yok')}</strong></div>
+                  <div><span>{metricTailLabel === 'SKT riski' ? 'SKT riski' : 'Risk seviyesi'}</span><strong>{metricTailLabel === 'SKT riski' ? formatSimulationPercent(simulation?.riskReductionScore) : normalizeCampaignInsightText(simulation?.riskLevel || '-')}</strong></div>
+                  <div><span>{metricTailLabel === 'SKT riski' ? 'Etkilenen ürün sayısı' : 'Ortalama stok tükenme'}</span><strong>{metricTailLabel === 'SKT riski' ? formatNumber(affectedCount) : (hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays)} gün` : 'Yeterli satış verisi yok')}</strong></div>
                 </div>
               </div>
               {recommendationText ? (
@@ -6603,6 +6786,15 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     >
                       <RefreshCw size={15} className={campaignSuggestionRefreshing ? 'is-spinning' : ''} />
                     </button>
+                    <button
+                      type="button"
+                      className="ghost-button campaign-clear-history-button"
+                      onClick={clearPastCampaigns}
+                      disabled={isSaving || archiveCampaignRows.length === 0}
+                    >
+                      <Eraser size={15} />
+                      Geçmiş Kampanyaları Temizle
+                    </button>
                   </div>
                 </div>
 
@@ -6873,20 +7065,54 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       </article>
                     ) : null}
 
-                    <article className="campaign-form-group">
-                      <div className="campaign-form-group-head">
-                        <h4>Etki Simülasyonu <span className="sr-only">Impact Simulation</span></h4>
-                        <p>İndirim ve tarih aralığına göre tahmini etkiler anlık hesaplanır.</p>
-                      </div>
-                      <div className="campaign-preview-stats">
-                        <div><span>Tahmini satış artışı <span className="sr-only">Estimated sales increase</span></span><strong>%{formatNumber(campaignSimulation?.salesIncreasePct ?? 0)}</strong></div>
-                        <div><span>Tahmini ciro değişimi</span><strong>{formatNumber(campaignSimulation?.revenueChange ?? 0)} {form.currency}</strong></div>
-                        <div><span>Tahmini marj etkisi</span><strong>%{formatNumber(campaignSimulation?.marginImpact ?? 0)}</strong></div>
-                          <div><span>Tahmini stok tükenme süresi</span><strong>{formatNumber(campaignSimulation?.stockDepletionDays ?? 0)} gün</strong></div>
-                          <div><span>Stok devir etkisi</span><strong>%{formatNumber(campaignSimulation?.stockTurnEffect ?? 0)}</strong></div>
-                          <div><span>Risk azaltma etkisi</span><strong>%{formatNumber(campaignSimulation?.riskReductionScore ?? 0)}</strong></div>
-                      </div>
-                    </article>
+                    {(() => {
+                      const hasEnoughSimulationData = campaignSimulation?.hasEnoughSalesData !== false
+                        && campaignSimulation?.dataQuality?.status !== 'insufficient_data';
+                      const formatMainSimulationPercent = (value) => {
+                        if (campaignSimulationLoading) return 'Hesaplanıyor';
+                        if (!hasEnoughSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+                        const numeric = Number(value);
+                        return Number.isFinite(numeric) ? `%${formatNumber(numeric)}` : 'Hesaplanamadı';
+                      };
+                      const formatMainSimulationMoney = (value) => {
+                        if (campaignSimulationLoading) return 'Hesaplanıyor';
+                        if (!hasEnoughSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+                        const numeric = Number(value);
+                        return Number.isFinite(numeric) ? `${formatNumber(numeric)} ${form.currency}` : 'Hesaplanamadı';
+                      };
+                      const formatMainStockDepletion = (value) => {
+                        if (campaignSimulationLoading) return 'Hesaplanıyor';
+                        if (!hasEnoughSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+                        const numeric = Number(value);
+                        return Number.isFinite(numeric) && numeric > 0 ? `${formatNumber(numeric)} gün` : 'Yeterli satış verisi yok';
+                      };
+                      const simulationExplanation = campaignSimulationError
+                        ? campaignSimulationError
+                        : hasEnoughSimulationData
+                          ? (campaignSimulation?.explanation || 'Simülasyon gerçek satış geçmişi, stok ve kampanya kapsamına göre hesaplanır.')
+                          : 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.';
+
+                      return (
+                        <article className="campaign-form-group">
+                          <div className="campaign-form-group-head">
+                            <h4>Etki Simülasyonu <span className="sr-only">Impact Simulation</span></h4>
+                            <p>Simülasyon gerçek satış geçmişi, stok ve kampanya kapsamına göre hesaplanır.</p>
+                          </div>
+                          <div className="campaign-preview-stats">
+                            <div><span>Tahmini satış artışı <span className="sr-only">Estimated sales increase</span></span><strong>{formatMainSimulationPercent(campaignSimulation?.salesIncreasePct)}</strong></div>
+                            <div><span>Tahmini ciro değişimi</span><strong>{formatMainSimulationMoney(campaignSimulation?.revenueChange)}</strong></div>
+                            <div><span>Tahmini marj etkisi</span><strong>{formatMainSimulationPercent(campaignSimulation?.marginImpact)}</strong></div>
+                            <div><span>Tahmini stok tükenme süresi</span><strong>{formatMainStockDepletion(campaignSimulation?.stockDepletionDays)}</strong></div>
+                            <div><span>Stok devir etkisi</span><strong>{formatMainSimulationPercent(campaignSimulation?.stockTurnEffect)}</strong></div>
+                            <div><span>Risk azaltma etkisi</span><strong>{formatMainSimulationPercent(campaignSimulation?.riskReductionScore)}</strong></div>
+                          </div>
+                          <div className="campaign-form-tip campaign-simulation-note" style={{ marginTop: '12px' }}>
+                            <strong>{simulationExplanation}</strong>
+                            {campaignSimulation?.metricsSummary ? <span>{normalizeCampaignInsightText(campaignSimulation.metricsSummary)}</span> : null}
+                          </div>
+                        </article>
+                      );
+                    })()}
                   </div>
 
                   <div className="modal-actions campaign-form-actions">
@@ -8659,12 +8885,28 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </section>
             <section className="campaign-detail-section">
               <h4>Beklenen sonuç</h4>
-              <div className="campaign-detail-grid campaign-detail-grid--decision">
-                <div><span>Satış etkisi</span><strong>%{formatNumber(selectedSuggestionDiscountSimulation?.salesIncreasePct ?? 0)}</strong></div>
-                <div><span>Ciro etkisi</span><strong>{formatCurrency(selectedSuggestionDiscountSimulation?.revenueChange ?? 0, form.currency)}</strong></div>
-                <div><span>Marj etkisi</span><strong>%{formatNumber(selectedSuggestionDiscountSimulation?.marginImpact ?? 0)}</strong></div>
-                <div><span>Stok devir etkisi</span><strong>%{formatNumber(selectedSuggestionDiscountSimulation?.stockTurnEffect ?? 0)}</strong></div>
-              </div>
+              {(() => {
+                const hasSuggestionSimulationData = selectedSuggestionDiscountSimulation?.hasEnoughSalesData !== false
+                  && selectedSuggestionDiscountSimulation?.dataQuality?.status !== 'insufficient_data';
+                const formatSuggestionPercent = (value) => {
+                  if (!hasSuggestionSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+                  const numeric = Number(value);
+                  return Number.isFinite(numeric) ? `%${formatNumber(numeric)}` : 'Hesaplanamadı';
+                };
+                const formatSuggestionMoney = (value) => {
+                  if (!hasSuggestionSimulationData || value === null || value === undefined) return 'Yeterli satış verisi yok';
+                  const numeric = Number(value);
+                  return Number.isFinite(numeric) ? formatCurrency(numeric, form.currency) : 'Hesaplanamadı';
+                };
+                return (
+                  <div className="campaign-detail-grid campaign-detail-grid--decision">
+                    <div><span>Satış etkisi</span><strong>{formatSuggestionPercent(selectedSuggestionDiscountSimulation?.salesIncreasePct)}</strong></div>
+                    <div><span>Ciro etkisi</span><strong>{formatSuggestionMoney(selectedSuggestionDiscountSimulation?.revenueChange)}</strong></div>
+                    <div><span>Marj etkisi</span><strong>{formatSuggestionPercent(selectedSuggestionDiscountSimulation?.marginImpact)}</strong></div>
+                    <div><span>Stok devir etkisi</span><strong>{formatSuggestionPercent(selectedSuggestionDiscountSimulation?.stockTurnEffect)}</strong></div>
+                  </div>
+                );
+              })()}
             </section>
           </div>
           <div className="modal-actions campaign-form-actions campaign-detail-modal-footer">

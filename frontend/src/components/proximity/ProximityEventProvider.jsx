@@ -6,6 +6,7 @@ import {
   normalizeNativeBeaconEvent,
   proximityService,
 } from '../../services/proximityService.js';
+import { cleanSectionDisplayName } from '../../services/formatters.js';
 import './ProximityEventProvider.css';
 
 const NATIVE_BEACON_EVENT = 'shelfio:beacon-detected';
@@ -15,6 +16,8 @@ const CUSTOMER_PREFS_UPDATED_EVENT = 'shelfio:customer-preferences-updated';
 const CUSTOMER_NOTIFICATIONS_REFRESH_EVENT = 'shelfio:customer-notifications-refresh';
 const FRONTEND_COOLDOWN_MS = 1 * 1000;
 const DISMISS_COOLDOWN_MS = 60 * 1000;
+const PRODUCT_DISCOUNT_DESCRIPTION = 'Şu an bulunduğunuz reyonda ilginizi çekebilecek ürünlere rastladık.';
+const PRODUCT_DISCOUNT_NATIVE_BODY = 'İlgini çekebilecek ürünler keşfettik.';
 
 const isDev = () => Boolean(import.meta.env?.DEV);
 const normalizeText = (value) => String(value || '').trim();
@@ -55,6 +58,7 @@ const resolveActionLabel = (notification = {}) => {
   const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
   const explicit = normalizeText(notification.actionLabel || payload.actionLabel);
   if (explicit) return explicit;
+  if (notification.type === 'PROXIMITY_PRODUCT_DISCOUNT') return 'Ürüne Git';
 
   const typeText = `${notification.type || ''} ${notification.actionType || ''} ${notification.actionUrl || ''}`.toLocaleLowerCase('tr-TR');
   if (typeText.includes('campaign') || typeText.includes('kampanya')) return 'Kampanyayı Gör';
@@ -99,15 +103,19 @@ const formatTryPrice = (value) => {
 const dispatchNativeNotificationEvent = (notification = {}, prefs = readCustomerNotificationPrefs()) => {
   if (typeof window === 'undefined') return;
   if (prefs.phoneNotifications === false) return;
-  const title = normalizeText(notification.title);
-  const actionUrl = normalizeText(notification.actionUrl);
+  const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  const sectionName = cleanSectionDisplayName(payload.displaySectionName || payload.sectionName || notification.title, '');
+  const title = normalizeText(payload.nativeTitle) || (sectionName ? `${sectionName} reyonundasın` : normalizeText(notification.title));
+  const actionUrl = normalizeText(notification.actionUrl || payload.actionUrl);
   const detail = {
     title,
-    body: notification.body || notification.message || '',
+    body: normalizeText(payload.nativeBody)
+      || (notification.type === 'PROXIMITY_PRODUCT_DISCOUNT' ? PRODUCT_DISCOUNT_NATIVE_BODY : normalizeText(notification.body || notification.message)),
+    actionLabel: resolveActionLabel(notification),
     actionUrl,
     notificationId: notification.id || '',
     type: notification.type || '',
-    payload: notification.payload || {},
+    payload,
   };
 
   try {
@@ -115,7 +123,7 @@ const dispatchNativeNotificationEvent = (notification = {}, prefs = readCustomer
       detail,
     }));
   } catch {
-    // Native bridge opsiyoneldir; desktop web akışı sessizce devam eder.
+    // Native bridge is optional; desktop web should keep moving.
   }
 
   if (!title || !canNavigateToCustomerRoute(actionUrl)) return;
@@ -125,7 +133,7 @@ const dispatchNativeNotificationEvent = (notification = {}, prefs = readCustomer
     if (!bridge || typeof bridge.showNotification !== 'function') return;
     bridge.showNotification(JSON.stringify(detail));
   } catch {
-    // Android JS interface opsiyoneldir; hata web akışını bozmamalı.
+    // Android JS interface is optional; bridge errors should not break web flow.
   }
 };
 
@@ -143,14 +151,9 @@ function ProximityNotificationCard({ notification, onClose, onAction }) {
     : '';
   const displayPrice = formatTryPrice(displayPriceValue);
   const productName = normalizeText(payload.productName);
-  const aisleName = normalizeText(payload.aisleName || payload.sectionName);
-  const productDiscountTitle = aisleName.toLocaleLowerCase('tr-TR') === 'bu reyon'
-    ? 'Bu reyondasın'
-    : (aisleName ? `${aisleName} reyonundasın` : title);
-  const cardTitle = isProductDiscount
-    ? productDiscountTitle
-    : title;
-  const description = isProductDiscount ? '' : body;
+  const sectionName = cleanSectionDisplayName(payload.displaySectionName || payload.sectionName || title, 'Yakındaki Reyon');
+  const cardTitle = isProductDiscount ? sectionName : title;
+  const description = isProductDiscount ? PRODUCT_DISCOUNT_DESCRIPTION : body;
   const productImage = normalizeText(payload.imageUrl || payload.productImageUrl || payload.thumbnailUrl);
 
   return (

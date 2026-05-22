@@ -304,7 +304,7 @@ export function normalizeNotification(item = {}) {
     id: item.id,
     type: item.type || 'system',
     title: toUserFriendlyNotificationText(item.title || 'Bildirim'),
-    description: toUserFriendlyNotificationText(item.description || item.message || ''),
+    description: toUserFriendlyNotificationText(item.description || item.message || item.body || ''),
     isRead: Boolean(item.isRead),
     priority: normalizePriority(item.priority || item.severity),
     createdAt: item.createdAt,
@@ -313,7 +313,7 @@ export function normalizeNotification(item = {}) {
     actionLabel: inferActionLabel(actionType, item),
     category: inferCategory(actionType),
     relatedTaskId: item.relatedTaskId || null,
-    message: toUserFriendlyNotificationText(item.message || item.description || ''),
+    message: toUserFriendlyNotificationText(item.message || item.description || item.body || ''),
     payload: item.payload || null,
     createdBy: item.createdBy || null,
   };

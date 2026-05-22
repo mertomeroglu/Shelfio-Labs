@@ -1,4 +1,6 @@
 import { pricingAnalysisService } from './analysis/pricingAnalysisService.js';
+import { normalizeTurkishText } from '../utils/turkishText.js';
+import { getPrisma } from '../providers/postgresProvider.js';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const toNumber = (value, fallback = 0) => {
@@ -7,6 +9,22 @@ const toNumber = (value, fallback = 0) => {
 };
 const safeArray = (value) => (Array.isArray(value) ? value : []);
 const uniq = (rows = []) => [...new Set(rows.map((value) => String(value || '').trim()).filter(Boolean))];
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SALES_LOOKBACK_DAYS = 30;
+const normalizeCampaignText = (value, fallback = '') => normalizeTurkishText(String(value || fallback || ''))
+  .replace(/\byavas\b/gi, 'yavaş')
+  .replace(/\byavaş\b/gi, 'yavaş')
+  .replace(/\burun\b/gi, 'ürün')
+  .replace(/\bürün\b/gi, 'ürün')
+  .replace(/\bicin\b/gi, 'için')
+  .replace(/\bindirim kampanyasi\b/gi, 'indirim kampanyası')
+  .replace(/\bsatis\b/gi, 'satış')
+  .replace(/\bhizi\b/gi, 'hızı')
+  .replace(/\bdusuk\b/gi, 'düşük')
+  .replace(/\byuksek\b/gi, 'yüksek')
+  .replace(/\bgore\b/gi, 'göre')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const normalizeCampaignRow = (row = {}) => {
   const currentPrice = toNumber(row.currentPrice ?? row.salePrice, 0);
@@ -17,7 +35,7 @@ const normalizeCampaignRow = (row = {}) => {
   return {
     id: String(row.productId || row.id || ''),
     productId: String(row.productId || row.id || ''),
-    productName: row.productName || row.name || 'Bilinmeyen ürün',
+    productName: normalizeCampaignText(row.productName || row.name, 'Bilinmeyen ürün'),
     sku: row.sku || '',
     categoryId: row.categoryId || '',
     category: row.categoryName || row.category || '-',
@@ -61,8 +79,8 @@ const buildSuggestion = ({ id, title, reason, rows, recommendedDiscount, type = 
   const summary = summarizeRows(rows);
   return {
     id,
-    title,
-    reason,
+    title: normalizeCampaignText(title),
+    reason: normalizeCampaignText(reason),
     type,
     priority,
     recommendedDiscount: clamp(Math.round(recommendedDiscount), 0, 80),
@@ -247,6 +265,232 @@ export const calculateCampaignImpact = ({
   };
 };
 
+const parseDateOnly = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const parsed = new Date(text.length <= 10 ? `${text}T00:00:00.000Z` : text);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+};
+
+const resolveSimulationDurationDays = ({ durationDays, startsAt, endsAt, isIndefinite } = {}) => {
+  const explicit = toNumber(durationDays, 0);
+  if (explicit > 0) return Math.max(1, Math.round(explicit));
+  if (isIndefinite) return 7;
+  const start = parseDateOnly(startsAt);
+  const end = parseDateOnly(endsAt);
+  if (start && end && end >= start) {
+    return Math.max(1, Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1);
+  }
+  return 7;
+};
+
+const toSimulationDateWindow = () => {
+  const end = new Date();
+  end.setUTCHours(23, 59, 59, 999);
+  const start = new Date(end.getTime() - (SALES_LOOKBACK_DAYS - 1) * DAY_MS);
+  start.setUTCHours(0, 0, 0, 0);
+  return { start, end };
+};
+
+const normalizeBrandKey = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+
+const buildSimulationProductWhere = (payload = {}) => {
+  const type = String(payload.type || payload.campaignType || 'general').trim().toLowerCase();
+  const where = {
+    isActive: { not: false },
+    isListed: { not: false },
+  };
+  const productIds = uniq([...safeArray(payload.productIds), ...safeArray(payload.targetProductIds)]);
+  const categoryIds = uniq([...safeArray(payload.categoryIds), ...safeArray(payload.targetCategoryIds)]);
+  const brands = uniq([...safeArray(payload.brands), ...safeArray(payload.targetBrands), payload.targetBrand]);
+
+  if (type === 'product' && productIds.length) {
+    where.id = { in: productIds };
+  } else if (type === 'category' && categoryIds.length) {
+    where.categoryId = { in: categoryIds };
+  } else if (type === 'brand' && brands.length) {
+    where.OR = brands.map((brand) => ({ brand: { equals: brand, mode: 'insensitive' } }));
+  }
+
+  return { where, type, productIds, categoryIds, brands };
+};
+
+const buildSalesMetricsByProduct = (sales = []) => {
+  const metrics = new Map();
+  sales.forEach((sale) => {
+    const sign = sale.type === 'return' ? -1 : 1;
+    safeArray(sale.saleItems).forEach((item) => {
+      const productId = String(item.productId || '').trim();
+      if (!productId || productId === '__bag__') return;
+      const quantity = toNumber(item.quantity, 0) * sign;
+      if (!Number.isFinite(quantity) || quantity === 0) return;
+      const totalPrice = toNumber(item.totalPrice, toNumber(item.unitPrice, 0) * Math.abs(quantity)) * sign;
+      const current = metrics.get(productId) || { quantity: 0, revenue: 0, transactionCount: 0 };
+      current.quantity += quantity;
+      current.revenue += totalPrice;
+      current.transactionCount += 1;
+      metrics.set(productId, current);
+    });
+  });
+  return metrics;
+};
+
+const emptySimulationResult = ({
+  scopeLabel = 'Kampanya',
+  currency = 'TRY',
+  productCount = 0,
+  reason = 'insufficient_sales_history',
+  explanation = 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.',
+} = {}) => ({
+  isEmpty: false,
+  scopeLabel,
+  currency,
+  productCount,
+  eligibleProductCount: productCount,
+  affectedProductCount: productCount,
+  analysisCandidateCount: 0,
+  previewProductCount: 0,
+  estimatedSalesIncrease: null,
+  estimatedRevenueChange: null,
+  estimatedMarginImpact: null,
+  estimatedStockDepletionDays: null,
+  stockTurnoverImpact: null,
+  riskReductionImpact: null,
+  salesIncreasePct: null,
+  revenueChange: null,
+  marginImpact: null,
+  stockDepletionDays: null,
+  stockTurnEffect: null,
+  riskReductionScore: null,
+  dataQuality: {
+    status: 'insufficient_data',
+    reason,
+    salesLookbackDays: SALES_LOOKBACK_DAYS,
+    productsWithSales: 0,
+    totalProducts: productCount,
+  },
+  hasEnoughSalesData: false,
+  riskLevel: 'Bilgi yok',
+  explanation,
+  recommendation: explanation,
+  metricsSummary: '',
+  modelName: 'real_sales_campaign_simulation',
+});
+
+const calculateRealSalesCampaignSimulation = ({ products = [], salesMetricsByProduct, payload = {}, durationDays }) => {
+  const safeDiscount = clamp(toNumber(payload.discountRate, 0), 0, 80);
+  const currency = payload.currency || 'TRY';
+  const scopeLabel = payload.scopeLabel || 'Kampanya';
+  const rows = products.map((product) => {
+    const stock = product.stock || {};
+    const totalStock = Math.max(0, toNumber(stock.warehouseQuantity, 0) + toNumber(stock.shelfQuantity, 0));
+    const currentPrice = Math.max(0, toNumber(product.salePrice, 0));
+    const cost = Math.max(0, toNumber(product.purchasePrice, 0));
+    const metrics = salesMetricsByProduct.get(product.id) || null;
+    const soldQuantity = Math.max(0, toNumber(metrics?.quantity, 0));
+    const avgDailySales = soldQuantity / SALES_LOOKBACK_DAYS;
+    const expiryDate = stock.nearestExpiry || stock.fefoDefaultExpiry || safeArray(stock.batches)[0]?.skt || null;
+    const daysToExpiry = expiryDate ? Math.ceil((new Date(expiryDate).getTime() - Date.now()) / DAY_MS) : null;
+
+    return {
+      productId: product.id,
+      currentPrice,
+      cost,
+      totalStock,
+      avgDailySales,
+      soldQuantity,
+      hasSalesData: avgDailySales > 0,
+      daysToExpiry: Number.isFinite(daysToExpiry) ? daysToExpiry : null,
+    };
+  });
+
+  const salesRows = rows.filter((row) => row.hasSalesData);
+  if (!salesRows.length) {
+    return emptySimulationResult({ scopeLabel, currency, productCount: products.length });
+  }
+
+  let baseUnits = 0;
+  let campaignUnits = 0;
+  let baseRevenue = 0;
+  let campaignRevenue = 0;
+  let baseProfit = 0;
+  let campaignProfit = 0;
+  let totalStock = 0;
+  let totalCampaignDailySales = 0;
+  let expiryPressureSum = 0;
+  let marginRiskRows = 0;
+
+  salesRows.forEach((row) => {
+    const expiryPressure = row.daysToExpiry == null ? 0 : clamp((14 - row.daysToExpiry) / 14, 0, 1);
+    const velocityFactor = row.avgDailySales <= 0.4 ? 1.35 : row.avgDailySales <= 1.2 ? 1.15 : 1;
+    const estimatedBoost = clamp((safeDiscount / 100) * (0.85 + (safeDiscount / 100) * 0.9) * velocityFactor * (1 + expiryPressure * 0.55), 0, 1.2);
+    const baselineUnits = Math.min(row.totalStock, row.avgDailySales * durationDays);
+    const projectedDailySales = row.avgDailySales * (1 + estimatedBoost);
+    const projectedUnits = Math.min(row.totalStock, projectedDailySales * durationDays);
+    const campaignPrice = row.currentPrice * (1 - safeDiscount / 100);
+
+    baseUnits += baselineUnits;
+    campaignUnits += projectedUnits;
+    baseRevenue += baselineUnits * row.currentPrice;
+    campaignRevenue += projectedUnits * campaignPrice;
+    baseProfit += baselineUnits * Math.max(row.currentPrice - row.cost, 0);
+    campaignProfit += projectedUnits * (campaignPrice - row.cost);
+    totalStock += row.totalStock;
+    totalCampaignDailySales += projectedDailySales;
+    expiryPressureSum += expiryPressure;
+    if (campaignPrice <= row.cost) marginRiskRows += 1;
+  });
+
+  const estimatedSalesIncrease = baseUnits > 0 ? Number((((campaignUnits - baseUnits) / baseUnits) * 100).toFixed(1)) : null;
+  const estimatedRevenueChange = Number((campaignRevenue - baseRevenue).toFixed(2));
+  const estimatedMarginImpact = baseProfit > 0 ? Number((((campaignProfit - baseProfit) / baseProfit) * 100).toFixed(1)) : null;
+  const estimatedStockDepletionDays = totalCampaignDailySales > 0 ? Number((totalStock / totalCampaignDailySales).toFixed(1)) : null;
+  const stockTurnoverImpact = totalStock > 0 ? Number((clamp((campaignUnits - baseUnits) / totalStock, 0, 1) * 100).toFixed(1)) : null;
+  const avgExpiryPressure = expiryPressureSum / Math.max(1, salesRows.length);
+  const riskReductionImpact = Number(clamp((stockTurnoverImpact || 0) + (avgExpiryPressure * 35) - ((marginRiskRows / salesRows.length) * 20), 0, 100).toFixed(1));
+  const marginRiskShare = marginRiskRows / salesRows.length;
+  const riskLevel = marginRiskShare >= 0.35 ? 'Yüksek' : marginRiskShare >= 0.15 ? 'Orta' : 'Düşük';
+  const explanation = 'Simülasyon gerçek satış geçmişi, stok ve kampanya kapsamına göre hesaplanır.';
+
+  return {
+    isEmpty: false,
+    scopeLabel,
+    currency,
+    productCount: products.length,
+    eligibleProductCount: products.length,
+    affectedProductCount: products.length,
+    analysisCandidateCount: salesRows.length,
+    previewProductCount: salesRows.length,
+    estimatedSalesIncrease,
+    estimatedRevenueChange,
+    estimatedMarginImpact,
+    estimatedStockDepletionDays,
+    stockTurnoverImpact,
+    riskReductionImpact,
+    salesIncreasePct: estimatedSalesIncrease,
+    revenueChange: estimatedRevenueChange,
+    marginImpact: estimatedMarginImpact,
+    stockDepletionDays: estimatedStockDepletionDays,
+    stockTurnEffect: stockTurnoverImpact,
+    riskReductionScore: riskReductionImpact,
+    dataQuality: {
+      status: salesRows.length === products.length ? 'complete' : 'partial',
+      reason: salesRows.length === products.length ? 'ok' : 'partial_sales_history',
+      salesLookbackDays: SALES_LOOKBACK_DAYS,
+      productsWithSales: salesRows.length,
+      totalProducts: products.length,
+      totalBaselineUnits: Number(baseUnits.toFixed(2)),
+      totalCampaignUnits: Number(campaignUnits.toFixed(2)),
+    },
+    hasEnoughSalesData: true,
+    riskLevel,
+    explanation,
+    recommendation: explanation,
+    metricsSummary: `${salesRows.length}/${products.length} ürün satış geçmişiyle hesaplandı • ${SALES_LOOKBACK_DAYS} günlük satış penceresi`,
+    modelName: 'real_sales_campaign_simulation',
+  };
+};
+
 export const campaignAnalysisService = {
   async getSuggestions(query = {}) {
     const analysis = await pricingAnalysisService.getAnalysis({ ...query, limit: undefined });
@@ -268,7 +512,112 @@ export const campaignAnalysisService = {
   },
 
   async simulate(payload = {}) {
-    return calculateCampaignImpact(payload);
+    const prisma = await getPrisma();
+    const { where, type, productIds, categoryIds, brands } = buildSimulationProductWhere(payload);
+    const durationDays = resolveSimulationDurationDays(payload);
+    const currency = payload.currency || 'TRY';
+    const scopeLabel = payload.scopeLabel || (
+      type === 'product' ? 'Ürün Bazlı Kampanya'
+        : type === 'category' ? 'Kategori Bazlı Kampanya'
+          : type === 'brand' ? 'Marka Bazlı Kampanya'
+            : 'Genel Mağaza İndirimi'
+    );
+
+    if (type === 'product' && !productIds.length) {
+      return emptySimulationResult({
+        scopeLabel,
+        currency,
+        reason: 'empty_product_scope',
+        explanation: 'Simülasyon için en az bir ürün seçin.',
+      });
+    }
+    if (type === 'category' && !categoryIds.length) {
+      return emptySimulationResult({
+        scopeLabel,
+        currency,
+        reason: 'empty_category_scope',
+        explanation: 'Simülasyon için en az bir kategori seçin.',
+      });
+    }
+    if (type === 'brand' && !brands.length) {
+      return emptySimulationResult({
+        scopeLabel,
+        currency,
+        reason: 'empty_brand_scope',
+        explanation: 'Simülasyon için en az bir marka seçin.',
+      });
+    }
+
+    const products = await prisma.product.findMany({
+      where,
+      take: 5000,
+      select: {
+        id: true,
+        name: true,
+        brand: true,
+        categoryId: true,
+        purchasePrice: true,
+        salePrice: true,
+        stock: {
+          select: {
+            warehouseQuantity: true,
+            shelfQuantity: true,
+            nearestExpiry: true,
+            fefoDefaultExpiry: true,
+            batches: {
+              where: { totalQuantity: { gt: 0 } },
+              orderBy: [{ skt: 'asc' }, { batchNo: 'asc' }],
+              take: 1,
+              select: { skt: true },
+            },
+          },
+        },
+      },
+    });
+
+    const scopedProducts = type === 'brand' && brands.length
+      ? products.filter((product) => brands.some((brand) => normalizeBrandKey(product.brand) === normalizeBrandKey(brand)))
+      : products;
+
+    if (!scopedProducts.length) {
+      return emptySimulationResult({
+        scopeLabel,
+        currency,
+        reason: 'empty_scope',
+        explanation: 'Bu kampanya kapsamında simülasyon yapılacak ürün bulunamadı.',
+      });
+    }
+
+    const productIdsForSales = scopedProducts.map((product) => product.id);
+    const { start, end } = toSimulationDateWindow();
+    const sales = await prisma.sale.findMany({
+      where: {
+        type: { in: ['sale', 'return'] },
+        createdAt: { gte: start, lte: end },
+        saleItems: { some: { productId: { in: productIdsForSales } } },
+      },
+      select: {
+        id: true,
+        type: true,
+        createdAt: true,
+        saleItems: {
+          where: { productId: { in: productIdsForSales } },
+          select: {
+            productId: true,
+            quantity: true,
+            unitPrice: true,
+            totalPrice: true,
+          },
+        },
+      },
+    });
+
+    return calculateRealSalesCampaignSimulation({
+      products: scopedProducts,
+      salesMetricsByProduct: buildSalesMetricsByProduct(sales),
+      payload: { ...payload, currency, scopeLabel },
+      durationDays,
+    });
   },
 };
 

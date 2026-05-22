@@ -180,6 +180,7 @@ const formatDateTimeLabel = (value) => {
 
 const toPercent = (value) => `${Number(value || 0).toFixed(0)}%`;
 const occupancyValue = (value) => Math.max(0, Math.min(100, Number(value || 0)));
+const clampPercent = (value) => Math.max(0, Math.min(100, Number(value || 0)));
 const storageTypeShortLabel = (value) => {
   if (value === 'cold_chain') return 'Soğuk';
   if (value === 'freezer') return 'Donuk';
@@ -188,6 +189,10 @@ const storageTypeShortLabel = (value) => {
 
 const sectionCode = (numberValue) => `R-${String(numberValue || 0).padStart(2, '0')}`;
 const sectionLocationCode = (sectionNo, side, shelfNo, levelNo) => `R${String(sectionNo || 0).padStart(2, '0')}-${side}-${String(shelfNo).padStart(2, '0')}-${String(levelNo).padStart(2, '0')}`;
+const sectionSlotKey = (sectionId, item = {}) => {
+  if (!sectionId || !item.shelfSide || !item.shelfNo || !item.shelfLevel) return null;
+  return `${sectionId}-${item.shelfSide}-${item.shelfNo}-${item.shelfLevel}`;
+};
 
 const movementTypeLabel = (movement = {}) => {
   if (movement.reasonCode === 'transfer_to_shelf') return 'Besleme';
@@ -1200,6 +1205,9 @@ export default function LocationManagementPage() {
               requiredStorageType: item.storageType || product.requiredStorageType || 'Ortam',
               shelfStock: Number(item.shelfStock ?? product.shelfStock ?? 0),
               maxShelfStock: Number(item.maxShelfStock ?? product.maxShelfStock ?? product.shelfMaxStock ?? 0),
+              averageDesi: Number(item.averageDesi ?? product.averageDesi ?? 0),
+              isVirtualLocation: item.isVirtualLocation ?? product.isVirtualLocation ?? false,
+              capacityMode: item.capacityMode ?? product.capacityMode ?? null,
               productName: product.name || item.productName || '-',
               sku: product.sku || item.sku || '-',
               barcode: product.barcode || '-',
@@ -1244,7 +1252,20 @@ export default function LocationManagementPage() {
 
     return sections.map((section) => {
       const sectionProducts = bySectionId.get(section.id) || [];
-      const occupied = new Set(sectionProducts.filter((item) => item.shelfSide && item.shelfNo && item.shelfLevel).map((item) => `${item.shelfSide}-${item.shelfNo}-${item.shelfLevel}`));
+      const occupied = new Set(sectionProducts.map((item) => sectionSlotKey(section.id, item)).filter(Boolean));
+      const skuSet = new Set(sectionProducts.map((item) => item.sku || item.id).filter(Boolean));
+      const fallbackShelfStockTotal = sectionProducts.reduce((sum, item) => sum + Number(item.shelfStock || 0), 0);
+      const fallbackShelfCapacityTotal = sectionProducts.reduce((sum, item) => sum + Number(item.maxShelfStock || item.shelfMaxStock || item.maxStock || 0), 0);
+      const fallbackDesiRows = sectionProducts
+        .map((item) => {
+          const averageDesi = Number(item.averageDesi || 0);
+          const shelfStock = Number(item.shelfStock || 0);
+          const shelfCapacity = Number(item.maxShelfStock || item.shelfMaxStock || item.maxStock || 0);
+          return { averageDesi, shelfStock, shelfCapacity };
+        })
+        .filter((item) => item.averageDesi > 0 && item.shelfCapacity > 0);
+      const fallbackCurrentDesi = fallbackDesiRows.reduce((sum, item) => sum + (item.averageDesi * item.shelfStock), 0);
+      const fallbackMaxDesi = fallbackDesiRows.reduce((sum, item) => sum + (item.averageDesi * item.shelfCapacity), 0);
 
       const storageCounter = { Ortam: 0, cold_chain: 0, freezer: 0 };
       sectionProducts.forEach((item) => {
@@ -1255,8 +1276,23 @@ export default function LocationManagementPage() {
       const dominantStorageType = Object.entries(storageCounter).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Ortam';
       const storageVariants = Object.values(storageCounter).filter((count) => count > 0).length;
       const zone = shelfZoneBySectionId.get(String(section.id || ''));
-      const totalSlots = Number(zone?.totalSlots || 100);
-      const occupiedSlots = Number(zone?.occupiedSlots ?? occupied.size);
+      const totalSlotsCandidate = Number(zone?.totalPhysicalSlots ?? zone?.totalSlots ?? 100);
+      const totalSlots = Number.isFinite(totalSlotsCandidate) && totalSlotsCandidate > 0 ? totalSlotsCandidate : 100;
+      const uniqueOccupiedSlots = Number(zone?.occupiedPhysicalSlots ?? zone?.occupiedSlots ?? occupied.size);
+      const occupiedSlots = Math.min(uniqueOccupiedSlots, totalSlots);
+      const shelfStockTotal = Number(zone?.shelfStockTotal ?? fallbackShelfStockTotal);
+      const shelfCapacityTotal = Number(zone?.shelfCapacityTotal ?? fallbackShelfCapacityTotal);
+      const stockUsageRate = zone?.stockUsageRate !== null && zone?.stockUsageRate !== undefined
+        ? clampPercent(zone.stockUsageRate)
+        : shelfCapacityTotal > 0
+          ? clampPercent((shelfStockTotal / shelfCapacityTotal) * 100)
+          : null;
+      const hasDesiData = Boolean(zone?.hasDesiData ?? fallbackMaxDesi > 0);
+      const currentDesi = hasDesiData ? Number(zone?.currentDesi ?? fallbackCurrentDesi) : null;
+      const maxDesi = hasDesiData ? Number(zone?.maxDesi ?? fallbackMaxDesi) : null;
+      const desiUsageRate = hasDesiData && maxDesi > 0
+        ? clampPercent(zone?.desiUsageRate ?? ((currentDesi / maxDesi) * 100))
+        : null;
 
       return {
         ...section,
@@ -1266,17 +1302,20 @@ export default function LocationManagementPage() {
         categories: Array.from(new Set(sectionProducts.map((item) => item.categoryName).filter(Boolean))),
         categoryLabel: Array.from(new Set(sectionProducts.map((item) => item.categoryName).filter(Boolean))).slice(0, 2).join(', ') || '-',
         totalProducts: sectionProducts.length,
-        productVarietyCount: sectionProducts.length,
+        productVarietyCount: Number(zone?.productVarietyCount ?? zone?.skuCount ?? skuSet.size),
         totalSlots,
         occupiedSlots,
         emptySlots: Math.max(0, totalSlots - occupiedSlots),
         reservedSlots: 0,
         blockedSlots: 0,
-        occupancyRate: totalSlots ? (occupiedSlots / totalSlots) * 100 : 0,
-        maxDesi: sectionProducts.reduce((sum, item) => sum + Number(item.maxShelfStock || item.shelfMaxStock || item.maxStock || 0), 0),
-        currentDesi: sectionProducts.reduce((sum, item) => sum + Number(item.shelfStock || 0), 0),
-        maxProductCapacity: sectionProducts.reduce((sum, item) => sum + Number(item.maxShelfStock || item.shelfMaxStock || item.maxStock || 0), 0),
-        currentProductCount: sectionProducts.reduce((sum, item) => sum + Number(item.shelfStock || 0), 0),
+        occupancyRate: totalSlots ? clampPercent((uniqueOccupiedSlots / totalSlots) * 100) : 0,
+        stockUsageRate,
+        hasDesiData,
+        maxDesi,
+        currentDesi,
+        desiUsageRate,
+        maxProductCapacity: shelfCapacityTotal,
+        currentProductCount: shelfStockTotal,
         dominantStorageType,
         hasCold: storageCounter.cold_chain > 0,
         hasFreezer: storageCounter.freezer > 0,
@@ -1952,8 +1991,9 @@ export default function LocationManagementPage() {
                         <span>Doluluk</span><strong>{item.occupancyRate.toFixed(1)}% ({item.occupiedSlots}/{item.totalSlots})</strong>
                         <span>Ürün Çeşidi</span><strong>{formatNumber(item.productVarietyCount)}</strong>
                         <span>Kritik Ürün</span><strong>{formatNumber(item.criticalCount)}</strong>
-                        <span>Kapasite</span><strong>{formatNumber(item.currentProductCount)} / {formatNumber(item.maxProductCapacity)}</strong>
-                        <span>Desi Kullanımı</span><strong>{formatNumber(item.currentDesi)} / {formatNumber(item.maxDesi)}</strong>
+                        <span>Stok Kullanımı</span><strong>{formatNumber(item.currentProductCount)} / {formatNumber(item.maxProductCapacity)}{item.stockUsageRate !== null ? ` (${item.stockUsageRate.toFixed(1)}%)` : ''}</strong>
+                        <span>Desi Kullanımı</span><strong>{item.hasDesiData ? `${formatNumber(item.currentDesi)} / ${formatNumber(item.maxDesi)} (${item.desiUsageRate.toFixed(1)}%)` : 'Desi verisi yok'}</strong>
+                        <span>Kapasite</span><strong>{formatNumber(item.totalSlots)} fiziksel slot</strong>
                         <span>Son Besleme</span><strong>{formatDateTimeLabel(item.lastFeedAt)}</strong>
                       </div>
                     </button>

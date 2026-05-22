@@ -846,7 +846,24 @@ export const customerService = {
       .map((row) => row.id)
       .filter(Boolean);
 
-    await Promise.all(customerNotificationIds.map((id) => notificationRepo.deleteById(id)));
-    return { clearedCount: customerNotificationIds.length };
+    for (const id of customerNotificationIds) {
+      await notificationRepo.deleteById(id);
+    }
+
+    const remaining = await notificationRepo.findByUserId(customerId);
+    const stillVisibleIds = remaining
+      .filter((row) => {
+        const isCustomerNotification = row?.audience?.scope === 'customer'
+          || String(row?.actionType || '').toLowerCase() === 'customer';
+        return String(row?.userId || '') === String(customerId) && isCustomerNotification;
+      })
+      .map((row) => row.id)
+      .filter(Boolean);
+
+    for (const id of stillVisibleIds) {
+      await notificationRepo.deleteById(id);
+    }
+
+    return { clearedCount: customerNotificationIds.length + stillVisibleIds.length };
   },
 };

@@ -3,6 +3,7 @@ import { notificationRepo } from '../../repositories/notificationRepository.js';
 import { getPrisma } from '../../providers/postgresProvider.js';
 import { listActiveCampaignDefinitions } from '../campaignPricingService.js';
 import { eslService } from '../eslService.js';
+import { cleanSectionDisplayName } from '../../utils/displayLabels.js';
 
 const SHOWN_STATUS = 'SHOWN';
 const SKIPPED_STATUS = 'SKIPPED';
@@ -532,21 +533,30 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
     category: { select: { id: true, name: true, mainSectionName: true, mainSectionNo: true } },
   };
   const barcode = normalizeText(label.barcode);
-  let barcodeProduct = null;
-  if (!isPlaceholderBarcode(barcode)) {
-    barcodeProduct = await prisma.product.findFirst({
-      where: { barcode, isListed: { not: false }, isActive: { not: false } },
-      select: productSelect,
-    });
-    if (barcodeProduct) return barcodeProduct;
-  }
-
   const assignedProductId = normalizeText(
     eslDevice.assignedProductId
     || eslDevice.bridgeAssignedProductId
     || label.productId
     || label.assignedProductId
   );
+  let barcodeProduct = null;
+  if (!isPlaceholderBarcode(barcode)) {
+    barcodeProduct = await prisma.product.findFirst({
+      where: { barcode, isListed: { not: false }, isActive: { not: false } },
+      select: productSelect,
+    });
+    if (barcodeProduct) {
+      if (assignedProductId && String(barcodeProduct.id) !== String(assignedProductId)) {
+        console.warn('[proximity] label productId/barcode mismatch; using barcode product', {
+          assignedProductId,
+          barcode,
+          barcodeProductId: barcodeProduct.id,
+        });
+      }
+      return barcodeProduct;
+    }
+  }
+
   if (assignedProductId) {
     const product = await prisma.product.findFirst({
       where: { id: assignedProductId, isListed: { not: false }, isActive: { not: false } },
@@ -591,31 +601,25 @@ const resolveDiscountPrices = (label = {}) => {
   return { regularPrice, displayPrice, campaignPrice, effectivePrice };
 };
 
-const normalizeAisleName = (value) => {
-  const text = normalizeText(value);
-  if (!text) return '';
-  return text.replace(/\s+reyonu$/i, '').replace(/\s+reyon$/i, '').trim() || text;
-};
-
-const resolveProductAisle = ({ product = {}, context = {} } = {}) => {
-  const sourceName = normalizeText(product?.section?.name)
-    || normalizeText(product?.category?.mainSectionName)
-    || normalizeText(context.sectionName)
-    || normalizeText(context.zoneName)
-    || normalizeText(context.zoneCode)
-    || 'Bu reyon';
+const resolveProductAisle = ({ product = {}, label = {}, context = {} } = {}) => {
+  const sourceName = cleanSectionDisplayName(product?.section?.name, '')
+    || cleanSectionDisplayName(label.sectionName || label.displaySectionName || label.currentSectionName, '')
+    || cleanSectionDisplayName(product?.category?.mainSectionName, '')
+    || cleanSectionDisplayName(context.sectionName, '')
+    || cleanSectionDisplayName(context.zoneName, '')
+    || 'Yakındaki Reyon';
   const sectionId = normalizeText(product?.sectionId || product?.section?.id || context.sectionId) || null;
-  const sectionName = normalizeText(product?.section?.name || product?.category?.mainSectionName || context.sectionName) || null;
+  const sectionName = cleanSectionDisplayName(product?.section?.name || label.sectionName || label.displaySectionName || product?.category?.mainSectionName || context.sectionName || sourceName, 'Yakındaki Reyon');
   return {
     sectionId,
     sectionName,
-    aisleName: normalizeAisleName(sourceName),
+    displaySectionName: sourceName,
   };
 };
 
-const buildProductDiscountTitle = ({ aisleName }) => {
-  if (!aisleName || normalizeLower(aisleName) === 'bu reyon') return 'Bu reyondasın';
-  return `${aisleName} reyonundasın`;
+const buildNativeProductDiscountTitle = ({ sectionName }) => {
+  const name = normalizeText(sectionName) || 'Yakındaki Reyon';
+  return `${name} reyonundasın`;
 };
 
 const ruleConfigScore = (rule = {}, context = {}) => {
@@ -679,7 +683,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
 
   const productName = normalizeText(label.productName || product.name) || 'Bu ürün';
   const barcode = normalizeText(label.barcode || product.barcode);
-  const productAisle = resolveProductAisle({ product, context });
+  const productAisle = resolveProductAisle({ product, label, context });
+  const displaySectionName = normalizeText(productAisle.displaySectionName || productAisle.sectionName) || 'Yakındaki Reyon';
   const productDedupeKey = buildProductDiscountDedupeKey({ userId, productId: product.id, barcode });
   if (!productDedupeKey) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
   const ruleConfig = await findCustomerProximityRuleConfig({ context, eventType });
@@ -696,8 +701,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
       enforceNotificationDedupe: false,
       notification: {
         type: 'PROXIMITY_PRODUCT_DISCOUNT',
-        title: buildProductDiscountTitle({ aisleName: productAisle.aisleName }),
-        body: null,
+        title: displaySectionName,
+        body: 'İlgini çekebilecek ürünler keşfettik.',
         severity: 'info',
         actionType: 'route',
         actionLabel: 'Ürüne Git',
@@ -715,7 +720,9 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           zoneName: context.zoneName,
           sectionId: productAisle.sectionId,
           sectionName: productAisle.sectionName,
-          aisleName: productAisle.aisleName || null,
+          displaySectionName,
+          nativeTitle: buildNativeProductDiscountTitle({ sectionName: displaySectionName }),
+          nativeBody: 'İlgini çekebilecek ürünler keşfettik.',
           actionUrl,
           actionLabel: 'Ürüne Git',
           eslDeviceId,

@@ -86,6 +86,7 @@ function resolveProduct(product) {
     barcode,
     salePrice: price,
     previousSalePrice: Number(product.previousSalePrice ?? product.previousPrice ?? product.oldPrice ?? 0) || 0,
+    hasDiscountPrice: Number(product.previousSalePrice ?? product.previousPrice ?? product.oldPrice ?? 0) > price,
     origin: normalizeTrToAscii(product.origin || 'Turkiye'),
     fdt: formatFdtLabel(product.lastPriceChangeDate || product.lastPriceChangeAt || product.fdt || product.expiryDate || ''),
   };
@@ -381,21 +382,22 @@ function drawDiscountLabel(ctx, data) {
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.fillStyle = '#ffffff';
 
-  const previous = data.previousSalePrice > 0 ? data.previousSalePrice : data.salePrice;
-  drawSmallPriceCentered(ctx, previous, boxX + 8, 82, boxY + 37);
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(boxX + 8, boxY + 32);
-  ctx.lineTo(boxX + 86, boxY + 24);
-  ctx.moveTo(boxX + 8, boxY + 33);
-  ctx.lineTo(boxX + 86, boxY + 25);
-  ctx.stroke();
+  if (data.hasDiscountPrice) {
+    drawSmallPriceCentered(ctx, data.previousSalePrice, boxX + 8, 82, boxY + 37);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(boxX + 8, boxY + 32);
+    ctx.lineTo(boxX + 86, boxY + 24);
+    ctx.moveTo(boxX + 8, boxY + 33);
+    ctx.lineTo(boxX + 86, boxY + 25);
+    ctx.stroke();
+  }
 
   const { major, minor } = splitPrice(data.salePrice);
   const minorText = `,${minor}`;
-  const newPriceX = boxX + 110;
-  const newPriceW = boxW - 116;
+  const newPriceX = data.hasDiscountPrice ? boxX + 110 : boxX + 8;
+  const newPriceW = data.hasDiscountPrice ? boxW - 116 : boxW - 16;
   ctx.textAlign = 'left';
   ctx.font = `bold 41px ${font.system}`;
   const majorW = ctx.measureText(major).width;

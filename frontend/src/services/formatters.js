@@ -119,6 +119,9 @@ export const cleanSectionDisplayName = (value, fallback = '-') => {
   const text = normalizeTurkishText(value, '');
   const cleaned = text
     .replace(/\s*\([^)]*(?:karma|ambiyans|°c|\/|❄|soğuk|sıcaklık|derece)[^)]*\)\s*/giu, ' ')
+    .replace(/\s*(?:❄|🌡️|🌡|🧊)?\s*[+-]?\d+\s*\/\s*[+-]?\d+\s*°?\s*c\b.*$/iu, '')
+    .replace(/\s*(?:❄|🌡️|🌡|🧊)\s*-?\d+\s*°?\s*c\b.*$/iu, '')
+    .replace(/\s+[-–—]\s*(?:soğuk|sıcaklık|derece|ambiyans)\s*:?.*$/iu, '')
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned || fallback;

@@ -232,12 +232,6 @@ const resolveEslLabelPricing = (product = {}, activeCampaigns = []) => {
 
 const resolveTemplateForEslPricing = (template, eslPricing = {}) => {
   const requestedTemplate = toOptionalString(template || 'standard', 40) || 'standard';
-  if (!eslPricing.hasActiveCampaign && (requestedTemplate === 'campaign' || requestedTemplate === 'discount')) {
-    return 'standard';
-  }
-  if (eslPricing.hasActiveCampaign && (requestedTemplate === 'standard' || requestedTemplate === 'campaign')) {
-    return 'discount';
-  }
   return requestedTemplate;
 };
 

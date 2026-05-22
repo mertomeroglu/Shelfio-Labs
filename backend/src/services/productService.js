@@ -18,7 +18,7 @@ import { getPrisma } from '../providers/postgresProvider.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
 import { decodeCursor, encodeCursor, parseBooleanQuery, parseLimit, parsePagePagination, resolvePaginationMode, resolveWhitelistedSort } from '../utils/pagination.js';
 import { CAPACITY_MODES, DEPOT_ASSIGNMENT_TYPES } from '../utils/depotAssignment.js';
-import { formatDepotLocationLabel, formatStorageTypeLabel } from '../utils/displayLabels.js';
+import { cleanSectionDisplayName, formatDepotLocationLabel, formatStorageTypeLabel } from '../utils/displayLabels.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
 import { buildProductUniverseWhere, matchesProductUniverse, normalizeProductUniverse } from '../utils/productUniverse.js';
 import { deriveShelfStockAlert, stockAlertToSignals } from '../utils/retailStockPolicy.js';
@@ -1272,7 +1272,7 @@ const mapProductListRow = (product, activeCampaigns = [], campaignOptions = {}) 
     labelSlug,
     categoryName: category?.name || payload.categoryName || product.categoryName || null,
     supplierName: supplier?.name || null,
-    sectionName: section?.name || null,
+    sectionName: cleanSectionDisplayName(section?.name, ''),
     sectionNumber: section?.number || null,
     supplierCount: supplierRows.length,
     defaultSupplierId: defaultRow?.supplierId || null,
@@ -1886,7 +1886,7 @@ const enrichProduct = async (product, activeCampaigns = null, campaignOptions = 
   const shelfLocations = section
     ? [{
       sectionId: section.id,
-      sectionName: section.name,
+      sectionName: cleanSectionDisplayName(section.name, section.name),
       sectionNumber: section.number,
       shelfSide: product.shelfSide || null,
       shelfNo: product.shelfNo || null,
@@ -1991,7 +1991,7 @@ const enrichProduct = async (product, activeCampaigns = null, campaignOptions = 
     defaultWarehouseLocationCode,
     alternativeWarehouseLocationCodes,
     depotLocations,
-    sectionName: section?.name || null,
+    sectionName: cleanSectionDisplayName(section?.name, ''),
     sectionNumber: section?.number || null,
     shelfLocations,
     warehouseStock,
@@ -2299,7 +2299,7 @@ export const productService = {
           warehouseStock,
           stockBatches: batches,
         }),
-        sectionName: section?.name || null,
+        sectionName: cleanSectionDisplayName(section?.name, ''),
         sectionNumber: section?.number || null,
         warehouseStock,
         shelfStock,
