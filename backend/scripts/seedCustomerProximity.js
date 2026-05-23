@@ -11,6 +11,7 @@ const ZONE_ID = 'prox-zone-mobil-promo-01';
 const BEACON_ID = 'prox-beacon-esp-sut-01';
 const RULE_ID = 'prox-rule-mobil-promo-customer';
 const TEST_COOLDOWN_SECONDS = 5;
+const TEST_PRODUCT_DEDUPE_SECONDS = 60;
 
 const TEST_ZONE_CODES = ['zone_promo_01', 'zone_beacon_01', 'zone_sut_reyonu'];
 const TEST_NAME_PARTS = ['Mobil Promosyon', 'Raf Beacon', 'Süt Reyonu', 'Test Beacon'];
@@ -209,6 +210,7 @@ const main = async () => {
         isActive: true,
         payload: {
           cooldownSeconds: TEST_COOLDOWN_SECONDS,
+          productDedupeSeconds: TEST_PRODUCT_DEDUPE_SECONDS,
           actionLabel: 'Fırsatları Gör',
         },
       },
@@ -255,6 +257,7 @@ const main = async () => {
         trigger: cleanup.created.notificationRule.trigger,
         actionUrl: cleanup.created.notificationRule.actionUrl,
         cooldownSeconds: cleanup.created.notificationRule.payload?.cooldownSeconds || null,
+        productDedupeSeconds: cleanup.created.notificationRule.payload?.productDedupeSeconds || null,
       },
     },
   }, null, 2));

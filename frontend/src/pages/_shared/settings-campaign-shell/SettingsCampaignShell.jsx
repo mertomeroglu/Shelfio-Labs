@@ -1592,22 +1592,41 @@ const AUTO_SALE_DENSITY_OPTIONS = [
   { value: 'medium', label: 'Orta', minDelay: 6000, maxDelay: 10000 },
   { value: 'high', label: 'Yüksek', minDelay: 2500, maxDelay: 5000 },
 ];
+const AUTO_SALE_DURATION_OPTIONS = [
+  { value: '5', label: '5 dakika', minutes: 5 },
+  { value: '10', label: '10 dakika', minutes: 10 },
+  { value: '30', label: '30 dakika', minutes: 30 },
+  { value: '60', label: '1 saat', minutes: 60 },
+  { value: 'manual', label: 'Manuel durdurulana kadar', minutes: null },
+];
 const DEFAULT_AUTO_SALE_CONFIG = {
   density: 'medium',
   deskCodes: ['B1', 'B2', 'B3'],
   minAmount: '50',
   maxAmount: '500',
+  duration: 'manual',
+  returnRate: '3',
 };
 const DEFAULT_AUTO_SALE_SUMMARY = {
   totalCount: 0,
   totalAmount: 0,
   lastSaleAt: '',
   activeDeskCodes: [],
+  returnedCount: 0,
+  endsAt: '',
 };
 const AUTO_SALE_DESK_OPTIONS = SYSTEM_DESK_ROWS.map((row) => ({
   code: row.code,
   label: row.label.replace(/\s*PIN$/i, ''),
 }));
+
+const formatAutoSaleRemainingTime = (milliseconds) => {
+  if (milliseconds === null || milliseconds === undefined) return 'Manuel';
+  const totalSeconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
 
 const NOTIFICATION_SOUND_ENABLED_KEY = 'shelfio.toast.sound.enabled';
 const NOTIFICATION_SOUND_VOLUME_KEY = 'shelfio.toast.sound.volume';
@@ -1896,7 +1915,7 @@ const getDeveloperLogPresentation = (row) => {
   const requestDetails = buildLogDetailLines(log.requestPayload || log.payload, 'İstek');
   const responseDetails = buildLogDetailLines(log.response, 'Yanıt');
   const extraDetails = [
-    log.statusCode ? `Status Code: ${log.statusCode}` : '',
+    log.statusCode ? `Durum kodu: ${log.statusCode}` : '',
     log.errorType ? `Hata Sınıfı: ${log.errorType}` : '',
     log.requestUrl || log.endpoint ? `Endpoint: ${log.requestUrl || log.endpoint}` : '',
     log.browserInfo ? `Tarayıcı: ${log.browserInfo}` : '',
@@ -2002,8 +2021,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [autoSaleConfig, setAutoSaleConfig] = useState(DEFAULT_AUTO_SALE_CONFIG);
   const [autoSaleSummary, setAutoSaleSummary] = useState(DEFAULT_AUTO_SALE_SUMMARY);
   const [autoSaleError, setAutoSaleError] = useState('');
+  const [autoSaleRemainingMs, setAutoSaleRemainingMs] = useState(null);
   const autoSaleTimerRef = useRef(null);
+  const autoSaleCountdownRef = useRef(null);
   const autoSaleActiveRef = useRef(false);
+  const autoSaleEndsAtRef = useRef(null);
   const [campaignTypeView, setCampaignTypeView] = useState(() => {
     if (typeof window === 'undefined') return 'all';
     try {
@@ -2190,9 +2212,15 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const stopAutoSaleAutomation = () => {
     autoSaleActiveRef.current = false;
     setAutoSaleActive(false);
+    autoSaleEndsAtRef.current = null;
+    setAutoSaleRemainingMs(null);
     if (autoSaleTimerRef.current) {
       window.clearTimeout(autoSaleTimerRef.current);
       autoSaleTimerRef.current = null;
+    }
+    if (autoSaleCountdownRef.current) {
+      window.clearInterval(autoSaleCountdownRef.current);
+      autoSaleCountdownRef.current = null;
     }
   };
 
@@ -2210,6 +2238,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
     if (minAmount > maxAmount) {
       return 'Minimum tutar maksimum tutardan büyük olamaz.';
+    }
+    const returnRate = Number(config.returnRate);
+    if (!Number.isFinite(returnRate) || returnRate < 0 || returnRate > 100) {
+      return 'İade oranı 0 ile 100 arasında olmalıdır.';
     }
     return '';
   };
@@ -2231,23 +2263,33 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   };
 
   const scheduleNextAutoSale = (config) => {
+    if (autoSaleEndsAtRef.current && Date.now() >= autoSaleEndsAtRef.current) {
+      stopAutoSaleAutomation();
+      return;
+    }
     const density = AUTO_SALE_DENSITY_OPTIONS.find((item) => item.value === config.density) || AUTO_SALE_DENSITY_OPTIONS[1];
     const delay = density.minDelay + Math.floor(Math.random() * (density.maxDelay - density.minDelay + 1));
+    const safeDelay = autoSaleEndsAtRef.current ? Math.min(delay, Math.max(0, autoSaleEndsAtRef.current - Date.now())) : delay;
     autoSaleTimerRef.current = window.setTimeout(() => {
       void createAutoSaleTick(config);
-    }, delay);
+    }, safeDelay);
   };
 
   const createAutoSaleTick = async (config) => {
     if (!autoSaleActiveRef.current) return;
+    if (autoSaleEndsAtRef.current && Date.now() >= autoSaleEndsAtRef.current) {
+      stopAutoSaleAutomation();
+      return;
+    }
     const deskCodes = Array.isArray(config.deskCodes) ? config.deskCodes : [];
     const deskCode = deskCodes[Math.floor(Math.random() * deskCodes.length)];
     const minAmount = Number(config.minAmount);
     const maxAmount = Number(config.maxAmount);
     const amount = Math.round((minAmount + Math.random() * (maxAmount - minAmount)) * 100) / 100;
+    const returnRate = Math.max(0, Math.min(Number(config.returnRate || 0), 100)) / 100;
 
     try {
-      const response = await posService.createAutomaticSale({ deskCode, amount, source: AUTO_SALE_SOURCE });
+      const response = await posService.createAutomaticSale({ deskCode, amount, returnRate, source: AUTO_SALE_SOURCE });
       const sale = response?.data || response;
       const saleAmount = Number(sale?.totalAmount ?? amount);
       const saleTime = sale?.createdAt || new Date().toISOString();
@@ -2256,6 +2298,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         totalAmount: Math.round((Number(current.totalAmount || 0) + saleAmount) * 100) / 100,
         lastSaleAt: saleTime,
         activeDeskCodes: deskCodes,
+        returnedCount: Number(current.returnedCount || 0) + (sale?.automaticReturnCreated ? 1 : 0),
+        endsAt: current.endsAt,
       }));
       scheduleNextAutoSale(config);
     } catch (error) {
@@ -2275,16 +2319,35 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...autoSaleConfig,
       deskCodes: [...autoSaleConfig.deskCodes],
     };
+    const durationOption = AUTO_SALE_DURATION_OPTIONS.find((item) => item.value === nextConfig.duration);
+    const endsAt = durationOption?.minutes ? Date.now() + (durationOption.minutes * 60 * 1000) : null;
     setAutoSaleError('');
-    setAutoSaleSummary((current) => ({ ...current, activeDeskCodes: nextConfig.deskCodes }));
+    autoSaleEndsAtRef.current = endsAt;
+    setAutoSaleRemainingMs(endsAt ? Math.max(0, endsAt - Date.now()) : null);
+    setAutoSaleSummary((current) => ({ ...current, activeDeskCodes: nextConfig.deskCodes, endsAt: endsAt ? new Date(endsAt).toISOString() : '' }));
     autoSaleActiveRef.current = true;
     setAutoSaleActive(true);
+    if (autoSaleCountdownRef.current) window.clearInterval(autoSaleCountdownRef.current);
+    autoSaleCountdownRef.current = window.setInterval(() => {
+      if (!autoSaleEndsAtRef.current) {
+        setAutoSaleRemainingMs(null);
+        return;
+      }
+      const remaining = Math.max(0, autoSaleEndsAtRef.current - Date.now());
+      setAutoSaleRemainingMs(remaining);
+      if (remaining <= 0) {
+        stopAutoSaleAutomation();
+      }
+    }, 1000);
     void createAutoSaleTick(nextConfig);
   };
 
   useEffect(() => () => {
     if (autoSaleTimerRef.current) {
       window.clearTimeout(autoSaleTimerRef.current);
+    }
+    if (autoSaleCountdownRef.current) {
+      window.clearInterval(autoSaleCountdownRef.current);
     }
     autoSaleActiveRef.current = false;
   }, []);
@@ -2399,9 +2462,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         setCrossModuleLoading(true);
         setCrossModuleError('');
         const [pricingAnalysis, purchaseSuggestions, campaignAnalysis] = await Promise.all([
-          pricingAnalysisService.getAnalysis({}),
+          pricingAnalysisService.getAnalysis({ full: true, forceRefresh: true }),
           procurementService.listSuggestions({ status: 'pending' }),
-          campaignAnalysisService.getSuggestions({ forceRefresh: true }),
+          campaignAnalysisService.getSuggestions({ full: true, limit: 1000, forceRefresh: true }),
         ]);
         setPricingSignals(pricingAnalysis?.sections || {});
         setBackendCampaignRows(Array.isArray(campaignAnalysis?.rows) ? campaignAnalysis.rows : []);
@@ -4148,25 +4211,28 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           ? 'Simülasyon için en az bir marka seçin.'
       : 'Simülasyon için Ürün verisi bulunamadı.',
   }), [campaignDraft.discountRate, campaignDraft.type, campaignDraftScopeProductCount, campaignDraftScopeRows, campaignSimulationDurationDays, campaignTypeView, form.currency]);
-  const campaignSimulationRequest = useMemo(() => ({
-    type: campaignDraft.type || campaignTypeView || 'general',
-    discountRate: Number(campaignDraft.discountRate || 0),
-    durationDays: campaignSimulationDurationDays,
-    startsAt: campaignDraft.startsAt || '',
-    endsAt: campaignDraft.endsAt || '',
-    isIndefinite: Boolean(campaignDraft.isIndefinite),
-    targetProductIds: Array.isArray(campaignDraft.targetProductIds) ? campaignDraft.targetProductIds : [],
-    targetCategoryIds: Array.isArray(campaignDraft.targetCategoryIds) ? campaignDraft.targetCategoryIds : [],
-    targetBrands: selectedCampaignBrands,
-    scopeLabel: campaignTypeView === 'product'
-      ? 'Ürün Bazlı Kampanya'
-      : campaignTypeView === 'category'
-        ? 'Kategori Bazlı Kampanya'
-        : campaignTypeView === 'brand'
-          ? 'Marka Bazlı Kampanya'
-          : 'Genel Mağaza İndirimi',
-    currency: form.currency,
-  }), [
+  const campaignSimulationRequest = useMemo(() => {
+    const requestType = campaignDraft.type || campaignTypeView || 'general';
+    return {
+      type: requestType,
+      discountRate: Number(campaignDraft.discountRate || 0),
+      durationDays: campaignSimulationDurationDays,
+      startsAt: campaignDraft.startsAt || '',
+      endsAt: campaignDraft.endsAt || '',
+      isIndefinite: Boolean(campaignDraft.isIndefinite),
+      targetProductIds: requestType === 'product' && Array.isArray(campaignDraft.targetProductIds) ? campaignDraft.targetProductIds : [],
+      targetCategoryIds: requestType === 'category' && Array.isArray(campaignDraft.targetCategoryIds) ? campaignDraft.targetCategoryIds : [],
+      targetBrands: requestType === 'brand' ? selectedCampaignBrands : [],
+      scopeLabel: campaignTypeView === 'product'
+        ? 'Ürün Bazlı Kampanya'
+        : campaignTypeView === 'category'
+          ? 'Kategori Bazlı Kampanya'
+          : campaignTypeView === 'brand'
+            ? 'Marka Bazlı Kampanya'
+            : 'Genel Mağaza İndirimi',
+      currency: form.currency,
+    };
+  }, [
     campaignDraft.discountRate,
     campaignDraft.endsAt,
     campaignDraft.isIndefinite,
@@ -5027,6 +5093,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   );
   const assignedGiftCardCount = campaignCustomerGiftCardMap.size;
   const activeGiftCardCount = giftCards.filter((card) => card?.isActive !== false).length;
+  const autoSaleEligibleProductCount = useMemo(() => (
+    availableProducts.filter((product) => {
+      if (!product?.id || product.isActive === false || product.isListed === false) return false;
+      const stock = Number(product.currentStock ?? product.stockLevel ?? product.quantity ?? product.shelfQuantity ?? 0);
+      const price = Number(product.effectivePrice ?? product.currentPrice ?? product.salePrice ?? product.price ?? 0);
+      return stock > 0 && price > 0;
+    }).length
+  ), [availableProducts]);
 
   const matchesCampaignRowSearch = (row, query) => {
     const needle = normalizeSearchText(query);
@@ -5675,7 +5749,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       {total ? (
         <div className="table-wrapper campaign-insight-table-wrap">
           <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-suggestion-table">
-            <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
+            <thead><tr>{columns.map((column) => <th key={column.key} className={column.className || ''}>{column.label}</th>)}</tr></thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -6542,10 +6616,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ) : null}
 
       {isCampaignPage && campaignSuggestions.length ? (
-        <div className="sr-only campaign-sr-actions" aria-label="Campaign suggestion quick actions">
+        <div className="sr-only campaign-sr-actions" aria-label="Kampanya önerisi hızlı aksiyonları">
           {campaignSuggestions.slice(0, 5).map((suggestion) => (
-            <button key={`sr-${suggestion.id}`} type="button" aria-label="Create Campaign from Suggestion" onClick={() => createCampaignFromSuggestion(suggestion)}>
-              Create Campaign from Suggestion
+            <button key={`sr-${suggestion.id}`} type="button" aria-label="Öneriden kampanya oluştur" onClick={() => createCampaignFromSuggestion(suggestion)}>
+              Öneriden kampanya oluştur
             </button>
           ))}
         </div>
@@ -6557,7 +6631,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <div className="s-card-icon s-icon-green"><Coins size={18} /></div>
             <div>
               <h3 className="s-card-title">Otomatik Satış Paneli</h3>
-              <p className="s-card-desc">Seçilen kasalar üzerinden rastgele tutarlarda satış hareketi üretir.</p>
+              <p className="s-card-desc">Seçilen kasalar üzerinden gerçek ürünlerle satış hareketi üretir.</p>
             </div>
           </div>
 
@@ -6572,13 +6646,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
             <div className="s-auto-sale-status-box">
               <span className="s-auto-sale-status-badge is-passive">
-                {AUTO_SALE_SOURCE}
+                Kaynak: Otomatik satış paneli
               </span>
-              <p>Üretilen her satış sistem kaynağıyla ayrıştırılır; manuel POS satış akışı kullanılmaz.</p>
+              <p>Üretilen satışlar gerçek ürün, stok ve ödeme akışıyla kaydedilir.</p>
             </div>
           </div>
 
           <fieldset className="s-auto-sale-fieldset">
+            <div className="s-auto-sale-fieldset-title">Sepet tutarı hedef aralığı</div>
             <div className="s-auto-sale-grid">
               <label className="s-field">
                 <span className="s-field-label">Yoğunluk</span>
@@ -6593,6 +6668,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               <label className="s-field">
                 <span className="s-field-label">Maksimum tutar</span>
                 <input className="s-config-input" type="number" min="0.01" step="0.01" value={autoSaleConfig.maxAmount} onChange={(event) => updateAutoSaleConfig('maxAmount', event.target.value)} disabled={autoSaleActive} />
+              </label>
+              <label className="s-field">
+                <span className="s-field-label">Çalışma süresi</span>
+                <select className="s-config-select" value={autoSaleConfig.duration} onChange={(event) => updateAutoSaleConfig('duration', event.target.value)} disabled={autoSaleActive}>
+                  {AUTO_SALE_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="s-field">
+                <span className="s-field-label">İade oranı (%)</span>
+                <input className="s-config-input" type="number" min="0" max="100" step="0.1" value={autoSaleConfig.returnRate} onChange={(event) => updateAutoSaleConfig('returnRate', event.target.value)} disabled={autoSaleActive} />
               </label>
             </div>
 
@@ -6638,6 +6723,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div><span>Toplam satış tutarı</span><strong>{formatCurrency(autoSaleSummary.totalAmount)}</strong></div>
                 <div><span>Son satış zamanı</span><strong>{autoSaleSummary.lastSaleAt ? formatDate(autoSaleSummary.lastSaleAt) : '-'}</strong></div>
                 <div><span>Aktif kasalar</span><strong>{(autoSaleSummary.activeDeskCodes || autoSaleConfig.deskCodes).join(', ') || '-'}</strong></div>
+                <div><span>Stokta uygun ürün sayısı</span><strong>{formatNumber(autoSaleEligibleProductCount)}</strong></div>
+                <div><span>Kalan süre</span><strong>{autoSaleActive ? formatAutoSaleRemainingTime(autoSaleRemainingMs) : '-'}</strong></div>
+                <div><span>İade oranı</span><strong>%{Number(autoSaleConfig.returnRate || 0).toLocaleString('tr-TR')}</strong></div>
+                <div><span>Oluşan iade adedi</span><strong>{formatNumber(autoSaleSummary.returnedCount || 0)}</strong></div>
               </div>
             </section>
           </div>
@@ -7834,7 +7923,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       emptyDescription: 'Satış hızı veya stok devri filtresini genişleterek yeni öneriler görebilirsiniz.',
                       columns: [
                         { key: 'campaign', label: 'Kampanya', className: 'campaign-insight-title-cell', render: (suggestion) => <strong>{normalizeCampaignInsightText(suggestion.title)}</strong> },
-                        { key: 'reason', label: 'Gerekçe', className: 'campaign-insight-note-cell', render: (suggestion) => normalizeCampaignInsightText(suggestion.reason) },
+                        {
+                          key: 'reason',
+                          label: 'Gerekçe',
+                          className: 'campaign-insight-note-cell campaign-sales-reason-cell',
+                          render: (suggestion) => (
+                            <span className="campaign-sales-reason-text">{normalizeCampaignInsightText(suggestion.reason)}</span>
+                          ),
+                        },
                         { key: 'product', label: 'Ürün', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} ürün` },
                         { key: 'margin', label: 'Ortalama Marj', className: 'campaign-insight-metric-cell', render: (suggestion) => `%${formatNumber(averageCampaignMetric(getCampaignSuggestionRows(suggestion), (row) => Number(row?.currentMarginPercent || 0)))}` },
                         { key: 'type', label: 'Tür', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel')} kampanya</span> },
@@ -9605,7 +9701,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <input type="text" value={selectedDeveloperLogView.action} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
-                  <span>Status Code</span>
+                  <span>Durum kodu</span>
                   <input type="text" value={selectedDeveloperLog?.statusCode || '-'} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">

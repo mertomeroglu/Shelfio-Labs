@@ -21,6 +21,18 @@ const PRODUCT_DISCOUNT_NATIVE_BODY = 'İlgini çekebilecek ürünler keşfettik.
 
 const isDev = () => Boolean(import.meta.env?.DEV);
 const normalizeText = (value) => String(value || '').trim();
+const logProximityDecision = ({ response = {}, payload = {} } = {}) => {
+  if (!isDev()) return;
+  console.info('[proximity] no customer notification', {
+    reason: response?.reason || 'NO_REASON',
+    productId: response?.productId || response?.notification?.payload?.productId || null,
+    barcode: response?.barcode || response?.notification?.payload?.barcode || null,
+    productName: response?.productName || response?.notification?.payload?.productName || null,
+    dedupeKey: response?.dedupeKey || null,
+    dedupeUntil: response?.dedupeUntil || null,
+    eventType: payload?.eventType || null,
+  });
+};
 
 const readCustomerId = () => {
   if (typeof window === 'undefined') return 'guest';
@@ -257,7 +269,7 @@ export default function ProximityEventProvider({ children }) {
         if (disposed || !response?.success) return;
 
         if (!response.shouldNotify || !response.notification) {
-          if (isDev()) console.debug('[proximity] no customer notification', response?.reason || 'NO_REASON');
+          logProximityDecision({ response, payload: normalized.payload });
           return;
         }
 

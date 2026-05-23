@@ -35,10 +35,26 @@ const EVENT_TYPES = ['ZONE_ENTER', 'DWELL', 'ZONE_EXIT'];
 const SOURCES = ['WEBVIEW_BRIDGE', 'ANDROID_NATIVE', 'ANDROID_BLE'];
 const DELIVERY_STATUSES = ['SHOWN', 'SKIPPED', 'CLICKED', 'DISMISSED', 'FAILED'];
 const PM_PAGE_SIZE = 10;
+const REASON_LABELS = {
+  PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H: 'Bu ürün için yakın zamanda bildirim gönderildi',
+  NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT: 'Etiketteki üründe aktif indirim yok',
+  UNKNOWN_BEACON: 'Beacon eşleşmedi',
+  NOT_AUTHENTICATED: 'Müşteri oturumu yok',
+};
 
 const empty = (value) => {
   if (value === null || value === undefined || value === '') return '-';
   return value;
+};
+
+const formatReason = (value) => {
+  const code = String(value || '').trim();
+  if (!code) return '-';
+  if (code === 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H') return 'Bu \u00fcr\u00fcn i\u00e7in yak\u0131n zamanda bildirim g\u00f6nderildi';
+  if (code === 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT') return 'Etiketteki \u00fcr\u00fcnde aktif indirim yok';
+  if (code === 'UNKNOWN_BEACON') return 'Beacon e\u015fle\u015fmedi';
+  if (code === 'NOT_AUTHENTICATED') return 'M\u00fc\u015fteri oturumu yok';
+  return REASON_LABELS[code] || code;
 };
 
 const formatDate = (value) => {
@@ -665,6 +681,11 @@ function EventLogTab({ rows, filters, setFilters, onRefresh, loading, beacons, z
             <th>Source</th>
             <th>Sonuç</th>
             <th>Reason</th>
+            <th>Ürün</th>
+            <th>Product ID</th>
+            <th>Barcode</th>
+            <th>Dedupe key</th>
+            <th>Dedupe until</th>
           </tr>
         </thead>
         <tbody>
@@ -679,7 +700,12 @@ function EventLogTab({ rows, filters, setFilters, onRefresh, loading, beacons, z
               <td>{empty(row.eventType)}</td>
               <td>{empty(row.source)}</td>
               <td>{row.delivery?.status ? <StatusPill value={row.delivery.status} /> : '-'}</td>
-              <td>{empty(row.delivery?.skipReason || row.reason)}</td>
+              <td>{formatReason(row.delivery?.skipReason || row.reason)}</td>
+              <td>{empty(row.productName || row.productId)}</td>
+              <td className="pm-mono">{empty(row.productId)}</td>
+              <td className="pm-mono">{empty(row.barcode)}</td>
+              <td className="pm-mono">{empty(row.dedupeKey)}</td>
+              <td>{formatDate(row.dedupeUntil)}</td>
             </tr>
           ))}
         </tbody>
@@ -707,9 +733,12 @@ function DeliveryLogTab({ rows, filters, setFilters, onRefresh, loading, beacons
             <th>Status</th>
             <th>Skip reason</th>
             <th>Ürün</th>
+            <th>Product ID</th>
+            <th>Barcode</th>
             <th>Zone</th>
             <th>Beacon</th>
             <th>Dedupe key</th>
+            <th>Dedupe until</th>
           </tr>
         </thead>
         <tbody>
@@ -720,11 +749,14 @@ function DeliveryLogTab({ rows, filters, setFilters, onRefresh, loading, beacons
               <td>{empty(row.notificationRule?.name || row.notificationRuleId)}</td>
               <td>{empty(row.notification?.title || row.notificationId)}</td>
               <td><StatusPill value={row.status} /></td>
-              <td>{empty(row.skipReason)}</td>
+              <td>{formatReason(row.skipReason || row.reason)}</td>
               <td>{empty(row.productName || row.productId)}</td>
+              <td className="pm-mono">{empty(row.productId)}</td>
+              <td className="pm-mono">{empty(row.barcode)}</td>
               <td>{empty(row.zoneName || row.locationZone?.name || row.locationZoneId)}</td>
               <td>{empty(row.beaconDevice?.name || row.beaconDevice?.deviceCode || row.beaconDeviceId)}</td>
               <td className="pm-mono">{empty(row.dedupeKey)}</td>
+              <td>{formatDate(row.dedupeUntil)}</td>
             </tr>
           ))}
         </tbody>

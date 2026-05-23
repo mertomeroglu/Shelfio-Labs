@@ -49,6 +49,11 @@ const parsePort = (value, fallback = 0) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const parsePositiveSeconds = (value, fallback) => {
+  const parsed = Number(String(value || '').trim());
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+};
+
 const toList = (value) => String(value || '')
   .split(',')
   .map((item) => item.trim())
@@ -144,6 +149,7 @@ export const config = {
   smtpGreetingTimeoutMs: parsePort(process.env.SMTP_GREETING_TIMEOUT_MS, 10000),
   smtpSocketTimeoutMs: parsePort(process.env.SMTP_SOCKET_TIMEOUT_MS, 15000),
   publicApiBaseUrl: process.env.PUBLIC_API_BASE_URL || `http://localhost:${parsePort(process.env.PORT, 4000)}`,
+  proximityProductDedupeSeconds: parsePositiveSeconds(process.env.PROXIMITY_PRODUCT_DEDUPE_SECONDS, 12 * 60 * 60),
   eslDeviceToken: process.env.ESL_DEVICE_TOKEN || '',
   eslDeviceTokens: process.env.ESL_DEVICE_TOKENS || '',
   eslHeartbeatRateLimitPerMinute: parsePort(process.env.ESL_HEARTBEAT_RATE_LIMIT_PER_MINUTE, 20),

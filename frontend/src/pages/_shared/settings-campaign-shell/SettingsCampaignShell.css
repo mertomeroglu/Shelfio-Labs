@@ -10972,6 +10972,12 @@
   min-width: 0;
 }
 
+.s-auto-sale-fieldset-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #334155;
+}
+
 .s-auto-sale-fieldset:disabled {
   opacity: 0.58;
 }
@@ -14362,6 +14368,30 @@
   gap: 6px !important;
   line-height: 1.2 !important;
   vertical-align: middle !important;
+}
+
+.campaign-management-page .sales-campaign-page .campaign-insight-suggestion-table th.campaign-sales-reason-cell,
+.campaign-management-page .sales-campaign-page .campaign-insight-suggestion-table td.campaign-sales-reason-cell {
+  width: 36% !important;
+  min-width: 320px !important;
+  max-width: 520px !important;
+  white-space: normal !important;
+}
+
+.campaign-management-page .sales-campaign-page .campaign-insight-suggestion-table td.campaign-sales-reason-cell {
+  display: table-cell !important;
+  color: #475569 !important;
+  line-height: 1.35 !important;
+  vertical-align: middle !important;
+}
+
+.campaign-management-page .sales-campaign-page .campaign-sales-reason-text {
+  display: -webkit-box !important;
+  overflow: hidden !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-height: 1.35 !important;
+  max-height: 2.7em !important;
 }
 
 @media (max-width: 1180px) {

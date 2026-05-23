@@ -1,6 +1,7 @@
 import { proximityService } from '../services/proximityService.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 import { AppError, createNotFoundError } from '../utils/appError.js';
+import { config } from '../config/config.js';
 
 const normalizeText = (value) => String(value || '').trim();
 const normalizeUpper = (value) => normalizeText(value).toUpperCase();
@@ -22,6 +23,56 @@ const parsePage = (query = {}) => {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 30));
   return { page, limit, skip: (page - 1) * limit };
+};
+
+const PRODUCT_DISCOUNT_DEDUPE_PREFIX = 'proximity-product-discount:';
+const parseProductDedupeIdentity = (dedupeKey = '') => {
+  const text = normalizeText(dedupeKey);
+  if (!text.startsWith(PRODUCT_DISCOUNT_DEDUPE_PREFIX)) return null;
+  const parts = text.split(':');
+  return normalizeText(parts.slice(3).join(':')) || null;
+};
+
+const productDiagnosticsFromNotification = (notification = null) => {
+  const payload = notification?.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  return {
+    productId: normalizeText(payload.productId) || null,
+    barcode: normalizeText(payload.barcode) || null,
+    productName: normalizeText(payload.productName) || null,
+  };
+};
+
+const productDiagnosticsFromMaps = ({ notification = null, row = {}, productById = new Map(), productByBarcode = new Map() } = {}) => {
+  const fromNotification = productDiagnosticsFromNotification(notification);
+  const dedupeIdentity = parseProductDedupeIdentity(row.dedupeKey);
+  const product = (fromNotification.productId ? productById.get(fromNotification.productId) : null)
+    || (fromNotification.barcode ? productByBarcode.get(fromNotification.barcode) : null)
+    || (dedupeIdentity ? productById.get(dedupeIdentity) || productByBarcode.get(dedupeIdentity) : null)
+    || null;
+  return {
+    productId: fromNotification.productId || product?.id || (dedupeIdentity && !product ? dedupeIdentity : null),
+    barcode: fromNotification.barcode || product?.barcode || null,
+    productName: fromNotification.productName || product?.name || null,
+    dedupeKey: row.dedupeKey || null,
+  };
+};
+
+const parsePositiveSeconds = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 1 ? numeric : null;
+};
+
+const getRuleProductDedupeSeconds = (rule = null) => {
+  const payload = rule?.payload && typeof rule.payload === 'object' ? rule.payload : {};
+  return parsePositiveSeconds(payload.productDedupeSeconds ?? payload.testCooldownSeconds)
+    ?? config.proximityProductDedupeSeconds;
+};
+
+const resolveDeliveryDedupeUntil = (row = {}, rule = null) => {
+  if (row.skipReason !== 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H' || !row.createdAt) return null;
+  const createdAt = new Date(row.createdAt);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  return new Date(createdAt.getTime() + (getRuleProductDedupeSeconds(rule) * 1000)).toISOString();
 };
 
 const listResponse = (res, { items, total, page, limit, filters = {} }) => res.json({
@@ -363,25 +414,35 @@ export const proximityController = {
         ...(req.query.eventType ? { eventType: normalizeUpper(req.query.eventType) } : {}),
         ...(req.query.source ? { source: normalizeUpper(req.query.source) } : {}),
       };
-      const [total, rows, beacons, zones, deliveries, users, customers] = await Promise.all([
+      const [total, rows, beacons, zones, deliveries, rules, users, customers, products] = await Promise.all([
         prisma.proximityEvent.count({ where }),
         prisma.proximityEvent.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take: limit }),
         prisma.beaconDevice.findMany({ select: { id: true, name: true, deviceCode: true } }),
         prisma.locationZone.findMany({ select: { id: true, name: true, code: true } }),
         prisma.notificationDelivery.findMany({ orderBy: { createdAt: 'desc' }, take: 500 }),
+        prisma.notificationRule.findMany({ select: { id: true, name: true, payload: true } }),
         prisma.user.findMany({ select: { id: true, name: true, email: true, username: true } }),
         prisma.customer.findMany({ select: { id: true, name: true, email: true, phone: true, customerNo: true } }),
+        prisma.product.findMany({ select: { id: true, name: true, barcode: true } }),
       ]);
       const beaconMap = new Map(beacons.map((item) => [item.id, item]));
       const zoneMap = new Map(zones.map((item) => [item.id, item]));
       const deliveryByEvent = new Map(deliveries.map((item) => [item.proximityEventId, item]));
+      const ruleMap = new Map(rules.map((item) => [item.id, item]));
       const userMap = new Map(users.map((item) => [item.id, item]));
       const customerMap = new Map(customers.map((item) => [item.id, item]));
+      const productById = new Map(products.map((item) => [item.id, item]));
+      const productByBarcode = new Map(products.map((item) => [normalizeText(item.barcode), item]).filter(([barcode]) => barcode));
       const items = rows.map((row) => {
         const delivery = deliveryByEvent.get(row.id);
+        const deliveryRule = delivery?.notificationRuleId ? ruleMap.get(delivery.notificationRuleId) || null : null;
+        const diagnostics = productDiagnosticsFromMaps({ row: delivery || {}, productById, productByBarcode });
         const actor = row.userType === 'customer'
           ? customerMap.get(row.userId)
           : userMap.get(row.userId);
+        const inferredReason = delivery?.skipReason
+          || (!row.beaconDeviceId ? 'UNKNOWN_BEACON' : null)
+          || (!row.locationZoneId ? 'NO_MATCHING_ZONE' : null);
         return {
           ...row,
           beacon: row.beaconDeviceId ? beaconMap.get(row.beaconDeviceId) || null : null,
@@ -392,7 +453,12 @@ export const proximityController = {
           actor: row.userId ? actor || null : null,
           delivery: delivery || null,
           result: delivery?.status || 'LOGGED',
-          reason: delivery?.skipReason || null,
+          reason: inferredReason,
+          productId: diagnostics.productId,
+          barcode: diagnostics.barcode,
+          productName: diagnostics.productName,
+          dedupeKey: diagnostics.dedupeKey,
+          dedupeUntil: delivery ? resolveDeliveryDedupeUntil(delivery, deliveryRule) : null,
         };
       });
       listResponse(res, { items, total, page, limit, filters: req.query });
@@ -409,16 +475,17 @@ export const proximityController = {
         ...(req.query.beaconDeviceId ? { beaconDeviceId: normalizeText(req.query.beaconDeviceId) } : {}),
         ...(req.query.locationZoneId ? { locationZoneId: normalizeText(req.query.locationZoneId) } : {}),
       };
-      const [total, rows, rules, beacons, zones, notifications, users, customers, events] = await Promise.all([
+      const [total, rows, rules, beacons, zones, notifications, users, customers, events, products] = await Promise.all([
         prisma.notificationDelivery.count({ where }),
         prisma.notificationDelivery.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take: limit }),
-        prisma.notificationRule.findMany({ select: { id: true, name: true } }),
+        prisma.notificationRule.findMany({ select: { id: true, name: true, payload: true } }),
         prisma.beaconDevice.findMany({ select: { id: true, name: true, deviceCode: true } }),
         prisma.locationZone.findMany({ select: { id: true, name: true, code: true } }),
         prisma.notification.findMany({ select: { id: true, title: true, type: true, payload: true } }),
         prisma.user.findMany({ select: { id: true, name: true, email: true, username: true } }),
         prisma.customer.findMany({ select: { id: true, name: true, email: true, phone: true, customerNo: true } }),
         prisma.proximityEvent.findMany({ select: { id: true, userId: true, userType: true } }),
+        prisma.product.findMany({ select: { id: true, name: true, barcode: true } }),
       ]);
       const ruleMap = new Map(rules.map((item) => [item.id, item]));
       const beaconMap = new Map(beacons.map((item) => [item.id, item]));
@@ -427,24 +494,33 @@ export const proximityController = {
       const userMap = new Map(users.map((item) => [item.id, item]));
       const customerMap = new Map(customers.map((item) => [item.id, item]));
       const eventMap = new Map(events.map((item) => [item.id, item]));
+      const productById = new Map(products.map((item) => [item.id, item]));
+      const productByBarcode = new Map(products.map((item) => [normalizeText(item.barcode), item]).filter(([barcode]) => barcode));
       const items = rows.map((row) => {
         const event = row.proximityEventId ? eventMap.get(row.proximityEventId) || null : null;
+        const notification = row.notificationId ? notificationMap.get(row.notificationId) || null : null;
+        const rule = row.notificationRuleId ? ruleMap.get(row.notificationRuleId) || null : null;
+        const diagnostics = productDiagnosticsFromMaps({ notification, row, productById, productByBarcode });
         const actorType = event?.userType || null;
         const actor = actorType === 'customer'
           ? customerMap.get(row.userId)
           : userMap.get(row.userId);
         return {
           ...row,
-          rule: row.notificationRuleId ? ruleMap.get(row.notificationRuleId) || null : null,
-          notificationRule: row.notificationRuleId ? ruleMap.get(row.notificationRuleId) || null : null,
+          rule,
+          notificationRule: rule,
           beacon: row.beaconDeviceId ? beaconMap.get(row.beaconDeviceId) || null : null,
           beaconDevice: row.beaconDeviceId ? beaconMap.get(row.beaconDeviceId) || null : null,
           zone: row.locationZoneId ? zoneMap.get(row.locationZoneId) || null : null,
           locationZone: row.locationZoneId ? zoneMap.get(row.locationZoneId) || null : null,
-          notification: row.notificationId ? notificationMap.get(row.notificationId) || null : null,
-          productId: notificationMap.get(row.notificationId)?.payload?.productId || null,
-          productName: notificationMap.get(row.notificationId)?.payload?.productName || null,
-          zoneName: notificationMap.get(row.notificationId)?.payload?.zoneName || zoneMap.get(row.locationZoneId)?.name || null,
+          notification,
+          reason: row.skipReason || null,
+          productId: diagnostics.productId,
+          barcode: diagnostics.barcode,
+          productName: diagnostics.productName,
+          dedupeKey: diagnostics.dedupeKey,
+          dedupeUntil: resolveDeliveryDedupeUntil(row, rule),
+          zoneName: notification?.payload?.zoneName || zoneMap.get(row.locationZoneId)?.name || null,
           proximityEvent: event,
           user: row.userId ? actor || null : null,
           actor: row.userId ? actor || null : null,

@@ -4,11 +4,12 @@ import { getPrisma } from '../../providers/postgresProvider.js';
 import { listActiveCampaignDefinitions } from '../campaignPricingService.js';
 import { eslService } from '../eslService.js';
 import { cleanSectionDisplayName } from '../../utils/displayLabels.js';
+import { config } from '../../config/config.js';
 
 const SHOWN_STATUS = 'SHOWN';
 const SKIPPED_STATUS = 'SKIPPED';
 const DEFAULT_CUSTOMER_DOMAIN_COOLDOWN_MINUTES = 30;
-const PRODUCT_DISCOUNT_DEDUPE_WINDOW_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_PRODUCT_DISCOUNT_DEDUPE_SECONDS = 12 * 60 * 60;
 const CUSTOMER_NOTIFICATION_TYPES = new Set([
   'PROXIMITY_CAMPAIGN',
   'PROXIMITY_CATEGORY',
@@ -68,6 +69,13 @@ const parseCooldownSeconds = (value) => {
   if (!Number.isFinite(numeric) || numeric < 1) return null;
   return numeric;
 };
+const resolveProductDedupeSeconds = (value) => {
+  const configured = parseCooldownSeconds(value);
+  if (configured !== null) return configured;
+  const envConfigured = parseCooldownSeconds(config.proximityProductDedupeSeconds);
+  return envConfigured ?? DEFAULT_PRODUCT_DISCOUNT_DEDUPE_SECONDS;
+};
+const resolveProductDedupeMs = (value) => resolveProductDedupeSeconds(value) * 1000;
 const resolveCooldownMs = ({ cooldownSeconds = null, cooldownMinutes = null } = {}) => {
   const seconds = parseCooldownSeconds(cooldownSeconds);
   if (seconds !== null) return Math.round(seconds * 1000);
@@ -153,13 +161,14 @@ const createDelivery = async ({
   });
 };
 
-const createSkippedDelivery = async ({ userId, proximityEvent, beaconDevice, locationZone, context, reason }) => createDelivery({
+const createSkippedDelivery = async ({ userId, proximityEvent, beaconDevice, locationZone, context, reason, dedupeKey = null }) => createDelivery({
   userId,
   proximityEventId: proximityEvent.id,
   locationZoneId: context?.locationZoneId || locationZone?.id || proximityEvent.locationZoneId || null,
   beaconDeviceId: context?.beaconDeviceId || beaconDevice?.id || proximityEvent.beaconDeviceId || null,
   status: SKIPPED_STATUS,
   skipReason: reason,
+  dedupeKey,
 });
 
 const resolveExistingNotificationRuleId = async (ruleId) => {
@@ -194,10 +203,11 @@ const findRecentShownDelivery = async ({ userId, notificationRuleId, cooldownMs,
   });
 };
 
-const findRecentShownProductDiscountDelivery = async ({ userId, dedupeKey, now }) => {
+const findRecentShownProductDiscountDelivery = async ({ userId, dedupeKey, now, dedupeMs }) => {
   if (!userId || !dedupeKey) return null;
   const prisma = await getPrisma();
-  const since = new Date(now.getTime() - PRODUCT_DISCOUNT_DEDUPE_WINDOW_MS);
+  const safeDedupeMs = Math.max(1000, Number(dedupeMs) || resolveProductDedupeMs());
+  const since = new Date(now.getTime() - safeDedupeMs);
   return prisma.notificationDelivery.findFirst({
     where: {
       userId,
@@ -299,6 +309,8 @@ const deliverNotification = async ({
   bypassMaxPerVisit = false,
   productDedupeKey = null,
   productDedupeReason = 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H',
+  productDedupeSeconds = null,
+  productDiagnostic = null,
   enforceNotificationDedupe = true,
   notification,
   proximityEvent,
@@ -319,12 +331,15 @@ const deliverNotification = async ({
   });
 
   if (productDedupeKey) {
+    const productDedupeMs = resolveProductDedupeMs(productDedupeSeconds);
     const productDelivery = await findRecentShownProductDiscountDelivery({
       userId,
       dedupeKey: productDedupeKey,
       now,
+      dedupeMs: productDedupeMs,
     });
     if (productDelivery) {
+      const dedupeUntil = new Date(new Date(productDelivery.createdAt).getTime() + productDedupeMs);
       await createDelivery({
         userId,
         notificationRuleId,
@@ -335,7 +350,23 @@ const deliverNotification = async ({
         skipReason: productDedupeReason,
         dedupeKey: productDedupeKey,
       });
-      return { shouldNotify: false, reason: productDedupeReason };
+      console.info('[proximity] product discount notification suppressed by product dedupe', {
+        reason: productDedupeReason,
+        dedupeKey: productDedupeKey,
+        dedupeUntil: dedupeUntil.toISOString(),
+        productId: productDiagnostic?.productId || null,
+        barcode: productDiagnostic?.barcode || null,
+        proximityEventId: proximityEvent.id,
+      });
+      return {
+        shouldNotify: false,
+        reason: productDedupeReason,
+        dedupeUntil: dedupeUntil.toISOString(),
+        productId: productDiagnostic?.productId || null,
+        barcode: productDiagnostic?.barcode || null,
+        productName: productDiagnostic?.productName || null,
+        dedupeKey: productDedupeKey,
+      };
     }
   }
 
@@ -669,26 +700,45 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
   const product = await findLabelProduct({ label, eslDevice: {} });
   if (!product) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
   const labelHasDiscount = hasLabelDiscount(label);
-  if (!labelHasDiscount && !(await hasActiveCampaignForProduct(product))) {
-    return { candidate: null, reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT' };
-  }
-
   const actionUrl = buildProductDetailRoute(product.id);
   if (!actionUrl || !isCustomerActionUrl(actionUrl) || actionUrl.startsWith('/personel')) {
     return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
   }
 
-  const { regularPrice, displayPrice, campaignPrice, effectivePrice } = resolveDiscountPrices(label);
-  if (effectivePrice === null) return { candidate: null, reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT' };
-
   const productName = normalizeText(label.productName || product.name) || 'Bu ürün';
   const barcode = normalizeText(label.barcode || product.barcode);
+  const productDiagnostic = {
+    productId: product.id,
+    barcode: barcode || null,
+    productName,
+  };
   const productAisle = resolveProductAisle({ product, label, context });
   const displaySectionName = normalizeText(productAisle.displaySectionName || productAisle.sectionName) || 'Yakındaki Reyon';
   const productDedupeKey = buildProductDiscountDedupeKey({ userId, productId: product.id, barcode });
   if (!productDedupeKey) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
+
+  const { regularPrice, displayPrice, campaignPrice, effectivePrice } = resolveDiscountPrices(label);
+  if (effectivePrice === null) {
+    return {
+      candidate: null,
+      reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT',
+      productDiagnostic,
+      dedupeKey: productDedupeKey,
+    };
+  }
+
+  if (!labelHasDiscount && !(await hasActiveCampaignForProduct(product))) {
+    return {
+      candidate: null,
+      reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT',
+      productDiagnostic,
+      dedupeKey: productDedupeKey,
+    };
+  }
+
   const ruleConfig = await findCustomerProximityRuleConfig({ context, eventType });
   const rulePayload = isObject(ruleConfig?.payload) ? ruleConfig.payload : {};
+  const productDedupeSeconds = resolveProductDedupeSeconds(rulePayload.productDedupeSeconds ?? rulePayload.testCooldownSeconds);
   return {
     candidate: {
       ruleId: ruleConfig?.id || `domain:proximity-product-discount:${beaconDevice.id}:${eslDeviceId}:${product.id}`,
@@ -698,6 +748,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
       maxPerVisit: null,
       bypassMaxPerVisit: true,
       productDedupeKey,
+      productDedupeSeconds,
+      productDiagnostic,
       enforceNotificationDedupe: false,
       notification: {
         type: 'PROXIMITY_PRODUCT_DISCOUNT',
@@ -805,6 +857,8 @@ const evaluateCandidates = async ({ candidates, userId, userType, proximityEvent
       bypassMaxPerVisit: candidate.bypassMaxPerVisit === true,
       productDedupeKey: candidate.productDedupeKey || null,
       productDedupeReason: candidate.productDedupeReason || 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H',
+      productDedupeSeconds: candidate.productDedupeSeconds ?? null,
+      productDiagnostic: candidate.productDiagnostic || candidate.notification?.payload || null,
       enforceNotificationDedupe: candidate.enforceNotificationDedupe !== false,
       notification: candidate.notification,
       proximityEvent,
@@ -814,6 +868,7 @@ const evaluateCandidates = async ({ candidates, userId, userType, proximityEvent
     });
     if (result.shouldNotify) return result;
     lastReason = result.reason || lastReason;
+    if (result.reason) return result;
   }
   return { shouldNotify: false, reason: lastReason };
 };
@@ -848,8 +903,16 @@ export const notificationRuleEngine = {
         locationZone,
         context,
         reason: productDiscount.reason,
+        dedupeKey: productDiscount.dedupeKey || null,
       });
-      return { shouldNotify: false, reason: productDiscount.reason };
+      return {
+        shouldNotify: false,
+        reason: productDiscount.reason,
+        productId: productDiscount.productDiagnostic?.productId || null,
+        barcode: productDiscount.productDiagnostic?.barcode || null,
+        productName: productDiscount.productDiagnostic?.productName || null,
+        dedupeKey: productDiscount.dedupeKey || null,
+      };
     }
 
     const productDiscountResult = await evaluateCandidates({

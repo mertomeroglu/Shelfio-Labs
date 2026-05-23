@@ -3284,6 +3284,11 @@ export default function CustomerPortal() {
           <div className="customer-settings-child-card customer-notification-prefs-card">
             <h4 className="customer-notification-prefs-title"><Bell size={16} /> Bildirim Tercihleri</h4>
             <p className="customer-notification-prefs-desc">Size ulaşmasını istediğiniz mobil bildirimleri yönetin.</p>
+            {notificationPrefs.inAppNotifications === false && notificationPrefs.phoneNotifications === false ? (
+              <p className="customer-notification-prefs-desc" role="status">
+                Bildirimler kapalı olduğu için yakınlık fırsatları gösterilmiyor.
+              </p>
+            ) : null}
             <div className="customer-notification-prefs-list">
               <label className="customer-notification-pref-row">
                 <span className="customer-notification-pref-copy">

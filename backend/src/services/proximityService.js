@@ -144,7 +144,17 @@ const updateBeaconLastSeen = async (beaconDevice) => {
   });
 };
 
-const toResponse = ({ eventId, shouldNotify = false, reason = null, notification = null }) => {
+const toResponse = ({
+  eventId,
+  shouldNotify = false,
+  reason = null,
+  notification = null,
+  dedupeUntil = null,
+  productId = null,
+  barcode = null,
+  productName = null,
+  dedupeKey = null,
+}) => {
   const response = {
     success: true,
     shouldNotify,
@@ -152,6 +162,11 @@ const toResponse = ({ eventId, shouldNotify = false, reason = null, notification
   if (eventId) response.eventId = eventId;
   if (notification) response.notification = notification;
   if (!shouldNotify && reason) response.reason = reason;
+  if (!shouldNotify && dedupeUntil) response.dedupeUntil = dedupeUntil;
+  if (productId) response.productId = productId;
+  if (barcode) response.barcode = barcode;
+  if (productName) response.productName = productName;
+  if (dedupeKey) response.dedupeKey = dedupeKey;
   return response;
 };
 
@@ -205,6 +220,11 @@ export const proximityService = {
       shouldNotify: Boolean(evaluation.shouldNotify),
       reason: evaluation.reason || null,
       notification: evaluation.notification || null,
+      dedupeUntil: evaluation.dedupeUntil || null,
+      productId: evaluation.productId || null,
+      barcode: evaluation.barcode || null,
+      productName: evaluation.productName || null,
+      dedupeKey: evaluation.dedupeKey || null,
     });
   },
 };

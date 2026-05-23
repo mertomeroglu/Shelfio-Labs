@@ -61,6 +61,14 @@ const BAG_PRODUCT_ID = '__bag__';
 
 const PAYMENT_LABELS = { cash: 'Nakit', card: 'Kart', qr: 'QR Ödeme', eft: 'Havale/EFT', giftcard: 'Hediye Kartı' };
 const VALID_DESK_CODES = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8'];
+const AUTO_SALE_SOURCE = 'otomatik_satis_paneli';
+const AUTO_SALE_PAYMENT_WEIGHTS = [
+  { method: 'card', weight: 50 },
+  { method: 'cash', weight: 35 },
+  { method: 'qr', weight: 10 },
+  { method: 'eft', weight: 3 },
+  { method: 'giftcard', weight: 2 },
+];
 
 const normalizeGiftCardCode = (value) => String(value || '').trim().toUpperCase();
 
@@ -88,6 +96,22 @@ const toSafeAmount = (value) => {
 };
 
 const roundMoney = (value) => Math.round(toSafeAmount(value) * 100) / 100;
+
+const clampRatio = (value, fallback = 0) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(1, numeric));
+};
+
+const pickWeightedPaymentMethod = () => {
+  const totalWeight = AUTO_SALE_PAYMENT_WEIGHTS.reduce((sum, row) => sum + row.weight, 0);
+  let cursor = Math.random() * totalWeight;
+  for (const row of AUTO_SALE_PAYMENT_WEIGHTS) {
+    cursor -= row.weight;
+    if (cursor <= 0) return row.method;
+  }
+  return 'card';
+};
 
 const resolveVatRate = (value, fallback = 20) => {
   const numeric = Number(value);
@@ -324,6 +348,63 @@ const findProductByBarcodeFromPostgres = async (barcode) => {
   }
 
   return mapPosProductRow(product, activeCampaigns);
+};
+
+const listAutomaticSaleProductPool = async () => {
+  const products = await productRepo.getAll();
+  const activeCampaigns = await listActiveCampaignDefinitions();
+  const pool = [];
+
+  for (const product of products) {
+    if (!product?.id || product.isActive === false || product.isListed === false) continue;
+    const stock = await stockRepo.findByProductId(product.id);
+    const shelfQuantity = Number(stock?.shelfQuantity || 0);
+    if (!Number.isFinite(shelfQuantity) || shelfQuantity <= 0) continue;
+
+    const pricedProduct = mapPosProductRow({ ...product, stock }, activeCampaigns);
+    const unitPrice = Number(pricedProduct.effectivePrice || pricedProduct.currentPrice || pricedProduct.salePrice || product.salePrice || 0);
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) continue;
+
+    pool.push({
+      productId: product.id,
+      shelfQuantity,
+      unitPrice,
+    });
+  }
+
+  return pool;
+};
+
+const buildAutomaticSaleItems = async (targetAmount) => {
+  const pool = await listAutomaticSaleProductPool();
+  if (!pool.length) {
+    throw new AppError(400, 'Otomatik satış için stokta aktif ve listelenmiş ürün bulunamadı.');
+  }
+
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const maxLines = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 3));
+  const itemsByProductId = new Map();
+  let runningTotal = 0;
+
+  for (const candidate of shuffled) {
+    if (itemsByProductId.size >= maxLines) break;
+    const remainingTarget = Math.max(0, targetAmount - runningTotal);
+    const maxUsefulQty = remainingTarget > 0 ? Math.max(1, Math.floor(remainingTarget / candidate.unitPrice)) : 1;
+    const maxQty = Math.max(1, Math.min(candidate.shelfQuantity, maxUsefulQty, 3));
+    const quantity = 1 + Math.floor(Math.random() * maxQty);
+    itemsByProductId.set(candidate.productId, {
+      productId: candidate.productId,
+      quantity,
+    });
+    runningTotal += candidate.unitPrice * quantity;
+  }
+
+  if (!itemsByProductId.size) {
+    const fallback = shuffled[0];
+    itemsByProductId.set(fallback.productId, { productId: fallback.productId, quantity: 1 });
+  }
+
+  return Array.from(itemsByProductId.values());
 };
 
 const assertDeskCode = (deskCode) => {
@@ -780,61 +861,79 @@ export const posService = {
     const deskCode = normalizeDeskCode(payload?.deskCode);
     assertDeskCode(deskCode);
 
-    const amount = roundMoney(payload?.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const targetAmount = roundMoney(payload?.amount);
+    if (!Number.isFinite(targetAmount) || targetAmount <= 0) {
       throw new AppError(400, 'Satış tutarı 0’dan büyük olmalıdır');
     }
 
+    const items = await buildAutomaticSaleItems(targetAmount);
+    const paymentMethod = pickWeightedPaymentMethod();
+    const sale = await this.completeSale({
+      deskCode,
+      items,
+      paymentMethod,
+      customer: null,
+    }, userContext);
+
     const now = new Date().toISOString();
-    const saleId = uuidv4();
-    const referenceNo = buildReferenceNo('sale');
     const userId = userContext?.id || null;
     const user = userId ? await userRepo.findById(userId) : null;
-    const source = 'otomatik_satis_paneli';
-    const items = [{
-      id: `${saleId}-auto-line`,
-      productId: null,
-      barcode: '',
-      name: 'Otomatik Satış Paneli',
-      sku: 'AUTO-SALE',
-      quantity: 1,
-      vatRate: 20,
-      unitPrice: amount,
-      totalPrice: amount,
-      source,
-    }];
-
-    const sale = {
-      id: saleId,
-      referenceNo,
-      type: 'sale',
-      deskCode,
-      cashierId: user?.id || null,
-      cashierName: 'Otomatik Satış Paneli',
-      items,
-      subtotal: amount,
-      discount: 0,
-      totalAmount: amount,
-      paymentMethod: 'card',
-      payments: [{ method: 'card', amount }],
-      receivedAmount: amount,
-      changeAmount: 0,
-      customer: null,
-      status: 'completed',
-      source,
-      automationSource: source,
-      createdAt: now,
+    const markedSale = await salesRepo.updateById(sale.id, (current) => ({
+      ...current,
+      source: AUTO_SALE_SOURCE,
+      automationSource: AUTO_SALE_SOURCE,
+      cashierName: current.cashierName || 'Otomatik Satış Paneli',
       updatedAt: now,
       payload: {
-        source,
-        automationSource: source,
+        ...(current.payload || {}),
+        source: AUTO_SALE_SOURCE,
+        automationSource: AUTO_SALE_SOURCE,
         createdBy: user?.name || userContext?.name || 'system',
         createdByUserId: user?.id || null,
         generatedByPanel: true,
+        generatedWithRealProducts: true,
+        targetAmount,
       },
-    };
+    })) || sale;
 
-    return salesRepo.create(sale);
+    const returnRate = clampRatio(payload?.returnRate, 0.03);
+    const hasRealItems = (markedSale.items || []).some((item) => item?.productId && item.productId !== BAG_PRODUCT_ID);
+    let automaticReturnCreated = false;
+    let automaticReturnReferenceNo = null;
+    if (returnRate > 0 && hasRealItems && Math.random() < returnRate) {
+      try {
+        const returnItems = (markedSale.items || [])
+          .filter((item) => item?.productId && item.productId !== BAG_PRODUCT_ID)
+          .slice(0, 1)
+          .map((item) => ({
+            productId: item.productId,
+            quantity: 1,
+            unitPrice: item.unitPrice,
+            vatRate: item.vatRate,
+          }));
+
+        if (returnItems.length) {
+          const returnRecord = await this.processReturn({
+            deskCode,
+            originalSaleRef: markedSale.referenceNo,
+            refundMethod: markedSale.paymentMethod || paymentMethod,
+            returnReason: 'automatic_random_return',
+            returnReasonDetail: 'Otomatik satış paneli rastgele iade simülasyonu',
+            items: returnItems,
+          }, userContext);
+          automaticReturnCreated = true;
+          automaticReturnReferenceNo = returnRecord?.referenceNo || null;
+        }
+      } catch (error) {
+        console.warn('[POS] Otomatik iade oluşturulamadı:', error?.message || error);
+      }
+    }
+
+    return {
+      ...markedSale,
+      automaticReturnCreated,
+      automaticReturnReferenceNo,
+    };
   },
 
   async processReturn(payload, userContext) {
