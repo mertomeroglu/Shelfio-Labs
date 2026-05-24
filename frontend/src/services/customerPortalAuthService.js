@@ -80,7 +80,8 @@ async function request(path, options = {}, retry = true) {
         throw new Error(error?.message || 'Oturum süresi doldu. Lütfen tekrar giriş yapın.');
       }
     }
-    throw new Error(payload?.message || 'İşlem başarısız');
+    const isLoginRequest = path.startsWith('/customer-auth/login');
+    throw new Error(payload?.message || (res.status === 401 && isLoginRequest ? 'Kullanıcı bilgileri hatalı.' : 'İşlem başarısız'));
   }
 
   return payload?.data ?? payload;

@@ -80,7 +80,7 @@ export const authService = {
     const user = await userRepo.findByUsername(username);
 
     if (!user) {
-      throw new AppError(401, 'Kullanıcı adı veya şifre hatalı');
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     if (!user.isActive) {
@@ -89,18 +89,18 @@ export const authService = {
 
     const passwordHash = String(user?.passwordHash || '').trim();
     if (!passwordHash) {
-      throw new AppError(401, 'Kullanıcı adı veya şifre hatalı');
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     let isMatch = false;
     try {
       isMatch = await comparePassword(password, passwordHash);
     } catch {
-      throw new AppError(401, 'Kullanıcı adı veya şifre hatalı');
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     if (!isMatch) {
-      throw new AppError(401, 'Kullanıcı adı veya şifre hatalı');
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     const loggedInUser = {

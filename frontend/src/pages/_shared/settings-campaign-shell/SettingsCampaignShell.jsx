@@ -6557,7 +6557,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
           <fieldset className="s-auto-sale-fieldset">
             <div className="s-auto-sale-fieldset-title">Ayarlar</div>
-            <div className="s-auto-sale-grid">
+            <div className="s-auto-sale-grid s-auto-sale-primary-grid">
               <label className="s-field">
                 <span className="s-field-label">Yoğunluk</span>
                 <select className="s-config-select" value={autoSaleConfig.density} onChange={(event) => updateAutoSaleConfig('density', event.target.value)} disabled={autoSaleActive}>
@@ -6573,18 +6573,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <input className="s-config-input" type="number" min="0.01" step="0.01" value={autoSaleConfig.maxAmount} onChange={(event) => updateAutoSaleConfig('maxAmount', event.target.value)} disabled={autoSaleActive} />
               </label>
               <label className="s-field">
-                <span className="s-field-label">Çalışma süresi</span>
-                <select className="s-config-select" value={autoSaleConfig.duration} onChange={(event) => updateAutoSaleConfig('duration', event.target.value)} disabled={autoSaleActive}>
-                  {AUTO_SALE_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-              </label>
-              {autoSaleConfig.duration === 'custom' ? (
-                <label className="s-field">
-                  <span className="s-field-label">Özel süre (dk)</span>
-                  <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.customMinutes} onChange={(event) => updateAutoSaleConfig('customMinutes', event.target.value)} disabled={autoSaleActive} />
-                </label>
-              ) : null}
-              <label className="s-field">
                 <span className="s-field-label">İade oranı (%)</span>
                 <input className="s-config-input" type="number" min="0" max="100" step="0.1" value={autoSaleConfig.returnRate} onChange={(event) => updateAutoSaleConfig('returnRate', event.target.value)} disabled={autoSaleActive} />
               </label>
@@ -6596,7 +6584,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <span className="s-field-label">Maksimum ürün çeşidi</span>
                 <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.maxProductCount} onChange={(event) => updateAutoSaleConfig('maxProductCount', event.target.value)} disabled={autoSaleActive} />
               </label>
+              <label className="s-field">
+                <span className="s-field-label">Çalışma süresi</span>
+                <select className="s-config-select" value={autoSaleConfig.duration} onChange={(event) => updateAutoSaleConfig('duration', event.target.value)} disabled={autoSaleActive}>
+                  {AUTO_SALE_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
             </div>
+            {autoSaleConfig.duration === 'custom' ? (
+              <div className="s-auto-sale-grid s-auto-sale-duration-grid">
+                <label className="s-field">
+                  <span className="s-field-label">Özel süre (dk)</span>
+                  <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.customMinutes} onChange={(event) => updateAutoSaleConfig('customMinutes', event.target.value)} disabled={autoSaleActive} />
+                </label>
+              </div>
+            ) : null}
 
             <div className="s-auto-sale-fieldset-title">Kasa seçimi</div>
             <div className="s-auto-sale-desk-list" aria-label="Kasa seçimi">

@@ -164,7 +164,7 @@ function writeStoredObject(key, value) {
 
 function readCustomerPrefs(storageKey = CUSTOMER_PREFS_KEY) {
   if (typeof window === 'undefined') {
-    return { campaign: true, stock: true, inAppNotifications: true, phoneNotifications: true };
+    return { inAppNotifications: true, phoneNotifications: true };
   }
   try {
     const raw = window.localStorage.getItem(storageKey);
@@ -174,13 +174,11 @@ function readCustomerPrefs(storageKey = CUSTOMER_PREFS_KEY) {
     const campaignEnabled = parsed?.campaign !== false;
     const stockEnabled = parsed?.stock !== false;
     return {
-      campaign: campaignEnabled,
-      stock: stockEnabled,
       inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : campaignEnabled,
       phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : stockEnabled,
     };
   } catch {
-    return { campaign: true, stock: true, inAppNotifications: true, phoneNotifications: true };
+    return { inAppNotifications: true, phoneNotifications: true };
   }
 }
 
@@ -1473,7 +1471,11 @@ export default function CustomerPortal() {
 
   const updateNotificationPreference = useCallback((key, value) => {
     setNotificationPrefs((current) => {
-      const next = { ...current, [key]: Boolean(value) };
+      const next = {
+        inAppNotifications: current.inAppNotifications !== false,
+        phoneNotifications: current.phoneNotifications !== false,
+        [key]: Boolean(value),
+      };
       writeCustomerPrefs(next, customerPrefsStorageKey);
       return next;
     });

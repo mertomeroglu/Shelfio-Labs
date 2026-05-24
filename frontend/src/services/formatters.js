@@ -215,13 +215,26 @@ export const formatDateOnly = (value) => {
   return date.toLocaleDateString('tr-TR', DATE_ONLY_OPTIONS);
 };
 
+export const resolveCurrencyCode = (currency = 'TRY') => {
+  const candidate = typeof currency === 'string' ? currency.trim().toUpperCase() : '';
+  if (!/^[A-Z]{3}$/.test(candidate)) return 'TRY';
+  try {
+    new Intl.NumberFormat('tr-TR', { style: 'currency', currency: candidate }).format(0);
+    return candidate;
+  } catch {
+    return 'TRY';
+  }
+};
+
 export const formatCurrency = (value, currency = 'TRY') => {
+  const numeric = Number(value);
+  const amount = Number.isFinite(numeric) ? numeric : 0;
   return new Intl.NumberFormat('tr-TR', {
     style: 'currency',
-    currency,
+    currency: resolveCurrencyCode(currency),
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+  }).format(amount);
 };
 
 export const formatNumber = (value) => new Intl.NumberFormat('tr-TR').format(Number(value || 0));

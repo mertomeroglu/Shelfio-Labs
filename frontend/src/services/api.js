@@ -497,8 +497,9 @@ async function request(path, options = {}) {
     }
 
     const requestId = response.headers.get('x-request-id') || '';
+    const isLoginRequest = path.startsWith('/auth/login');
     const friendlyMessage = response.status === 401
-      ? 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.'
+      ? (isLoginRequest ? (payload?.message || 'Kullanıcı bilgileri hatalı.') : 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.')
       : response.status === 403
         ? 'Bu işlem için yetkiniz bulunmuyor.'
         : payload?.message || 'Bir işlem hatası oluştu';

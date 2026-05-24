@@ -92,9 +92,9 @@ export const customerAuthService = {
     if (!identity || !password) throw new AppError(400, 'Telefon/email ve sifre zorunludur');
     const phone = normalizePhone(identity);
     const row = (await customerRepo.getAll()).find((x) => String(x.email || '').toLowerCase() === identity || normalizePhone(x.phone) === phone);
-    if (!row) throw new AppError(401, 'Kullanici bilgileri hatali');
+    if (!row) throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     if (row.isActive === false) throw new AppError(403, 'Hesabiniz pasif durumda');
-    if (!await comparePassword(password, row.passwordHash || '')) throw new AppError(401, 'Kullanici bilgileri hatali');
+    if (!await comparePassword(password, row.passwordHash || '')) throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     return {
       token: signToken({ sub: row.id, type: 'customer', email: row.email }),
       refreshToken: signCustomerRefreshToken({ sub: row.id, type: 'customer-refresh', email: row.email }),

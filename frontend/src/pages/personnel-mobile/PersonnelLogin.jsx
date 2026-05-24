@@ -45,7 +45,7 @@ export default function PersonnelLogin() {
       await login({ username: form.username.trim(), password: form.password });
     } catch (requestError) {
       if (requestError?.status === 401) {
-        setError('Kullanıcı adı veya şifre hatalı.');
+        setError('Kullanıcı bilgileri hatalı.');
       } else {
         setError(requestError?.message || 'Giriş işlemi tamamlanamadı.');
       }

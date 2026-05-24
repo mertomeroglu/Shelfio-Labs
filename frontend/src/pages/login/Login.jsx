@@ -63,7 +63,7 @@ export default function Login() {
       setShowTransition(true);
     } catch (requestError) {
       if (requestError.status === 401) {
-        const message = 'Şifre hatalı, tekrar deneyiniz.';
+        const message = 'Kullanıcı bilgileri hatalı.';
         setError(message);
         setToast({ type: 'error', title: 'Giriş Başarısız', message });
       } else {

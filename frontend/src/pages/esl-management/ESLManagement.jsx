@@ -165,6 +165,7 @@ export default function ESLManagement() {
   const [lastPreview, setLastPreview] = useState(null);
   const [previewNonce, setPreviewNonce] = useState(0);
   const [productSearch, setProductSearch] = useState('');
+  const [productSearchResults, setProductSearchResults] = useState([]);
   const [productSearchLoading, setProductSearchLoading] = useState(false);
   const [scanValue, setScanValue] = useState('');
   const [scanLoading, setScanLoading] = useState(false);
@@ -255,6 +256,7 @@ export default function ESLManagement() {
 
     if (query.length < 2) {
       setProductSearchLoading(false);
+      setProductSearchResults([]);
       return undefined;
     }
 
@@ -269,11 +271,17 @@ export default function ESLManagement() {
       })
         .then((rows) => {
           if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
-          setProducts(normalizeEslList(rows, normalizeEslProduct));
+          const normalizedRows = normalizeEslList(rows, normalizeEslProduct);
+          setProductSearchResults(normalizedRows);
+          setProducts((current) => {
+            const knownIds = new Set(current.map((item) => item.id).filter(Boolean));
+            const additions = normalizedRows.filter((item) => item?.id && !knownIds.has(item.id));
+            return additions.length ? [...additions, ...current] : current;
+          });
         })
         .catch(() => {
           if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
-          setProducts([]);
+          setProductSearchResults([]);
         })
         .finally(() => {
           if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
@@ -302,6 +310,7 @@ export default function ESLManagement() {
       ));
       setSelectedProductId(targetProduct.id);
       setProductSearch('');
+      setProductSearchResults([]);
       setScanMatch(null);
       setScanError('');
 
@@ -394,14 +403,16 @@ export default function ESLManagement() {
     const text = normalizeSearchText(value);
     if (!text || !query) return false;
     if (query.includes(' ')) return text.includes(query);
-    const tokens = text.split(/[^0-9a-zçşıöşü]+/i).filter(Boolean);
+    const tokens = text.split(/[^0-9a-z]+/i).filter(Boolean);
     return tokens.some((token) => token.startsWith(query));
   };
 
-  const filteredProducts = products.filter((product) => {
+  const searchQuery = productSearch.trim();
+  const searchSourceProducts = searchQuery.length >= 2 && productSearchResults.length ? productSearchResults : products;
+  const filteredProducts = searchSourceProducts.filter((product) => {
     const p = product || {};
-    if (!productSearch.trim()) return true;
-    const q = normalizeSearchText(productSearch);
+    if (!searchQuery) return true;
+    const q = normalizeSearchText(searchQuery);
     return (
       tokenStartsWithQuery(p.name, q) ||
       tokenStartsWithQuery(p.productName, q) ||
@@ -413,9 +424,17 @@ export default function ESLManagement() {
     );
   });
 
-  const handleProductSelect = (productId) => {
+  const handleProductSelect = (product) => {
+    const productId = typeof product === 'object' ? product?.id : product;
+    if (!productId) return;
+    if (typeof product === 'object') {
+      setProducts((current) => (
+        current.some((item) => item.id === productId) ? current : [normalizeEslProduct(product), ...current].filter(Boolean)
+      ));
+    }
     setSelectedProductId((prev) => (prev === productId ? '' : productId));
     setProductSearch('');
+    setProductSearchResults([]);
   };
 
   const handleDeviceSelect = (deviceId) => {
@@ -453,7 +472,7 @@ export default function ESLManagement() {
       const result = await Promise.race([
         eslService.sendToDevice(payload),
         new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uşradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
+          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uğradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
         }),
       ]);
       setLastPreview({
@@ -466,6 +485,7 @@ export default function ESLManagement() {
       setSelectedDeviceId('');
       setSelectedTemplate('standard');
       setProductSearch('');
+      setProductSearchResults([]);
       setScanMatch(null);
       setScanError('');
       showToast('success', 'Gönderildi', result.message);
@@ -571,6 +591,7 @@ export default function ESLManagement() {
     setSelectedProductId('');
     setSelectedTemplate('standard');
     setProductSearch('');
+    setProductSearchResults([]);
     setScanValue('');
     setScanMatch(null);
     setScanError('');
@@ -610,7 +631,7 @@ export default function ESLManagement() {
     }
 
     if (sendingRef.current) {
-      showToast('success', 'Onizleme Temizlendi', 'Secili urun ve etiket onizlemesi temizlendi.');
+      showToast('success', 'Önizleme Temizlendi', 'Seçili ürün ve etiket önizlemesi temizlendi.');
       return;
     }
     sendingRef.current = true;
@@ -620,7 +641,7 @@ export default function ESLManagement() {
       const result = await Promise.race([
         eslService.clearLabel(deviceIdToClear),
         new Promise((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uşradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
+          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uğradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
         }),
       ]);
       clearedDeviceFromApi = result?.device || null;
@@ -802,17 +823,17 @@ export default function ESLManagement() {
               </label>
               {productSearch.trim() && (
                 <div className="esl-search-results">
-                  {productSearchLoading && (
+                  {productSearchLoading && filteredProducts.length === 0 && (
                     <div className="esl-search-empty">
-                      <RefreshCw size={16} className="spin" /> ÃœrÃ¼nler aranÄ±yor...
+                      <RefreshCw size={16} className="spin" /> Ürünler aranıyor...
                     </div>
                   )}
-                  {!productSearchLoading && filteredProducts.slice(0, 8).map((p) => (
+                  {filteredProducts.slice(0, 8).map((p) => (
                     <button
                       key={p.id}
                       type="button"
                       className={`esl-search-item ${p.id === selectedProductId ? 'selected' : ''}`}
-                      onClick={() => handleProductSelect(p.id)}
+                      onClick={() => handleProductSelect(p)}
                     >
                       <div className="esl-search-item-info">
                         <strong>{getProductNameLabel(p)}</strong>
@@ -821,6 +842,11 @@ export default function ESLManagement() {
                       <span className="esl-search-item-price">{getProductPriceLabel(resolveEslDisplayPricing(p))}</span>
                     </button>
                   ))}
+                  {productSearchLoading && filteredProducts.length > 0 && (
+                    <div className="esl-search-empty">
+                      <RefreshCw size={16} className="spin" /> Sonuçlar güncelleniyor...
+                    </div>
+                  )}
                   {!productSearchLoading && filteredProducts.length === 0 && productSearch.trim().length >= 2 && (
                     <div className="esl-search-empty">
                       <AlertCircle size={16} /> Arama kriterine uygun ürün bulunamadı.
@@ -973,7 +999,7 @@ export default function ESLManagement() {
                   </div>
                   {previewPricing.hasActiveCampaign ? (
                     <div className="esl-preview-info-row">
-                      <span>Regular fiyat:</span>
+                      <span>Normal fiyat:</span>
                       <strong>₺{previewPricing.regularPrice.toFixed(2)}</strong>
                     </div>
                   ) : null}

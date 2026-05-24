@@ -18,7 +18,7 @@ export const errorHandler = (error, req, res, next) => {
   }
 
   const statusCode = error instanceof AppError ? error.statusCode : 500;
-  const message = error instanceof AppError ? error.message : 'Sunucu hatası';
+  const message = error instanceof AppError ? error.message : 'Sunucu hatası.';
   const shouldRecordDeveloperLog = statusCode >= 500;
 
   const lowerMessage = String(error?.message || '').toLowerCase();

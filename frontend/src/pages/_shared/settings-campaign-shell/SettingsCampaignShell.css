@@ -11016,17 +11016,40 @@
 
 .s-auto-sale-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.s-auto-sale-primary-grid {
+  grid-template-columns:
+    minmax(108px, 0.95fr)
+    repeat(3, minmax(94px, 1fr))
+    repeat(2, minmax(112px, 1.05fr))
+    minmax(116px, 1fr);
+}
+
+.s-auto-sale-duration-grid {
+  grid-template-columns: minmax(116px, 220px);
+  justify-content: start;
 }
 
 .s-auto-sale-grid .s-field {
   gap: 5px;
+  min-width: 0;
+}
+
+.s-auto-sale-grid .s-field-label {
+  min-height: 28px;
+  align-items: flex-end;
+  line-height: 1.2;
 }
 
 .s-auto-sale-grid .s-config-select,
 .s-auto-sale-grid .s-config-input {
-  min-height: 32px;
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
   font-size: 0.82rem;
 }
 
@@ -11265,8 +11288,12 @@
 }
 
 @media (max-width: 980px) {
-  .s-auto-sale-grid,
+  .s-auto-sale-primary-grid,
   .s-auto-sale-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .s-auto-sale-duration-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

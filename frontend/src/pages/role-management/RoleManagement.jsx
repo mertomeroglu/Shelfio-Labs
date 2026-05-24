@@ -1093,8 +1093,8 @@ export default function RoleManagement() {
                   <p className="role-management-description">{department.description || 'Bu departman için açıklama girilmemiş.'}</p>
 
                   <div className="role-department-summary-list">
-                    <span>Genişletilen yetkiler: {permissionRule.allow.includes('*') ? 'Tümü' : permissionRule.allow.length}</span>
-                    <span>Daraltılan yetkiler: {permissionRule.deny.length}</span>
+                    <span>Ek yetkiler: {permissionRule.allow.includes('*') ? 'Tümü' : permissionRule.allow.length}</span>
+                    <span>Kısıtlanan yetkiler: {permissionRule.deny.length}</span>
                     <span>Kapsam: {scopeModules.length ? scopeModules.join(' / ') : 'Rol varsayılanı'}</span>
                   </div>
 
@@ -1237,7 +1237,7 @@ export default function RoleManagement() {
             <section className="role-form-section role-department-permission-editor">
               <div className="role-form-section-head">
                 <div>
-                  <h4>Genişletilen yetkiler</h4>
+                  <h4>Ek yetkiler</h4>
                   <p>Rolün üzerine ek yetki veren departman kapsamı.</p>
                 </div>
               </div>
@@ -1266,7 +1266,7 @@ export default function RoleManagement() {
             <section className="role-form-section role-department-permission-editor">
               <div className="role-form-section-head">
                 <div>
-                  <h4>Daralan yetkiler</h4>
+                  <h4>Kısıtlanan yetkiler</h4>
                   <p>Rolde olsa bile departman kapsamında kapatılan yetkiler.</p>
                 </div>
               </div>
