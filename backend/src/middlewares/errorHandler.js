@@ -1,5 +1,4 @@
 ﻿import { AppError } from '../utils/appError.js';
-import { config } from '../config/config.js';
 import { settingsService } from '../services/settingsService.js';
 
 export const notFoundHandler = (req, res) => {
@@ -20,6 +19,7 @@ export const errorHandler = (error, req, res, next) => {
 
   const statusCode = error instanceof AppError ? error.statusCode : 500;
   const message = error instanceof AppError ? error.message : 'Sunucu hatası';
+  const shouldRecordDeveloperLog = statusCode >= 500;
 
   const lowerMessage = String(error?.message || '').toLowerCase();
   const errorType = lowerMessage.includes('db') || lowerMessage.includes('sql') || lowerMessage.includes('database')
@@ -28,11 +28,11 @@ export const errorHandler = (error, req, res, next) => {
       ? 'validation_error'
       : 'exception';
 
-  if (config.runStartupMaintenance) {
+  if (shouldRecordDeveloperLog) {
     Promise.resolve().then(() => settingsService.recordDeveloperLog({
-      level: statusCode >= 500 ? 'error' : 'warning',
+      level: 'error',
       source: 'backend',
-      message,
+      message: error?.message || message,
       action: `${req.method} ${req.originalUrl}`,
       endpoint: req.originalUrl,
       requestUrl: req.originalUrl,
@@ -41,6 +41,9 @@ export const errorHandler = (error, req, res, next) => {
       stack: error?.stack || '',
       statusCode,
       errorType,
+      requestId: req.requestId,
+      correlationId: req.requestId,
+      description: 'Express global error middleware tarafindan yakalandi.',
     }, req.user, {
       source: 'backend',
       endpoint: req.originalUrl,
@@ -49,12 +52,14 @@ export const errorHandler = (error, req, res, next) => {
       ip: req.ip || req.headers['x-forwarded-for'] || '',
       browserInfo: req.headers['user-agent'] || '',
       statusCode,
+      requestId: req.requestId,
     })).catch(() => {});
   }
 
   const responsePayload = {
     success: false,
     message,
+    requestId: req.requestId,
   };
 
   if (error instanceof AppError) {

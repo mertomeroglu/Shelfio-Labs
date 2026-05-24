@@ -7,12 +7,43 @@ import { loggerMiddleware } from './middlewares/loggerMiddleware.js';
 import { startGrantExpiryJob } from './jobs/grantExpiryJob.js';
 import { startDailyClosingJob } from './jobs/dailyClosingJob.js';
 import { startExpiredBatchNotificationJob } from './jobs/expiredBatchNotificationJob.js';
+import { startPurchaseOrderLifecycleJob } from './jobs/purchaseOrderLifecycleJob.js';
 import routes from './routes/routes.js';
 import { securityMigrationService } from './services/securityMigrationService.js';
 import { categoryLabelService } from './services/categoryLabelService.js';
 import { getPostgresConnectionStatus, verifyPostgresConnection } from './providers/postgresProvider.js';
+import { settingsService } from './services/settingsService.js';
 
 const app = express();
+
+const recordProcessDeveloperError = (error, action) => {
+  const err = error instanceof Error ? error : new Error(String(error || 'Bilinmeyen process hatasi'));
+  settingsService.recordDeveloperLog({
+    level: 'error',
+    source: 'backend',
+    message: err.message,
+    action,
+    endpoint: 'process',
+    requestUrl: 'process',
+    stack: err.stack || '',
+    errorType: action,
+    description: 'Node.js process seviyesinde yakalandi.',
+  }, null, {
+    source: 'backend',
+    action,
+    endpoint: 'process',
+  }).catch(() => {});
+};
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[process:unhandledRejection]', reason);
+  recordProcessDeveloperError(reason, 'process.unhandledRejection');
+});
+
+process.on('uncaughtExceptionMonitor', (error) => {
+  console.error('[process:uncaughtException]', error);
+  recordProcessDeveloperError(error, 'process.uncaughtException');
+});
 
 const normalizeNfcDeep = (value) => {
   if (typeof value === 'string') {
@@ -130,6 +161,7 @@ const start = async () => {
     } else {
       console.info('Startup maintenance skipped by RUN_STARTUP_MAINTENANCE=false');
     }
+    startPurchaseOrderLifecycleJob();
     startExpiredBatchNotificationJob();
     app.listen(config.port, () => {
       console.log(`Server running on port ${config.port}`);

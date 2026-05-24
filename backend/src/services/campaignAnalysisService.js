@@ -1,6 +1,18 @@
 import { pricingAnalysisService } from './analysis/pricingAnalysisService.js';
+import { listActiveCampaignDefinitions } from './campaignPricingService.js';
 import { normalizeTurkishText } from '../utils/turkishText.js';
 import { getPrisma } from '../providers/postgresProvider.js';
+import { settingsRepo } from '../repositories/settingsRepository.js';
+import { purchaseOrderRepo } from '../repositories/purchaseOrderRepository.js';
+import { purchaseOrderItemRepo } from '../repositories/purchaseOrderItemRepository.js';
+import {
+  normalizePurchaseOrderStatus,
+  PURCHASE_ORDER_CANCELLED_STATUSES,
+  PURCHASE_ORDER_COMPLETED_STATUSES,
+  PURCHASE_ORDER_GOODS_RECEIPT_STATUSES,
+  PURCHASE_ORDER_TERMINAL_STATUSES,
+  PURCHASE_ORDER_WAITING_DELIVERY_STATUSES,
+} from '../domain/purchaseOrderLifecycle.js';
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const toNumber = (value, fallback = 0) => {
@@ -11,6 +23,15 @@ const safeArray = (value) => (Array.isArray(value) ? value : []);
 const uniq = (rows = []) => [...new Set(rows.map((value) => String(value || '').trim()).filter(Boolean))];
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SALES_LOOKBACK_DAYS = 30;
+const DISCOUNT_RECOMMENDATION_TYPES = new Set(['slow-moving', 'near-expiry', 'overstock', 'discount-opportunity', 'demand-down']);
+const SUGGESTION_PRECEDENCE = Object.freeze({
+  'near-expiry': 100,
+  overstock: 80,
+  'slow-moving': 70,
+  'discount-opportunity': 60,
+  'demand-down': 55,
+  'margin-watch': 20,
+});
 const normalizeCampaignText = (value, fallback = '') => normalizeTurkishText(String(value || fallback || ''))
   .replace(/\byavas\b/gi, 'yavaş')
   .replace(/\byavaş\b/gi, 'yavaş')
@@ -32,6 +53,10 @@ const normalizeCampaignRow = (row = {}) => {
   const stockLevel = toNumber(row.totalStock ?? row.stockLevel, 0);
   const salesVelocity = toNumber(row.avgDailySales ?? row.salesVelocity, 0);
   const daysToExpiry = row.daysToExpiry == null ? null : toNumber(row.daysToExpiry, null);
+  const criticalStock = toNumber(row.criticalStock ?? row.kritikStok ?? row.minStock ?? row.minimumStock ?? row.payload?.criticalStock, 0);
+  const minimumStock = toNumber(row.minimumStock ?? row.minStock ?? row.payload?.minimumStock, criticalStock);
+  const maxStock = toNumber(row.maxStock ?? row.maximumStock ?? row.payload?.maxStock, 0);
+  const trendDirection = String(row.trendDirection || row.salesTrend || row.trend || '').trim().toLowerCase();
   return {
     id: String(row.productId || row.id || ''),
     productId: String(row.productId || row.id || ''),
@@ -39,10 +64,13 @@ const normalizeCampaignRow = (row = {}) => {
     sku: row.sku || '',
     categoryId: row.categoryId || '',
     category: row.categoryName || row.category || '-',
-    brand: row.brand || row.supplierName || '-',
+    brand: row.brand || row.brandName || row.supplierName || '-',
     supplierName: row.supplierName || '-',
     stockLevel,
     salesVelocity,
+    criticalStock,
+    minimumStock,
+    maxStock,
     daysToExpiry,
     expiryDate: row.expiryDate || null,
     expirySource: row.expirySource || 'unknown',
@@ -54,15 +82,19 @@ const normalizeCampaignRow = (row = {}) => {
     riskScore: toNumber(row.riskScore, 0),
     riskLevel: row.riskLevel || 'medium',
     riskFactors: safeArray(row.riskFactors),
+    trendDirection,
     daysToStockout: row.daysToStockout ?? null,
     estimatedStockoutDate: row.estimatedStockoutDate || null,
     orderSuggestion: row.orderSuggestion || null,
+    leadTimeDays: toNumber(row.leadTimeDays ?? row.supplierLeadTimeDays ?? row.orderSuggestion?.leadTimeDays, 0),
+    replenishmentNeed: toNumber(row.replenishmentNeed ?? row.orderSuggestion?.suggestedQty, 0),
     salesDataMessage: salesVelocity > 0 ? '' : 'Tahmin için yeterli satış verisi yok.',
   };
 };
 
 const summarizeRows = (rows = []) => ({
   productIds: uniq(rows.map((row) => row.productId)),
+  categoryIds: uniq(rows.map((row) => row.categoryId)),
   categoryNames: uniq(rows.map((row) => row.category)),
   brandNames: uniq(rows.map((row) => row.brand)),
   affectedProductCount: rows.length,
@@ -75,82 +107,472 @@ const summarizeRows = (rows = []) => ({
     .reduce((min, value) => (min === null ? value : Math.min(min, value)), null),
 });
 
-const buildSuggestion = ({ id, title, reason, rows, recommendedDiscount, type = 'product', priority = 'medium' }) => {
-  const summary = summarizeRows(rows);
+const normalizeKey = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+
+const getStockGuardrail = (row = {}) => {
+  const stockLevel = toNumber(row.stockLevel, 0);
+  const salesVelocity = toNumber(row.salesVelocity, 0);
+  const criticalThreshold = Math.max(2, toNumber(row.criticalStock, 0), toNumber(row.minimumStock, 0));
+  const nearCriticalThreshold = Math.max(criticalThreshold + 2, Math.ceil(criticalThreshold * 1.35), Math.ceil(salesVelocity * 7));
+  const stockCoverageDays = salesVelocity > 0 ? Number((stockLevel / salesVelocity).toFixed(1)) : (stockLevel > 0 ? 999 : 0);
+  const fastMoving = salesVelocity >= 1.5 || stockCoverageDays <= 7;
+  const isCriticalStock = stockLevel <= criticalThreshold;
+  const isNearCriticalFast = stockLevel <= nearCriticalThreshold && fastMoving;
+  const isLowStock = isCriticalStock || isNearCriticalFast || stockCoverageDays <= 5;
+  const blockingReasons = [];
+  if (isCriticalStock) blockingReasons.push('critical_stock');
+  if (!isCriticalStock && isNearCriticalFast) blockingReasons.push('near_critical_fast_moving');
+  if (!isCriticalStock && !isNearCriticalFast && stockCoverageDays <= 5) blockingReasons.push('low_stock_coverage');
   return {
-    id,
-    title: normalizeCampaignText(title),
-    reason: normalizeCampaignText(reason),
-    type,
-    priority,
-    recommendedDiscount: clamp(Math.round(recommendedDiscount), 0, 80),
-    ...summary,
-    rows,
-    source: 'backend_analysis_engine',
-    signalBullets: [
-      `Ortalama günlük satış: ${summary.avgDailySales}.`,
-      `Ortalama stok: ${summary.avgStockLevel}.`,
-      summary.minDaysToExpiry == null ? 'Gerçek SKT sinyali bulunmayan ürünler ayrıca işaretlendi.' : `En yakın SKT: ${summary.minDaysToExpiry} gün.`,
-    ],
-    impactSummary: 'Satış hızı, stok, SKT, marj ve risk skoru birlikte değerlendirildi.',
-    riskSummary: 'İndirim uygulanmadan önce marj ve stok yeterliliği kontrol edilmelidir.',
+    stockLevel,
+    salesVelocity,
+    criticalThreshold,
+    nearCriticalThreshold,
+    stockCoverageDays,
+    fastMoving,
+    isCriticalStock,
+    isLowStock,
+    discountEligible: stockLevel > 0 && !isCriticalStock && !isNearCriticalFast,
+    blockingReasons,
   };
 };
 
-const buildSuggestionsFromRows = (rows = []) => {
-  const sourceRows = safeArray(rows).map(normalizeCampaignRow).filter((row) => row.productId);
-  const slowRows = sourceRows
+const campaignMatchesRow = (campaign = {}, row = {}) => {
+  const productId = String(row.productId || '').trim();
+  const categoryId = String(row.categoryId || '').trim();
+  const brand = normalizeKey(row.brand);
+  const targetProducts = safeArray(campaign.targetProductIds).map(String);
+  const targetCategories = safeArray(campaign.targetCategoryIds).map(String);
+  const targetBrands = safeArray(campaign.targetBrands).map(normalizeKey);
+  const hasExplicitScope = targetProducts.length || targetCategories.length || targetBrands.length;
+  if (targetProducts.includes(productId)) return true;
+  if (categoryId && targetCategories.includes(categoryId)) return true;
+  if (brand && targetBrands.includes(brand)) return true;
+  return !hasExplicitScope && !['product', 'category', 'brand'].includes(String(campaign.type || '').toLowerCase());
+};
+
+const findActiveCampaignConflict = (row = {}, activeCampaigns = []) => {
+  const campaign = activeCampaigns.find((item) => campaignMatchesRow(item, row));
+  if (!campaign) return null;
+  return {
+    campaignId: campaign.id,
+    campaignName: campaign.name || campaign.internalName || campaign.publicName || 'Aktif kampanya',
+    campaignType: campaign.type || 'general',
+    discountRate: campaign.discountRate || 0,
+    reason: 'active_campaign_conflict',
+  };
+};
+
+const buildProcurementContext = async () => {
+  const context = new Map();
+  const [orders, items] = await Promise.all([
+    purchaseOrderRepo.getAll().catch(() => []),
+    purchaseOrderItemRepo.getAll().catch(() => []),
+  ]);
+  const orderById = new Map(safeArray(orders).map((order) => [String(order.id || order.orderId || ''), order]));
+  const now = Date.now();
+  safeArray(items).forEach((item) => {
+    const productId = String(item.productId || '').trim();
+    const orderId = String(item.orderId || item.purchaseOrderId || '').trim();
+    if (!productId || !orderId) return;
+    const order = orderById.get(orderId);
+    if (!order) return;
+    const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+    if (!status || PURCHASE_ORDER_TERMINAL_STATUSES.has(status) || PURCHASE_ORDER_CANCELLED_STATUSES.has(status) || PURCHASE_ORDER_COMPLETED_STATUSES.has(status)) return;
+    const current = context.get(productId) || {
+      hasOpenOrder: false,
+      inboundQuantity: 0,
+      waitingDelivery: false,
+      goodsReceiptPending: false,
+      longestLeadTimeDays: 0,
+      orderIds: [],
+      statuses: [],
+    };
+    const eta = order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate).getTime() : null;
+    const etaDays = eta && Number.isFinite(eta) ? Math.max(0, Math.ceil((eta - now) / DAY_MS)) : 0;
+    const leadTimeDays = Math.max(toNumber(order.estimatedDeliveryDays ?? order.payload?.estimatedDeliveryDays, 0), etaDays);
+    current.hasOpenOrder = true;
+    current.inboundQuantity += Math.max(0, toNumber(item.quantity, 0));
+    current.waitingDelivery = current.waitingDelivery || PURCHASE_ORDER_WAITING_DELIVERY_STATUSES.has(status);
+    current.goodsReceiptPending = current.goodsReceiptPending || PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status);
+    current.longestLeadTimeDays = Math.max(current.longestLeadTimeDays, leadTimeDays);
+    current.orderIds.push(orderId);
+    current.statuses.push(status);
+    context.set(productId, current);
+  });
+  return context;
+};
+
+const getProcurementGuardrail = (row = {}, procurementContext = new Map()) => {
+  const context = procurementContext.get(row.productId) || null;
+  const leadTimeDays = Math.max(toNumber(row.leadTimeDays, 0), toNumber(context?.longestLeadTimeDays, 0));
+  const orderSuggestion = row.orderSuggestion && typeof row.orderSuggestion === 'object' ? row.orderSuggestion : {};
+  const rowHasSecuredPipeline = Boolean(
+    orderSuggestion.hasOpenOrder
+    || orderSuggestion.openOrderId
+    || orderSuggestion.purchaseOrderId
+    || toNumber(orderSuggestion.inboundQuantity, 0) > 0
+  );
+  const hasPipeline = Boolean(context?.hasOpenOrder || rowHasSecuredPipeline);
+  const pipelineWeak = !hasPipeline || leadTimeDays >= 14 || Boolean(context?.goodsReceiptPending);
+  const blockingReasons = [];
+  if (!hasPipeline) blockingReasons.push('replenishment_pipeline_missing');
+  if (leadTimeDays >= 14) blockingReasons.push('long_lead_time');
+  if (context?.goodsReceiptPending) blockingReasons.push('goods_receipt_pending_not_secured');
+  return {
+    hasPipeline,
+    pipelineWeak,
+    inboundQuantity: toNumber(context?.inboundQuantity, 0),
+    leadTimeDays,
+    waitingDelivery: Boolean(context?.waitingDelivery),
+    goodsReceiptPending: Boolean(context?.goodsReceiptPending),
+    orderIds: uniq(context?.orderIds || []),
+    statuses: uniq(context?.statuses || []),
+    blockingReasons,
+  };
+};
+
+const enrichRowWithGuardrails = (row = {}, { activeCampaigns = [], procurementContext = new Map() } = {}) => ({
+  ...row,
+  stockGuardrail: getStockGuardrail(row),
+  procurementGuardrail: getProcurementGuardrail(row, procurementContext),
+  activeCampaignConflict: findActiveCampaignConflict(row, activeCampaigns),
+});
+
+const getSuggestionModule = (id, type = 'product') => {
+  if (id === 'near-expiry') return 'expiry';
+  if (id === 'slow-moving' || id === 'demand-down') return 'sales';
+  if (id === 'overstock') return type === 'category' ? 'category' : 'product';
+  if (id === 'margin-watch') return type === 'brand' ? 'brand' : 'product';
+  return type === 'category' || type === 'brand' ? type : 'product';
+};
+
+const resolveScope = (rows = [], type = 'product') => {
+  if (type === 'category') {
+    const categoryIds = uniq(rows.map((row) => row.categoryId));
+    const categoryNames = uniq(rows.map((row) => row.category));
+    if (categoryIds.length === 1 || categoryNames.length === 1) {
+      return { scopeType: 'category', scopeId: categoryIds[0] || categoryNames[0] || null, scopeName: categoryNames[0] || categoryIds[0] || 'Kategori' };
+    }
+  }
+  if (type === 'brand') {
+    const brandNames = uniq(rows.map((row) => row.brand));
+    if (brandNames.length === 1) return { scopeType: 'brand', scopeId: brandNames[0], scopeName: brandNames[0] };
+  }
+  if (rows.length === 1) return { scopeType: 'product', scopeId: rows[0].productId, scopeName: rows[0].productName };
+  const productIds = uniq(rows.map((row) => row.productId));
+  return { scopeType: type === 'category' ? 'category' : 'product', scopeId: productIds.length ? `products:${productIds.slice(0, 8).join(',')}` : null, scopeName: `${rows.length} ürün` };
+};
+
+const buildRowSourceMetrics = (row = {}) => ({
+  stockLevel: toNumber(row.stockLevel, 0),
+  salesVelocity: toNumber(row.salesVelocity, 0),
+  stockCoverageDays: row.stockGuardrail?.stockCoverageDays ?? null,
+  criticalStock: toNumber(row.criticalStock, 0),
+  minimumStock: toNumber(row.minimumStock, 0),
+  currentMarginPercent: row.currentMarginPercent,
+  daysToExpiry: row.daysToExpiry,
+  trendDirection: row.trendDirection || null,
+  riskScore: toNumber(row.riskScore, 0),
+  activeCampaignId: row.activeCampaignConflict?.campaignId || null,
+  activeCampaignName: row.activeCampaignConflict?.campaignName || null,
+  activeCampaignConflictReason: row.activeCampaignConflict?.reason || null,
+  procurementPipelineWeak: Boolean(row.procurementGuardrail?.pipelineWeak),
+  procurementHasPipeline: Boolean(row.procurementGuardrail?.hasPipeline),
+  inboundQuantity: toNumber(row.procurementGuardrail?.inboundQuantity, 0),
+  leadTimeDays: toNumber(row.procurementGuardrail?.leadTimeDays, 0),
+  goodsReceiptPending: Boolean(row.procurementGuardrail?.goodsReceiptPending),
+});
+
+const createSuppressedSuggestion = ({ id, row, blockingReasons = [], sourceMetrics = {} }) => ({
+  id: `${id}-suppressed-${row.productId}`,
+  recommendationType: id.replace(/-/g, '_'),
+  primaryModule: getSuggestionModule(id),
+  scopeType: 'product',
+  scopeId: row.productId,
+  scopeName: row.productName,
+  productIds: [row.productId],
+  categoryIds: row.categoryId ? [row.categoryId] : [],
+  categoryNames: row.category && row.category !== '-' ? [row.category] : [],
+  brandNames: row.brand && row.brand !== '-' ? [row.brand] : [],
+  reasonCodes: ['campaign_guardrail_suppressed'],
+  blockingReasons: uniq(blockingReasons),
+  suggestedAction: 'Kampanya olusturma; stok, aktif kampanya veya tedarik durumunu kontrol et.',
+  recommendedDiscount: 0,
+  recommendedDiscountRate: 0,
+  riskLevel: 'blocked',
+  priority: 'low',
+  sourceMetrics,
+  isSuppressed: true,
+  suppressionReason: uniq(blockingReasons).join(',') || 'guardrail',
+  conflictReason: uniq(blockingReasons).join(',') || 'guardrail',
+  source: 'backend_analysis_engine',
+});
+
+const getRowBlockingReasons = (row = {}, suggestionId) => {
+  const reasons = [];
+  if (row.activeCampaignConflict) reasons.push('active_campaign_conflict');
+  if (DISCOUNT_RECOMMENDATION_TYPES.has(suggestionId)) {
+    if (!row.stockGuardrail?.discountEligible) reasons.push(...safeArray(row.stockGuardrail?.blockingReasons));
+    if (row.stockGuardrail?.isLowStock && row.procurementGuardrail?.pipelineWeak) reasons.push('weak_replenishment_for_low_stock');
+    if (row.procurementGuardrail?.goodsReceiptPending && row.stockGuardrail?.isLowStock) reasons.push('goods_receipt_pending_not_secured');
+    if (row.stockGuardrail?.isLowStock && !row.procurementGuardrail?.hasPipeline) reasons.push('low_stock_without_secured_purchase_order');
+  }
+  return uniq(reasons);
+};
+
+const filterRowsForSuggestion = ({ id, rows = [], assignedProductIds = new Set(), suppressed = [] }) => safeArray(rows)
+  .filter((row) => {
+    const blockingReasons = getRowBlockingReasons(row, id);
+    const alreadyAssigned = assignedProductIds.has(row.productId);
+    if (blockingReasons.length || alreadyAssigned) {
+      suppressed.push(createSuppressedSuggestion({
+        id,
+        row,
+        blockingReasons: alreadyAssigned ? ['lower_precedence_overlap'] : blockingReasons,
+        sourceMetrics: buildRowSourceMetrics(row),
+      }));
+      return false;
+    }
+    return true;
+  });
+
+const chooseOverstockScopeType = (rows = []) => {
+  const categories = uniq(rows.map((row) => row.categoryId || row.category));
+  return categories.length === 1 && rows.length >= 2 ? 'category' : 'product';
+};
+
+const buildEnhancedSuggestion = ({
+  id,
+  title,
+  reason,
+  rows,
+  recommendedDiscount,
+  type = 'product',
+  priority = 'medium',
+  reasonCodes = [],
+  suggestedAction = '',
+}) => {
+  const summary = summarizeRows(rows);
+  const primaryModule = getSuggestionModule(id, type);
+  const scope = resolveScope(rows, type);
+  const sourceMetrics = {
+    ...summary,
+    minStockCoverageDays: rows.reduce((min, row) => {
+      const value = row.stockGuardrail?.stockCoverageDays;
+      return value == null ? min : Math.min(min, value);
+    }, Number.POSITIVE_INFINITY),
+    activeCampaignConflictCount: rows.filter((row) => row.activeCampaignConflict).length,
+    weakReplenishmentCount: rows.filter((row) => row.procurementGuardrail?.pipelineWeak).length,
+    criticalStockCount: rows.filter((row) => row.stockGuardrail?.isCriticalStock).length,
+    lowStockCount: rows.filter((row) => row.stockGuardrail?.isLowStock).length,
+    reasonCodeCount: reasonCodes.length,
+    rowMetrics: rows.slice(0, 12).map(buildRowSourceMetrics),
+  };
+  if (!Number.isFinite(sourceMetrics.minStockCoverageDays)) sourceMetrics.minStockCoverageDays = null;
+
+  return {
+    id,
+    recommendationType: id.replace(/-/g, '_'),
+    title: normalizeCampaignText(title),
+    reason: normalizeCampaignText(reason),
+    type,
+    scopeType: scope.scopeType,
+    scopeId: scope.scopeId,
+    scopeName: scope.scopeName,
+    scopeLabel: scope.scopeName,
+    primaryModule,
+    module: primaryModule,
+    priority,
+    riskLevel: priority,
+    suggestedAction: suggestedAction || 'Kampanya taslagi olusturulmadan once stok, marj ve tedarik guardrail sonucunu kontrol et.',
+    recommendedDiscount: clamp(Math.round(recommendedDiscount), 0, 80),
+    recommendedDiscountRate: clamp(Math.round(recommendedDiscount), 0, 80),
+    reasonCodes: uniq(reasonCodes),
+    blockingReasons: [],
+    isSuppressed: false,
+    suppressionReason: '',
+    ...summary,
+    rows,
+    sourceMetrics,
+    guardrailSummary: {
+      stockPassed: rows.every((row) => row.stockGuardrail?.discountEligible || id === 'margin-watch'),
+      activeCampaignPassed: rows.every((row) => !row.activeCampaignConflict),
+      procurementPassed: rows.every((row) => !(row.stockGuardrail?.isLowStock && row.procurementGuardrail?.pipelineWeak)),
+    },
+    source: 'backend_analysis_engine',
+    signalBullets: [
+      `Ortalama gunluk satis: ${summary.avgDailySales}.`,
+      `Ortalama stok: ${summary.avgStockLevel}.`,
+      summary.minDaysToExpiry == null ? 'SKT sinyali bulunmayan urunler ayrica isaretlendi.' : `En yakin SKT: ${summary.minDaysToExpiry} gun.`,
+      `Guardrail: aktif kampanya, kritik stok ve tedarik cakismasi olmayan ${rows.length} urun.`,
+    ],
+    impactSummary: 'Satis hizi, stok, SKT, marj, aktif kampanya ve tedarik guardrail sinyalleri birlikte degerlendirildi.',
+    riskSummary: id === 'margin-watch'
+      ? 'Bu sinyal indirim onerisi degil; marj korunarak izleme veya fiyat duzeltme aksiyonu gerektirir.'
+      : 'Indirim uygulanmadan once aktif kampanya, stok yeterliligi ve tedarik pipeline kontrolu gecildi.',
+  };
+};
+
+// Single suggestion engine entry point: all API suggestions must pass through guardrails here.
+const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
+  const suppressed = [];
+  const assignedProductIds = new Set();
+  const sourceRows = safeArray(rows)
+    .map(normalizeCampaignRow)
+    .filter((row) => row.productId)
+    .map((row) => enrichRowWithGuardrails(row, context));
+
+  const slowRowsRaw = sourceRows
     .filter((row) => row.salesVelocity <= 1.2 && row.stockLevel > 0)
     .sort((a, b) => b.riskScore - a.riskScore)
     .slice(0, 12);
-  const expiryRows = sourceRows
+  const expiryRowsRaw = sourceRows
     .filter((row) => row.daysToExpiry != null && row.daysToExpiry <= 14 && row.stockLevel > 0)
     .sort((a, b) => a.daysToExpiry - b.daysToExpiry || b.riskScore - a.riskScore)
     .slice(0, 12);
-  const overstockRows = sourceRows
+  const overstockRowsRaw = sourceRows
     .filter((row) => row.stockLevel >= Math.max(20, row.salesVelocity * 21))
     .sort((a, b) => b.stockLevel - a.stockLevel)
     .slice(0, 12);
-  const lowMarginRows = sourceRows
+  const lowMarginRowsRaw = sourceRows
     .filter((row) => row.currentMarginPercent != null && row.currentMarginPercent < 12 && row.stockLevel > 0)
     .sort((a, b) => a.currentMarginPercent - b.currentMarginPercent)
     .slice(0, 8);
+  const discountOpportunityRowsRaw = sourceRows
+    .filter((row) => (
+      row.suggestedDiscount >= 8
+      && row.currentMarginPercent != null
+      && row.currentMarginPercent >= 18
+      && row.stockLevel >= Math.max(8, row.salesVelocity * 10)
+    ))
+    .sort((a, b) => b.suggestedDiscount - a.suggestedDiscount || b.currentMarginPercent - a.currentMarginPercent)
+    .slice(0, 10);
+  const demandDownRowsRaw = sourceRows
+    .filter((row) => (
+      row.stockLevel > 0
+      && (
+        row.trendDirection === 'down'
+        || safeArray(row.riskFactors).some((factor) => String(factor || '').toLowerCase().includes('demand'))
+      )
+      && row.salesVelocity <= 2
+    ))
+    .sort((a, b) => b.riskScore - a.riskScore)
+    .slice(0, 10);
 
-  return [
-    slowRows.length && buildSuggestion({
-      id: 'slow-moving',
-      title: `${slowRows.length} yavaş satan ürün için indirim kampanyası`,
-      reason: 'Satış hızı düşük ve stok bekleme riski yüksek ürünler seçildi.',
-      rows: slowRows,
-      recommendedDiscount: 16,
-      priority: slowRows.some((row) => row.riskLevel === 'critical' || row.riskLevel === 'high') ? 'high' : 'medium',
-    }),
-    expiryRows.length && buildSuggestion({
+  const candidateSpecs = [
+    {
       id: 'near-expiry',
-      title: `${expiryRows.length} üründe SKT odaklı hızlı kampanya`,
-      reason: 'Gerçek batch SKT bilgisine göre SKT baskısı olan ürünler önceliklendirildi.',
-      rows: expiryRows,
-      recommendedDiscount: expiryRows.some((row) => row.daysToExpiry <= 3) ? 25 : 18,
-      priority: expiryRows.some((row) => row.daysToExpiry <= 3) ? 'critical' : 'high',
-    }),
-    overstockRows.length && buildSuggestion({
+      rows: expiryRowsRaw,
+      build: (expiryRows) => buildEnhancedSuggestion({
+        id: 'near-expiry',
+        title: `${expiryRows.length} urunde SKT odakli kontrollu kampanya`,
+        reason: 'Gercek batch SKT bilgisine gore SKT baskisi olan, aktif kampanya ve kritik stok cakismasi olmayan urunler onceliklendirildi.',
+        rows: expiryRows,
+        recommendedDiscount: expiryRows.some((row) => row.stockGuardrail?.isLowStock) ? 12 : (expiryRows.some((row) => row.daysToExpiry <= 3) ? 25 : 18),
+        priority: expiryRows.some((row) => row.daysToExpiry <= 3) ? 'critical' : 'high',
+        reasonCodes: ['near_expiry', 'expiry_pressure', 'stock_guardrail_passed'],
+        suggestedAction: expiryRows.some((row) => row.stockGuardrail?.isLowStock)
+          ? 'Kisa sureli, kontrollu SKT aksiyonu planla; agresif indirim uygulama.'
+          : 'SKT baskisi olan urunler icin kisa sureli kampanya taslagi olustur.',
+      }),
+    },
+    {
       id: 'overstock',
-      title: `${overstockRows.length} ürün için stok eritme kampanyası`,
-      reason: 'Stok seviyesi mevcut satış hızına göre yüksek.',
-      rows: overstockRows,
-      recommendedDiscount: 14,
-      type: 'category',
-      priority: 'medium',
-    }),
-    lowMarginRows.length && buildSuggestion({
+      rows: overstockRowsRaw,
+      build: (overstockRows) => {
+        const type = chooseOverstockScopeType(overstockRows);
+        return buildEnhancedSuggestion({
+          id: 'overstock',
+          title: `${overstockRows.length} urun icin stok eritme kampanyasi`,
+          reason: 'Stok seviyesi mevcut satis hizina gore yuksek ve tedarik/stok guardrail kontrolunden gecti.',
+          rows: overstockRows,
+          recommendedDiscount: 14,
+          type,
+          priority: 'medium',
+          reasonCodes: ['overstock', type === 'category' ? 'category_scope' : 'product_scope', 'stock_guardrail_passed'],
+          suggestedAction: type === 'category' ? 'Kategori kapsamli stok eritme kampanyasi taslagi olustur.' : 'Urun bazli stok eritme aksiyonu taslagi olustur.',
+        });
+      },
+    },
+    {
+      id: 'slow-moving',
+      rows: slowRowsRaw,
+      build: (slowRows) => buildEnhancedSuggestion({
+        id: 'slow-moving',
+        title: `${slowRows.length} yavas satan urun icin indirim kampanyasi`,
+        reason: 'Satis hizi dusuk, stok bekleme riski yuksek ve stok/tedarik/campaign guardrail kontrolunden gecen urunler secildi.',
+        rows: slowRows,
+        recommendedDiscount: 16,
+        priority: slowRows.some((row) => row.riskLevel === 'critical' || row.riskLevel === 'high') ? 'high' : 'medium',
+        reasonCodes: ['slow_moving', 'demand_down', 'stock_guardrail_passed'],
+        suggestedAction: 'Yavas satan ve stogu guvenli urunler icin kontrollu indirim kampanyasi taslagi olustur.',
+      }),
+    },
+    {
+      id: 'discount-opportunity',
+      rows: discountOpportunityRowsRaw,
+      build: (discountRows) => buildEnhancedSuggestion({
+        id: 'discount-opportunity',
+        title: `${discountRows.length} üründe güvenli indirim fırsatı`,
+        reason: 'Analiz önerisi, marj ve stok güvenliği birlikte kontrol edilerek kampanya fırsatına dönüştürüldü.',
+        rows: discountRows,
+        recommendedDiscount: Math.min(18, Math.max(8, Math.round(discountRows.reduce((sum, row) => sum + row.suggestedDiscount, 0) / Math.max(1, discountRows.length)))),
+        priority: 'medium',
+        reasonCodes: ['discount_opportunity', 'margin_guardrail_passed', 'stock_guardrail_passed'],
+        suggestedAction: 'Marjı koruyan, kısa süreli ürün bazlı indirim taslağı oluştur.',
+      }),
+    },
+    {
+      id: 'demand-down',
+      rows: demandDownRowsRaw,
+      build: (demandRows) => buildEnhancedSuggestion({
+        id: 'demand-down',
+        title: `${demandRows.length} üründe talep düşüşü aksiyonu`,
+        reason: 'Satış trendi düşen ve stok/tedarik/campaign guardrail kontrolünden geçen ürünler seçildi.',
+        rows: demandRows,
+        recommendedDiscount: 10,
+        priority: 'medium',
+        reasonCodes: ['demand_down', 'sales_trend_down', 'stock_guardrail_passed'],
+        suggestedAction: 'Talep düşüşü görülen ürünler için düşük yoğunluklu, kontrollü kampanya taslağı oluştur.',
+      }),
+    },
+    {
       id: 'margin-watch',
-      title: `${lowMarginRows.length} düşük marjlı üründe kontrollü aksiyon`,
-      reason: 'Marj riski düşük indirim veya fiyat koruma gerektiriyor.',
-      rows: lowMarginRows,
-      recommendedDiscount: 6,
-      priority: 'medium',
-    }),
-  ].filter(Boolean);
+      rows: lowMarginRowsRaw,
+      build: (lowMarginRows) => buildEnhancedSuggestion({
+        id: 'margin-watch',
+        title: `${lowMarginRows.length} dusuk marjli urunde korumali izleme`,
+        reason: 'Marj seviyesi indirim icin riskli; dogrudan indirim yerine fiyat/maliyet izleme sinyali uretildi.',
+        rows: lowMarginRows,
+        recommendedDiscount: 0,
+        priority: 'medium',
+        reasonCodes: ['margin_watch', 'discount_not_recommended', 'margin_protection'],
+        suggestedAction: 'Indirim olusturma; fiyat, maliyet ve tedarik kosullarini kontrol et.',
+      }),
+    },
+  ].sort((left, right) => (SUGGESTION_PRECEDENCE[right.id] || 0) - (SUGGESTION_PRECEDENCE[left.id] || 0));
+
+  const suggestions = [];
+  candidateSpecs.forEach((spec) => {
+    const eligibleRows = filterRowsForSuggestion({
+      id: spec.id,
+      rows: spec.rows,
+      assignedProductIds,
+      suppressed,
+    });
+    if (!eligibleRows.length) return;
+    eligibleRows.forEach((row) => assignedProductIds.add(row.productId));
+    suggestions.push(spec.build(eligibleRows));
+  });
+
+  return { suggestions, suppressedSuggestions: suppressed };
+};
+
+export const __campaignAnalysisInternals = {
+  buildEnhancedSuggestionsFromRows,
+  getStockGuardrail,
+  getProcurementGuardrail,
 };
 
 export const calculateCampaignImpact = ({
@@ -494,20 +916,30 @@ const calculateRealSalesCampaignSimulation = ({ products = [], salesMetricsByPro
 export const campaignAnalysisService = {
   async getSuggestions(query = {}) {
     const analysis = await pricingAnalysisService.getAnalysis({ ...query, limit: undefined });
+    const settings = await settingsRepo.getSettings().catch(() => null);
+    const [activeCampaigns, procurementContext] = await Promise.all([
+      listActiveCampaignDefinitions({ settings }).catch(() => []),
+      buildProcurementContext(),
+    ]);
     const responseLimit = Math.min(1000, Math.max(50, toNumber(query.limit, 500)));
     const normalizedRows = safeArray(analysis.rows).map(normalizeCampaignRow);
     const eligibleProductCount = toNumber(analysis?.summary?.totalAnalyzedProducts, normalizedRows.length);
     const rows = normalizedRows
+      .map((row) => enrichRowWithGuardrails(row, { activeCampaigns, procurementContext }))
       .sort((left, right) => toNumber(right.riskScore, 0) - toNumber(left.riskScore, 0))
       .slice(0, responseLimit);
+    const suggestionResult = buildEnhancedSuggestionsFromRows(analysis.rows, { activeCampaigns, procurementContext });
     return {
       generatedAt: new Date().toISOString(),
       source: 'backend_analysis_engine',
       eligibleProductCount,
       analysisCandidateCount: rows.length,
       analysisLimit: responseLimit,
+      activeCampaignGuardrailCount: activeCampaigns.length,
+      suppressedSuggestionCount: suggestionResult.suppressedSuggestions.length,
       rows,
-      suggestions: buildSuggestionsFromRows(analysis.rows),
+      suggestions: suggestionResult.suggestions,
+      suppressedSuggestions: suggestionResult.suppressedSuggestions,
     };
   },
 

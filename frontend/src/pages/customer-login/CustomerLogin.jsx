@@ -22,7 +22,13 @@ export default function CustomerLogin() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [forgotError, setForgotError] = useState('');
   const passwordRuleMessage = 'Şifre en az 8 karakter olmalı ve en az 1 büyük harf, 1 küçük harf, 1 rakam ve 1 özel karakter içermelidir.';
+  const forgotSuccessMessage = 'Eğer bu e-posta sistemde kayıtlıysa şifre sıfırlama bağlantısı gönderildi.';
 
   const activeLegal = useMemo(() => LEGAL_ITEMS.find((item) => item.key === activeLegalKey) || null, [activeLegalKey]);
 
@@ -80,6 +86,27 @@ export default function CustomerLogin() {
       setError(requestError.message || 'Giriş başarısız.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const submitForgotPassword = async (event) => {
+    event.preventDefault();
+    const email = String(forgotEmail || '').trim().toLocaleLowerCase('tr-TR');
+    setForgotError('');
+    setForgotMessage('');
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      setForgotError('Geçerli bir e-posta adresi girin.');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const result = await customerPortalAuthService.forgotPassword(email);
+      setForgotMessage(result?.message || forgotSuccessMessage);
+    } catch (requestError) {
+      setForgotError(requestError?.message || 'Şifre sıfırlama isteği gönderilemedi.');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -177,6 +204,16 @@ export default function CustomerLogin() {
           </label>
           {fieldErrors.password ? <small className="shelf-auth-field-error">{fieldErrors.password}</small> : null}
           {isRegister ? <small className="shelf-auth-help">{passwordRuleMessage}</small> : null}
+          {!isRegister ? (
+            <button type="button" className="shelf-auth-link shelf-auth-forgot-link" onClick={() => {
+              setForgotEmail(String(form.identity || '').includes('@') ? form.identity : '');
+              setForgotError('');
+              setForgotMessage('');
+              setForgotOpen(true);
+            }}>
+              Şifremi Unuttum
+            </button>
+          ) : null}
 
           {isRegister ? (
             <div className="shelf-auth-legal-box">
@@ -243,6 +280,37 @@ export default function CustomerLogin() {
               <p>{(LEGAL_DOCUMENTS[activeLegal.key]?.content || '').trim()}</p>
             </div>
           </div>
+        </div>
+      ) : null}
+      {forgotOpen ? (
+        <div className="shelf-auth-modal" role="dialog" aria-modal="true" aria-label="Şifremi Unuttum">
+          <form className="shelf-auth-modal-card" onSubmit={submitForgotPassword} noValidate>
+            <header>
+              <h3>Şifremi Unuttum</h3>
+              <button type="button" className="shelf-auth-link" onClick={() => setForgotOpen(false)}>Kapat</button>
+            </header>
+            <div className="shelf-auth-modal-body">
+              <p>Kayıtlı e-posta adresinizi girin. Hesabınız varsa şifre sıfırlama bağlantısı gönderilir.</p>
+              <label className={`shelf-auth-field ${forgotError ? 'is-invalid' : ''}`} aria-label="E-posta">
+                <Mail size={18} aria-hidden="true" />
+                <input
+                  type="email"
+                  placeholder="E-posta"
+                  value={forgotEmail}
+                  onChange={(event) => {
+                    setForgotEmail(event.target.value);
+                    setForgotError('');
+                    setForgotMessage('');
+                  }}
+                />
+              </label>
+              {forgotError ? <small className="shelf-auth-field-error">{forgotError}</small> : null}
+              {forgotMessage ? <p className="shelf-auth-success" role="status">{forgotMessage}</p> : null}
+              <button type="submit" className="shelf-auth-submit" disabled={forgotLoading}>
+                {forgotLoading ? 'Gönderiliyor...' : 'Bağlantı Gönder'}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
     </main>

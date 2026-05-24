@@ -3,6 +3,8 @@ import { customerAuthService } from '../services/customerAuthService.js';
 export const customerAuthController = {
   async register(req, res, next) { try { res.status(201).json({ success: true, data: await customerAuthService.register(req.body || {}) }); } catch (e) { next(e); } },
   async login(req, res, next) { try { res.json({ success: true, data: await customerAuthService.login(req.body || {}) }); } catch (e) { next(e); } },
+  async forgotPassword(req, res, next) { try { res.json({ success: true, data: await customerAuthService.forgotPassword(req.body || {}, { ip: req.ip, userAgent: req.get('user-agent') || '' }) }); } catch (e) { next(e); } },
+  async resetPassword(req, res, next) { try { res.json({ success: true, data: await customerAuthService.resetPassword(req.body || {}) }); } catch (e) { next(e); } },
   async refresh(req, res, next) { try { res.json({ success: true, data: await customerAuthService.refreshSession(req.body || {}) }); } catch (e) { next(e); } },
   async me(req, res, next) { try { res.json({ success: true, data: await customerAuthService.me(req.customer.id) }); } catch (e) { next(e); } },
   async updateProfile(req, res, next) { try { res.json({ success: true, data: await customerAuthService.updateProfile(req.customer.id, req.body || {}) }); } catch (e) { next(e); } },

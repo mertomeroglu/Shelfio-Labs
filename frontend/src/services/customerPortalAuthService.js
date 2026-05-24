@@ -68,6 +68,8 @@ async function request(path, options = {}, retry = true) {
       && retry
       && !path.startsWith('/customer-auth/login')
       && !path.startsWith('/customer-auth/register')
+      && !path.startsWith('/customer-auth/forgot-password')
+      && !path.startsWith('/customer-auth/reset-password')
       && !path.startsWith('/customer-auth/refresh')
     ) {
       try {
@@ -104,6 +106,8 @@ export const customerPortalAuthService = {
     setUser(normalizeCustomerUser(data.customer));
     return data;
   },
+  forgotPassword: (email) => request('/customer-auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  resetPassword: (payload) => request('/customer-auth/reset-password', { method: 'POST', body: JSON.stringify(payload || {}) }),
   async me() {
     const data = await request('/customer-auth/me');
     setUser(normalizeCustomerUser(data));

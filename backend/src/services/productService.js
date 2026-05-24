@@ -1538,6 +1538,125 @@ const buildProductListSummary = async (prisma, { filteredTotal = null, currentPa
   };
 };
 
+const mapLocationProductRow = (row = {}) => {
+  const stock = row.stock || null;
+  const warehouseStock = Number(stock?.warehouseQuantity || 0);
+  const shelfStock = Number(stock?.shelfQuantity || 0);
+  const totalStock = Number(stock?.onHand ?? (warehouseStock + shelfStock));
+  const categoryName = row.category?.name || row.categoryName || null;
+  const requiredStorageType = resolveRequiredStorageType(row.category || null, row.requiredStorageType);
+  return {
+    id: row.id,
+    sku: row.sku || '',
+    barcode: row.barcode || '',
+    name: row.name || '',
+    categoryName,
+    sectionId: row.sectionId || null,
+    sectionName: row.section?.name || null,
+    sectionNumber: row.section?.number || null,
+    shelfSide: row.shelfSide || '',
+    shelfNo: row.shelfNo || '',
+    shelfLevel: row.shelfLevel || '',
+    requiredStorageType,
+    warehouseStock,
+    shelfStock,
+    totalStock,
+    available: Number(stock?.available ?? totalStock),
+    criticalStock: Number(row.criticalStock || 0),
+    maxStock: Number(row.maxStock || 0),
+    maxShelfStock: Number(row.maxShelfStock || 0),
+    averageDesi: toNullableNumberValue(row.averageDesi),
+    unitsPerCase: toNullableNumberValue(row.unitsPerCase),
+    casesPerPallet: toNullableNumberValue(row.casesPerPallet),
+    unitsPerPallet: toNullableNumberValue(row.unitsPerPallet),
+    depotAssignmentType: row.depotAssignmentType || '',
+    depotLocationCode: row.depotLocationCode || row.defaultWarehouseLocationCode || null,
+    depotZoneCode: row.depotZoneCode || '',
+    isVirtualLocation: row.isVirtualLocation === true,
+    capacityMode: row.capacityMode || '',
+    isActive: row.isActive !== false,
+    isListed: row.isListed !== false,
+    createdAt: row.createdAt || null,
+    updatedAt: row.updatedAt || null,
+  };
+};
+
+const listLocationProductsFromPostgres = async (options = {}) => {
+  const prisma = await getPrisma();
+  const includeUnlisted = options.includeUnlisted === true;
+  const universe = normalizeProductUniverse(options.universe || (includeUnlisted ? '' : 'listed_active'));
+  const where = buildProductWhere({ ...options, universe, activeCampaigns: [] });
+  const rows = await withPostgresQueryLogging('GET /api/products?view=location_management', () => prisma.product.findMany({
+    where,
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      sku: true,
+      barcode: true,
+      name: true,
+      categoryId: true,
+      sectionId: true,
+      shelfSide: true,
+      shelfNo: true,
+      shelfLevel: true,
+      shelfCode: true,
+      requiredStorageType: true,
+      averageDesi: true,
+      unitsPerCase: true,
+      casesPerPallet: true,
+      unitsPerPallet: true,
+      criticalStock: true,
+      maxStock: true,
+      maxShelfStock: true,
+      isListed: true,
+      isActive: true,
+      depotAssignmentType: true,
+      depotLocationCode: true,
+      depotZoneCode: true,
+      defaultWarehouseLocationCode: true,
+      isVirtualLocation: true,
+      capacityMode: true,
+      stockingStrategy: true,
+      createdAt: true,
+      updatedAt: true,
+      category: { select: { id: true, name: true, requiresColdChain: true, requiresFreezer: true } },
+      section: { select: { id: true, name: true, number: true } },
+      stock: {
+        select: {
+          warehouseQuantity: true,
+          shelfQuantity: true,
+          onHand: true,
+          available: true,
+        },
+      },
+    },
+  }));
+
+  return rows.map(mapLocationProductRow);
+};
+
+const listLocationProductsFromRepositories = async (options = {}) => {
+  const universe = normalizeProductUniverse(options.universe || 'listed_active');
+  const includeUnlisted = options.includeUnlisted === true;
+  const [products, categories, sections, stocks] = await Promise.all([
+    productRepo.getAll(),
+    categoryRepo.getAll(),
+    sectionRepo.getAll(),
+    stockRepo.getAll(),
+  ]);
+  const categoryMap = new Map(categories.map((item) => [item.id, item]));
+  const sectionMap = new Map(sections.map((item) => [item.id, item]));
+  const stockMap = new Map(stocks.map((item) => [item.productId, item]));
+  return products
+    .filter((product) => matchesProductUniverse(product, universe, { includeUnlisted }))
+    .map((product) => mapLocationProductRow({
+      ...product,
+      category: categoryMap.get(product.categoryId) || null,
+      section: sectionMap.get(product.sectionId) || null,
+      stock: stockMap.get(product.id) || null,
+    }));
+};
+
 const listProductsFromPostgres = async (options = {}) => {
   const prisma = await getPrisma();
   const mode = resolvePaginationMode(options.paginationMode);
@@ -2091,6 +2210,12 @@ const resolveProductLogistics = (input, fallback = {}) => {
 
 export const productService = {
   async list(options = {}) {
+    if (String(options.view || '').trim() === 'location_management') {
+      return config.dataStore === 'postgres'
+        ? listLocationProductsFromPostgres(options)
+        : listLocationProductsFromRepositories(options);
+    }
+
     if (config.dataStore === 'postgres') {
       return listProductsFromPostgres(options);
     }

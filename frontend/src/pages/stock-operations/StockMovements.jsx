@@ -12,6 +12,7 @@ import Toast from '../../components/Toast.jsx';
 import { useAuth } from '../../hooks/useAuth.js';
 import { formatCurrency, formatDate, formatDepotLocationLabel, formatMovementRouteLabel, formatNumber, formatStockLocationLabel, formatStorageTypeLabel, formatUnit } from '../../services/formatters.js';
 import { procurementService } from '../../services/procurementService.js';
+import { getPurchaseOrderStatusLabel, normalizePurchaseOrderStatus } from '../../utils/purchaseOrderLifecycle.js';
 import { productService } from '../../services/productService.js';
 import { sectionService } from '../../services/sectionService.js';
 import { supplierService } from '../../services/supplierService.js';
@@ -492,7 +493,9 @@ export default function StockMovements() {
     try {
       setPendingReceiptLoading(true);
       const rows = await procurementService.listOrders({ status: 'stock_entry_pending' }).catch(() => []);
-      setPendingReceiptOrders(Array.isArray(rows) ? rows : []);
+      const pendingRows = (Array.isArray(rows) ? rows : [])
+        .filter((row) => normalizePurchaseOrderStatus(row?.status || row?.currentStatus, '') === 'stock_entry_pending');
+      setPendingReceiptOrders(pendingRows);
       setHasLoadedPendingReceiptOrders(true);
     } catch (error) {
       setToast({ type: 'error', title: 'Mal Kabul', message: error.message || 'Sipariş listesi yüklenemedi.' });
@@ -2158,6 +2161,11 @@ export default function StockMovements() {
       label: 'Toplam',
       render: (row) => formatCurrency(row.grandTotal ?? row.totalAmount ?? 0),
       sortValue: (row) => Number(row.grandTotal ?? row.totalAmount ?? 0),
+    },
+    {
+      key: 'status',
+      label: 'Lifecycle',
+      render: (row) => getPurchaseOrderStatusLabel(row.status || row.currentStatus),
     },
     {
       key: 'actions',

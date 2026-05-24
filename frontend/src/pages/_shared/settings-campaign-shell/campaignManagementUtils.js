@@ -102,9 +102,190 @@ const sortByAscending = (rows = [], selector) => [...rows].sort((left, right) =>
 
 const sortByDescending = (rows = [], selector) => [...rows].sort((left, right) => selector(right) - selector(left));
 
-const uniqueProductIds = (rows = []) => [...new Set(rows.map((row) => String(row?.productId || row?.id || '')).filter(Boolean))];
+const uniqueProductIds = (rows = []) => [...new Set(rows.map((row) => (
+  typeof row === 'string' || typeof row === 'number'
+    ? String(row)
+    : String(row?.productId || row?.id || '')
+)).filter(Boolean))];
 
 const uniqueNames = (rows = [], key) => [...new Set(rows.map((row) => String(row?.[key] || '').trim()).filter((value) => value && value !== '-'))];
+
+export const CAMPAIGN_SUGGESTION_MODULES = {
+  general: { key: 'general', label: 'Genel', scopeLabel: 'Genel / çapraz', actionLabel: 'Özel fırsatı taslağa al' },
+  product: { key: 'product', label: 'Ürün Bazlı', scopeLabel: 'Ürün kümesi', actionLabel: 'Ürün kampanyası oluştur' },
+  category: { key: 'category', label: 'Kategori Bazlı', scopeLabel: 'Kategori', actionLabel: 'Kategori kampanyası oluştur' },
+  brand: { key: 'brand', label: 'Marka Bazlı', scopeLabel: 'Marka', actionLabel: 'Marka kampanyası oluştur' },
+  expiry: { key: 'expiry', label: 'SKT Bazlı', scopeLabel: 'SKT / fire riski', actionLabel: 'Hızlı indirim oluştur' },
+  sales: { key: 'sales', label: 'Satış Bazlı', scopeLabel: 'Satış performansı', actionLabel: 'Satış odaklı kampanya oluştur' },
+};
+
+const MODULE_KEYS = Object.keys(CAMPAIGN_SUGGESTION_MODULES);
+
+const normalizeSuggestionKey = (value) => String(value || '')
+  .trim()
+  .toLocaleLowerCase('tr-TR')
+  .replace(/_/g, '-')
+  .replace(/\s+/g, '-');
+
+const getSuggestionIdentity = (suggestion = {}) => {
+  const productIds = uniqueProductIds(safeArray(suggestion.productIds || suggestion.rows));
+  return [
+    normalizeSuggestionKey(suggestion.id || suggestion.recommendationType || suggestion.title),
+    normalizeSuggestionKey(suggestion.type || suggestion.scope || ''),
+    productIds.slice(0, 8).sort().join(','),
+  ].join('|');
+};
+
+const hasSuggestionText = (suggestion = {}, ...needles) => {
+  const haystack = [
+    suggestion.id,
+    suggestion.recommendationType,
+    suggestion.type,
+    suggestion.sourceModule,
+    suggestion.title,
+    suggestion.reason,
+  ].map((value) => String(value || '').toLocaleLowerCase('tr-TR')).join(' ');
+  return needles.some((needle) => haystack.includes(String(needle).toLocaleLowerCase('tr-TR')));
+};
+
+const resolveCampaignSuggestionModuleKey = (suggestion = {}) => {
+  const explicitModule = normalizeSuggestionKey(suggestion.primaryModule || suggestion.module || suggestion.sourceModule);
+  if (MODULE_KEYS.includes(explicitModule)) return explicitModule;
+
+  const id = normalizeSuggestionKey(suggestion.id || suggestion.recommendationType || suggestion.type);
+  const scope = normalizeSuggestionKey(suggestion.type || suggestion.scope || suggestion.campaignType);
+
+  if (id === 'near-expiry' || id.includes('expiry') || hasSuggestionText(suggestion, 'skt', 'son kullanma', 'fire')) return 'expiry';
+  if (id === 'slow-moving' || id === 'demand-down' || id.includes('sales') || hasSuggestionText(suggestion, 'satış hızı', 'talep düş', 'yavaş satan')) return 'sales';
+  if (id === 'overstock' || id.includes('stock-clearance') || hasSuggestionText(suggestion, 'stok eritme', 'stok baskısı')) {
+    return scope === 'category' || safeArray(suggestion.categoryNames).length > 0 ? 'category' : 'product';
+  }
+  if (id === 'margin-watch' || id.includes('margin') || id.includes('discount-opportunity')) {
+    if (scope === 'brand') return 'brand';
+    if (scope === 'category') return 'category';
+    if (scope === 'general') return 'general';
+    return 'product';
+  }
+
+  if (scope === 'brand') return 'brand';
+  if (scope === 'category') return 'category';
+  if (scope === 'product') return 'product';
+  return 'general';
+};
+
+const resolveRecommendationType = (suggestion = {}) => {
+  const id = normalizeSuggestionKey(suggestion.recommendationType || suggestion.id || suggestion.type || 'campaign-opportunity');
+  if (id === 'near-expiry') return 'near_expiry';
+  if (id === 'slow-moving') return 'slow_moving';
+  if (id === 'overstock') return 'overstock';
+  if (id === 'margin-watch') return 'margin_watch';
+  return id.replace(/-/g, '_');
+};
+
+export const enrichCampaignSuggestion = (suggestion = {}) => {
+  const primaryModule = resolveCampaignSuggestionModuleKey(suggestion);
+  const meta = CAMPAIGN_SUGGESTION_MODULES[primaryModule] || CAMPAIGN_SUGGESTION_MODULES.general;
+  const recommendationType = resolveRecommendationType(suggestion);
+  const scope = String(suggestion.type || primaryModule || 'general').toLowerCase();
+  const secondaryTags = [
+    primaryModule !== 'expiry' && hasSuggestionText(suggestion, 'skt') ? 'SKT sinyali' : '',
+    primaryModule !== 'sales' && hasSuggestionText(suggestion, 'satış') ? 'Satış sinyali' : '',
+    safeArray(suggestion.categoryNames).length ? 'Kategori etkisi' : '',
+    safeArray(suggestion.brandNames).length ? 'Marka etkisi' : '',
+  ].filter(Boolean);
+
+  return {
+    ...suggestion,
+    primaryModule,
+    module: primaryModule,
+    moduleLabel: meta.label,
+    recommendationType,
+    scopeLabel: meta.scopeLabel,
+    suggestedAction: suggestion.suggestedAction || meta.actionLabel,
+    secondaryTags,
+    type: scope,
+  };
+};
+
+const buildDashboardHighlights = (suggestions = []) => {
+  const regularGeneral = suggestions.filter((item) => item.primaryModule === 'general');
+  const highPriority = suggestions.filter((item) => ['critical', 'high'].includes(String(item.priority || '').toLowerCase()));
+  const moduleCount = new Set(suggestions.map((item) => item.primaryModule).filter(Boolean)).size;
+  const productIds = uniqueProductIds(suggestions.flatMap((item) => safeArray(item.productIds)));
+  const averageDiscount = suggestions.length
+    ? Math.round(suggestions.reduce((sum, item) => sum + toNumber(item.recommendedDiscount, 0), 0) / suggestions.length)
+    : 0;
+
+  const highlights = [...regularGeneral];
+
+  if (highPriority.length >= 2) {
+    highlights.push(enrichCampaignSuggestion({
+      id: 'dashboard-high-priority-bundle',
+      title: `${highPriority.length} yüksek öncelikli kampanya fırsatı`,
+      reason: 'Farklı modüllerden gelen yüksek riskli sinyaller birlikte ele alındığında daha kontrollü kampanya planı gerekir.',
+      type: 'general',
+      primaryModule: 'general',
+      recommendationType: 'cross_module_priority',
+      affectedProductCount: uniqueProductIds(highPriority.flatMap((item) => safeArray(item.productIds))).length || highPriority.reduce((sum, item) => sum + toNumber(item.affectedProductCount, 0), 0),
+      recommendedDiscount: averageDiscount || 12,
+      priority: highPriority.some((item) => item.priority === 'critical') ? 'critical' : 'high',
+      impactSummary: 'Önce ilgili modül detaylarını kontrol edip tek kampanya yerine dar kapsamlı aksiyonlar planlayın.',
+      riskSummary: 'Bu kart özet amaçlıdır; detay öneriler ilgili modüllerde tekil olarak gösterilir.',
+    }));
+  }
+
+  if (moduleCount >= 3) {
+    highlights.push(enrichCampaignSuggestion({
+      id: 'dashboard-cross-module-opportunity',
+      title: 'Çapraz kampanya planlama fırsatı',
+      reason: 'Ürün, stok, SKT ve satış sinyalleri birden fazla modülde birikiyor.',
+      type: 'general',
+      primaryModule: 'general',
+      recommendationType: 'cross_module_opportunity',
+      productIds,
+      affectedProductCount: productIds.length || suggestions.reduce((sum, item) => sum + toNumber(item.affectedProductCount, 0), 0),
+      recommendedDiscount: averageDiscount || 10,
+      priority: highPriority.length ? 'high' : 'medium',
+      impactSummary: 'Ana panelde sadece çapraz özet görünür; detaylar modül kartlarında tutulur.',
+      riskSummary: 'Geniş kapsamlı kampanya açmadan önce marj ve stok gerçekliği modül bazında doğrulanmalı.',
+    }));
+  }
+
+  const unique = new Map();
+  highlights.forEach((item) => {
+    const key = getSuggestionIdentity(item);
+    if (!unique.has(key)) unique.set(key, item);
+  });
+  return [...unique.values()].slice(0, 5);
+};
+
+export const buildCampaignSuggestionPresentation = (suggestions = []) => {
+  const unique = new Map();
+  safeArray(suggestions).forEach((suggestion) => {
+    const enriched = enrichCampaignSuggestion(suggestion);
+    const key = getSuggestionIdentity(enriched);
+    if (!key || unique.has(key)) return;
+    unique.set(key, enriched);
+  });
+
+  const all = [...unique.values()];
+  const byModule = MODULE_KEYS.reduce((acc, key) => {
+    acc[key] = all.filter((item) => item.primaryModule === key);
+    return acc;
+  }, {});
+
+  const counts = MODULE_KEYS.reduce((acc, key) => {
+    acc[key] = byModule[key].length;
+    return acc;
+  }, {});
+
+  return {
+    all,
+    byModule,
+    counts,
+    dashboardHighlights: buildDashboardHighlights(all),
+  };
+};
 
 const buildSignalBullets = ({
   rows = [],

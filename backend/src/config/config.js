@@ -123,6 +123,7 @@ const smtpSecure = smtpPort === 465
 const supportUploadDir = path.resolve(
   process.env.SUPPORT_UPLOAD_DIR || process.env.UPLOAD_DIR || path.join(backendRootDir, 'storage', 'support-uploads')
 );
+const publicAppBaseUrl = String(process.env.PUBLIC_APP_BASE_URL || process.env.FRONTEND_BASE_URL || 'https://shelfiolabs.com').replace(/\/+$/, '');
 
 export const config = {
   port: parsePort(process.env.PORT, 4000),
@@ -134,6 +135,8 @@ export const config = {
   prismaLogQueries: parseBoolean(process.env.PRISMA_LOG_QUERIES, false),
   jwtSecret: process.env.JWT_SECRET || 'stok-takip-sistemi-default-secret',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '8h',
+  staffRefreshSecret: process.env.STAFF_REFRESH_SECRET || process.env.JWT_SECRET || 'stok-takip-sistemi-default-secret',
+  staffRefreshExpiresIn: process.env.STAFF_REFRESH_EXPIRES_IN || '7d',
   customerRefreshSecret: process.env.CUSTOMER_REFRESH_SECRET || process.env.JWT_SECRET || 'stok-takip-sistemi-default-secret',
   customerRefreshExpiresIn: process.env.CUSTOMER_REFRESH_EXPIRES_IN || '30d',
   supportMailTo: process.env.SUPPORT_TO_EMAIL || process.env.SUPPORT_MAIL_TO || '',
@@ -148,7 +151,9 @@ export const config = {
   smtpConnectionTimeoutMs: parsePort(process.env.SMTP_CONNECTION_TIMEOUT_MS, 10000),
   smtpGreetingTimeoutMs: parsePort(process.env.SMTP_GREETING_TIMEOUT_MS, 10000),
   smtpSocketTimeoutMs: parsePort(process.env.SMTP_SOCKET_TIMEOUT_MS, 15000),
+  publicAppBaseUrl,
   publicApiBaseUrl: process.env.PUBLIC_API_BASE_URL || `http://localhost:${parsePort(process.env.PORT, 4000)}`,
+  mailContactEmail: process.env.MAIL_CONTACT_EMAIL || process.env.SMTP_REPLY_TO || process.env.SUPPORT_TO_EMAIL || 'info@shelfiolabs.com',
   proximityProductDedupeSeconds: parsePositiveSeconds(process.env.PROXIMITY_PRODUCT_DEDUPE_SECONDS, 12 * 60 * 60),
   eslDeviceToken: process.env.ESL_DEVICE_TOKEN || '',
   eslDeviceTokens: process.env.ESL_DEVICE_TOKENS || '',

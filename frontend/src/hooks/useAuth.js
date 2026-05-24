@@ -2,7 +2,14 @@ import { createContext, createElement, useContext, useEffect, useMemo, useState 
 import { authService } from '../services/authService.js';
 import { productService } from '../services/productService.js';
 import { stockService } from '../services/stockService.js';
-import { clearAuthToken, getAuthToken, getStoredUser, setStoredUser } from '../services/api.js';
+import {
+  AUTH_SESSION_EXPIRED_EVENT,
+  AUTH_SESSION_REFRESHED_EVENT,
+  clearAuthToken,
+  getAuthToken,
+  getStoredUser,
+  setStoredUser,
+} from '../services/api.js';
 import { hasPermission } from '../config/permissions.js';
 
 const AuthContext = createContext(null);
@@ -74,7 +81,7 @@ export function AuthProvider({ children }) {
         if (active && isTimeout && storedUser) {
           setUser(storedUser);
 
-          // UI'yi bloklamadan doðrulama denemesini arka planda sürdür.
+          // UI'yi bloklamadan doï¿½rulama denemesini arka planda sï¿½rdï¿½r.
           void authService.me()
             .then((freshUser) => {
               if (!active) return;
@@ -105,6 +112,25 @@ export function AuthProvider({ children }) {
 
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setUser(null);
+    };
+    const handleSessionRefreshed = (event) => {
+      const nextUser = event?.detail?.user || getStoredUser();
+      if (nextUser) {
+        setUser(nextUser);
+      }
+    };
+
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+    window.addEventListener(AUTH_SESSION_REFRESHED_EVENT, handleSessionRefreshed);
+    return () => {
+      window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+      window.removeEventListener(AUTH_SESSION_REFRESHED_EVENT, handleSessionRefreshed);
     };
   }, []);
 

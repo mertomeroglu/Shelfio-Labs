@@ -162,8 +162,11 @@ const GROUP_LABELS = {
 
 const NOTIFICATION_MODULE_LABELS = {
   task: 'Görev Yönetimi',
-  order: 'Sipariş Yönetimi',
-  purchase: 'Satın Alma',
+  order: 'Sipariş Takibi',
+  purchase_order: 'Tedarik & Satın Alma',
+  purchase: 'Tedarik & Satın Alma',
+  purchase_suggestion: 'Sipariş Önerileri',
+  goods_receipt: 'Mal Kabul',
   stock: 'Stok İşlemleri',
   campaign: 'Kampanya Yönetimi',
   pricing_analysis: 'Fiyat & Talep Analizi',
@@ -187,6 +190,9 @@ function formatAbsoluteDateTime(value) {
 }
 
 function getNotificationModuleLabel(item) {
+  const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+  const explicitPage = String(payload.pageName || payload.module || '').trim();
+  if (explicitPage) return explicitPage;
   const sourceKey = String(item?.source || item?.actionType || item?.category || item?.type || '').trim().toLowerCase();
   return NOTIFICATION_MODULE_LABELS[sourceKey] || String(item?.sourceLabel || item?.categoryLabel || item?.category || item?.type || '-');
 }

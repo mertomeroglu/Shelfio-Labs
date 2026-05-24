@@ -4,7 +4,10 @@ import { isRequestCancellation } from './api.js';
 
 let lastDeveloperLogFailureAt = 0;
 const DEVELOPER_LOG_FAILURE_COOLDOWN_MS = 60 * 1000;
+const DEVELOPER_LOG_DUPLICATE_WINDOW_MS = 30 * 1000;
 const SETTINGS_UPDATED_EVENT = 'shelfio:settings-updated';
+const developerLogRecentSignatures = new Map();
+const SENSITIVE_KEY_PATTERN = /(password|pass|token|secret|authorization|cookie|pin|card|cvv)/i;
 
 const emitSettingsUpdated = (settings) => {
   if (typeof window === 'undefined') return settings;
@@ -18,6 +21,78 @@ const includesCampaignSettings = (payload = {}) => (
 
 const invalidateCampaignPricingCaches = () => {
   invalidateSessionCache((key) => key.startsWith('products:') || key.startsWith('pricing-analysis:') || key.startsWith('campaign-analysis:'));
+};
+
+const maskSensitive = (value, depth = 0) => {
+  if (value === null || value === undefined) return value;
+  if (depth > 6) return '[max-depth]';
+  if (typeof value === 'string') return value.length > 2000 ? `${value.slice(0, 2000)}...(truncated)` : value;
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => maskSensitive(item, depth + 1));
+
+  const next = {};
+  Object.entries(value).forEach(([key, raw]) => {
+    next[key] = SENSITIVE_KEY_PATTERN.test(key) ? '***' : maskSensitive(raw, depth + 1);
+  });
+  return next;
+};
+
+const getStoredUserForLog = () => {
+  try {
+    return JSON.parse(localStorage.getItem('stock_tracking_user') || 'null');
+  } catch {
+    return null;
+  }
+};
+
+const shouldDropDuplicateDeveloperLog = (payload = {}) => {
+  const signature = [
+    payload.level,
+    payload.source,
+    payload.message,
+    payload.endpoint,
+    payload.stack,
+  ].map((value) => String(value || '').trim()).join('|');
+  const now = Date.now();
+  const previous = developerLogRecentSignatures.get(signature);
+  developerLogRecentSignatures.set(signature, now);
+
+  for (const [key, at] of developerLogRecentSignatures.entries()) {
+    if (now - at > DEVELOPER_LOG_DUPLICATE_WINDOW_MS) {
+      developerLogRecentSignatures.delete(key);
+    }
+  }
+
+  return previous && now - previous < DEVELOPER_LOG_DUPLICATE_WINDOW_MS;
+};
+
+const normalizeDeveloperLogPayload = (payload = {}) => {
+  const storedUser = getStoredUserForLog();
+  const endpoint = payload.endpoint || (typeof window !== 'undefined' ? window.location.pathname : '');
+  const requestUrl = payload.requestUrl || (typeof window !== 'undefined' ? window.location.href : endpoint);
+
+  return maskSensitive({
+    timestamp: new Date().toISOString(),
+    level: payload.level || 'error',
+    source: payload.source || 'frontend',
+    message: payload.message || payload.error?.message || 'Bilinmeyen hata',
+    action: payload.action || 'frontend_error',
+    endpoint,
+    requestUrl,
+    requestPayload: payload.requestPayload,
+    response: payload.response,
+    payload: payload.payload,
+    stack: payload.stack || payload.error?.stack || '',
+    statusCode: payload.statusCode,
+    errorType: payload.errorType || 'runtime_error',
+    browserInfo: payload.browserInfo || (typeof navigator !== 'undefined' ? navigator.userAgent : ''),
+    userId: payload.userId || storedUser?.id,
+    userName: payload.userName || storedUser?.name || storedUser?.username,
+    userRole: payload.userRole || storedUser?.role,
+    requestId: payload.requestId,
+    correlationId: payload.correlationId || payload.requestId,
+    description: payload.description || payload.action || '',
+  });
 };
 
 export const settingsService = {
@@ -82,6 +157,10 @@ export const settingsService = {
     if (isRequestCancellation(payload?.error || payload?.cause || payload)) {
       return;
     }
+    const normalizedPayload = normalizeDeveloperLogPayload(payload);
+    if (shouldDropDuplicateDeveloperLog(normalizedPayload)) {
+      return;
+    }
     const token = getAuthToken();
     const endpoint = token ? '/settings/developer-logs' : '/settings/developer-logs/public';
     try {
@@ -91,7 +170,7 @@ export const settingsService = {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(normalizedPayload),
       });
       if (!response.ok) {
         const now = Date.now();

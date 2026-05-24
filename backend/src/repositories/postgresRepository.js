@@ -257,6 +257,194 @@ const NULL_IF_BLANK = new Set([
   'handledBy',
 ]);
 
+const PURCHASE_SUGGESTION_COLUMN_FIELDS = [
+  'id',
+  'productId',
+  'categoryId',
+  'supplierId',
+  'currentStock',
+  'criticalStock',
+  'suggestedQty',
+  'unitPrice',
+  'totalPrice',
+  'status',
+  'reason',
+  'riskLevel',
+  'createdAt',
+  'updatedAt',
+];
+
+const PURCHASE_SUGGESTION_CALCULATION_FIELDS = [
+  'reorderPoint',
+  'targetStock',
+  'grossNeedQty',
+  'netNeedQty',
+  'inboundConfirmedQty',
+  'inboundEffectiveQty',
+  'inboundNearTermQty',
+  'inboundStatusTotals',
+  'inboundLines',
+  'suggestedCases',
+  'palletQty',
+  'roundedFromQty',
+  'roundingUnit',
+  'leadTimeDays',
+  'daysToStockout',
+  'sold7',
+  'sold14',
+  'sold30',
+  'avgDaily7',
+  'avgDaily14',
+  'avgDaily30',
+  'trendDirection',
+  'trendRatio',
+  'salesSpeed',
+  'generationMode',
+  'campaignId',
+  'campaignName',
+  'campaignType',
+  'campaignDiscountRate',
+  'minimumOrderQty',
+  'minimumOrderUnit',
+  'minimumOrderBaseQty',
+  'priceUnit',
+  'orderUnit',
+  'unitsPerCase',
+  'unitsPerPallet',
+  'demandCoverageDays',
+  'reasonText',
+  'reasonTags',
+  'reasonDetails',
+  'calculatedAt',
+  'calculationVersion',
+  'supplierSelectionScore',
+  'supplierSelectionReason',
+];
+
+const PURCHASE_SUGGESTION_WORKFLOW_FIELDS = [
+  'linkedOrderId',
+  'approvedBy',
+  'approvedAt',
+  'rejectedBy',
+  'rejectedAt',
+  'updatedBy',
+];
+
+const pickDefined = (source = {}, keys = []) => keys.reduce((acc, key) => {
+  if (source[key] !== undefined) acc[key] = source[key];
+  return acc;
+}, {});
+
+const normalizePurchaseSuggestionPayload = (source = {}) => {
+  const rawPayload = isObject(source.payload) ? clone(source.payload) : {};
+  const legacyCalculation = {
+    ...pickDefined(rawPayload, PURCHASE_SUGGESTION_CALCULATION_FIELDS),
+    ...pickDefined(source, PURCHASE_SUGGESTION_CALCULATION_FIELDS),
+  };
+  const calculation = {
+    ...(isObject(rawPayload.calculation) ? rawPayload.calculation : {}),
+    ...legacyCalculation,
+  };
+  const workflow = {
+    ...(isObject(rawPayload.workflow) ? rawPayload.workflow : {}),
+    ...pickDefined(rawPayload, PURCHASE_SUGGESTION_WORKFLOW_FIELDS),
+    ...pickDefined(source, PURCHASE_SUGGESTION_WORKFLOW_FIELDS),
+  };
+  const audit = {
+    ...(isObject(rawPayload.audit) ? rawPayload.audit : {}),
+    generatedBy: source.generatedBy ?? rawPayload.generatedBy ?? rawPayload.audit?.generatedBy ?? null,
+    generationOptions: isObject(source.generationOptions)
+      ? source.generationOptions
+      : (isObject(rawPayload.generationOptions) ? rawPayload.generationOptions : rawPayload.audit?.generationOptions),
+    legacyPayloadMigrated: rawPayload.contractVersion !== 2 && Object.keys(rawPayload).length > 0 ? true : undefined,
+  };
+
+  Object.keys(calculation).forEach((key) => calculation[key] === undefined && delete calculation[key]);
+  Object.keys(workflow).forEach((key) => workflow[key] === undefined && delete workflow[key]);
+  Object.keys(audit).forEach((key) => audit[key] === undefined && delete audit[key]);
+
+  return {
+    contractVersion: 2,
+    calculation,
+    workflow,
+    audit,
+  };
+};
+
+const mapPurchaseSuggestionToDb = (item) => {
+  const source = mapIncomingAliases(item || {});
+  const data = { payload: toJson(normalizePurchaseSuggestionPayload(source)) };
+  const config = FIELD_CONFIG.purchaseSuggestion;
+
+  for (const key of config.string || []) {
+    if (source[key] !== undefined) data[key] = source[key] === null ? null : String(source[key]);
+    if (NULL_IF_BLANK.has(key) && data[key] === '') data[key] = null;
+  }
+  for (const key of config.int || []) {
+    if (source[key] !== undefined) data[key] = source[key] === null ? null : toInt(source[key]);
+  }
+  for (const key of config.decimal || []) {
+    if (source[key] !== undefined) data[key] = toDecimal(source[key]);
+  }
+  for (const key of config.date || []) {
+    if (source[key] !== undefined) data[key] = pickDate(source, key);
+  }
+
+  return data;
+};
+
+const mapPurchaseSuggestionFromDb = (row) => {
+  if (!row) return null;
+  const rawPayload = isObject(row.payload) ? clone(row.payload) : {};
+  const calculation = isObject(rawPayload.calculation) ? clone(rawPayload.calculation) : {};
+  const workflow = isObject(rawPayload.workflow) ? clone(rawPayload.workflow) : {};
+  const legacyPayload = rawPayload.contractVersion === 2 ? {} : rawPayload;
+
+  const out = {
+    ...pickDefined(legacyPayload, PURCHASE_SUGGESTION_CALCULATION_FIELDS),
+    ...calculation,
+    ...pickDefined(legacyPayload, PURCHASE_SUGGESTION_WORKFLOW_FIELDS),
+    ...workflow,
+    payload: rawPayload,
+    payloadContractVersion: rawPayload.contractVersion || 1,
+  };
+
+  const config = FIELD_CONFIG.purchaseSuggestion;
+  const keys = [
+    ...(config.string || []),
+    ...(config.int || []),
+    ...(config.decimal || []),
+    ...(config.date || []),
+  ];
+
+  for (const key of keys) {
+    if (!(key in row) || row[key] === undefined) continue;
+    if (row[key] === null) {
+      out[key] = null;
+    } else if ((config.date || []).includes(key)) {
+      out[key] = fromDate(row[key]);
+    } else if ((config.decimal || []).includes(key)) {
+      out[key] = toNumber(row[key]);
+    } else {
+      out[key] = clone(row[key]);
+    }
+  }
+
+  if (row.id !== undefined) out.id = row.id;
+
+  const drift = {};
+  for (const key of PURCHASE_SUGGESTION_COLUMN_FIELDS) {
+    if (legacyPayload[key] === undefined || row[key] === undefined || row[key] === null) continue;
+    const rowValue = (FIELD_CONFIG.purchaseSuggestion.date || []).includes(key) ? fromDate(row[key]) : toNumber(row[key]);
+    if (JSON.stringify(rowValue) !== JSON.stringify(legacyPayload[key])) {
+      drift[key] = { column: rowValue, payload: legacyPayload[key] };
+    }
+  }
+  if (Object.keys(drift).length) out.payloadColumnDrift = drift;
+
+  return out;
+};
+
 const mapIncomingAliases = (item) => {
   const next = { ...item };
   Object.entries(ALIASES).forEach(([from, to]) => {
@@ -268,6 +456,8 @@ const mapIncomingAliases = (item) => {
 };
 
 const mapToDb = (modelName, item) => {
+  if (modelName === 'purchaseSuggestion') return mapPurchaseSuggestionToDb(item);
+
   const config = FIELD_CONFIG[modelName] || {};
   const source = mapIncomingAliases(item || {});
   const data = { payload: toJson(item || {}) };
@@ -297,6 +487,8 @@ const mapToDb = (modelName, item) => {
 
 const mapFromDb = (modelName, row) => {
   if (!row) return null;
+  if (modelName === 'purchaseSuggestion') return mapPurchaseSuggestionFromDb(row);
+
   const config = FIELD_CONFIG[modelName] || {};
   const payload = isObject(row.payload) ? clone(row.payload) : {};
   const out = { ...payload };

@@ -169,11 +169,15 @@ function readCustomerPrefs(storageKey = CUSTOMER_PREFS_KEY) {
   try {
     const raw = window.localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : null;
+    const hasInAppPreference = typeof parsed?.inAppNotifications === 'boolean';
+    const hasPhonePreference = typeof parsed?.phoneNotifications === 'boolean';
+    const campaignEnabled = parsed?.campaign !== false;
+    const stockEnabled = parsed?.stock !== false;
     return {
-      campaign: parsed?.campaign !== false,
-      stock: parsed?.stock !== false,
-      inAppNotifications: parsed?.inAppNotifications !== false,
-      phoneNotifications: parsed?.phoneNotifications !== false,
+      campaign: campaignEnabled,
+      stock: stockEnabled,
+      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : campaignEnabled,
+      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : stockEnabled,
     };
   } catch {
     return { campaign: true, stock: true, inAppNotifications: true, phoneNotifications: true };
@@ -3283,7 +3287,7 @@ export default function CustomerPortal() {
 
           <div className="customer-settings-child-card customer-notification-prefs-card">
             <h4 className="customer-notification-prefs-title"><Bell size={16} /> Bildirim Tercihleri</h4>
-            <p className="customer-notification-prefs-desc">Size ulaşmasını istediğiniz mobil bildirimleri yönetin.</p>
+            <p className="customer-notification-prefs-desc">Fırsatların nerede görüneceğini seçin.</p>
             {notificationPrefs.inAppNotifications === false && notificationPrefs.phoneNotifications === false ? (
               <p className="customer-notification-prefs-desc" role="status">
                 Bildirimler kapalı olduğu için yakınlık fırsatları gösterilmiyor.
@@ -3292,26 +3296,26 @@ export default function CustomerPortal() {
             <div className="customer-notification-prefs-list">
               <label className="customer-notification-pref-row">
                 <span className="customer-notification-pref-copy">
-                  <strong>Kampanya Bildirimleri</strong>
-                  <small>Yeni kampanya ve fırsatlardan haberdar olun.</small>
+                  <strong>Uygulama İçi Bildirimler</strong>
+                  <small>Uygulama açıkken fırsatları ve yakınlık bildirimlerini ekranda göster.</small>
                 </span>
                 <input
                   type="checkbox"
                   checked={notificationPrefs.inAppNotifications !== false}
                   onChange={(event) => updateNotificationPreference('inAppNotifications', event.target.checked)}
-                  aria-label="Kampanya Bildirimleri"
+                  aria-label="Uygulama İçi Bildirimler"
                 />
               </label>
               <label className="customer-notification-pref-row">
                 <span className="customer-notification-pref-copy">
-                  <strong>Stok ve Fiyat Uyarıları</strong>
-                  <small>Takip ettiğiniz ürünlerdeki değişiklikleri bildirin.</small>
+                  <strong>Genel Bildirimler</strong>
+                  <small>Telefon bildirimleri ve arka plan uyarılarını göster.</small>
                 </span>
                 <input
                   type="checkbox"
                   checked={notificationPrefs.phoneNotifications !== false}
                   onChange={(event) => updateNotificationPreference('phoneNotifications', event.target.checked)}
-                  aria-label="Stok ve Fiyat Uyarıları"
+                  aria-label="Genel Bildirimler"
                 />
               </label>
             </div>

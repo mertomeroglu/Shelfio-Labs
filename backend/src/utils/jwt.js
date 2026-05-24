@@ -5,6 +5,11 @@ export const signToken = (payload) => jwt.sign(payload, config.jwtSecret, { expi
 
 export const verifyToken = (token) => jwt.verify(token, config.jwtSecret);
 
+export const signStaffRefreshToken = (payload) =>
+  jwt.sign(payload, config.staffRefreshSecret, { expiresIn: config.staffRefreshExpiresIn });
+
+export const verifyStaffRefreshToken = (token) => jwt.verify(token, config.staffRefreshSecret);
+
 export const signCustomerRefreshToken = (payload) =>
   jwt.sign(payload, config.customerRefreshSecret, { expiresIn: config.customerRefreshExpiresIn });
 

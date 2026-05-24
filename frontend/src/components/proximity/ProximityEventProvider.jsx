@@ -52,9 +52,11 @@ const readCustomerNotificationPrefs = () => {
     const scopedKey = `${CUSTOMER_PREFS_KEY}.${readCustomerId()}`;
     const raw = window.localStorage.getItem(scopedKey) || window.localStorage.getItem(`${CUSTOMER_PREFS_KEY}.guest`);
     const parsed = raw ? JSON.parse(raw) : null;
+    const hasInAppPreference = typeof parsed?.inAppNotifications === 'boolean';
+    const hasPhonePreference = typeof parsed?.phoneNotifications === 'boolean';
     return {
-      inAppNotifications: parsed?.inAppNotifications !== false,
-      phoneNotifications: parsed?.phoneNotifications !== false,
+      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : parsed?.campaign !== false,
+      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : parsed?.stock !== false,
     };
   } catch {
     return { inAppNotifications: true, phoneNotifications: true };

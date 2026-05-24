@@ -41,6 +41,7 @@ const CustomerManagement = lazy(() => import('../pages/customer-management/Custo
 const ProximityManagement = lazy(() => import('../pages/proximity-management/ProximityManagement.jsx'));
 const CustomerPortal = lazy(() => import('../pages/customer-portal/CustomerPortal.jsx'));
 const CustomerLogin = lazy(() => import('../pages/customer-login/CustomerLogin.jsx'));
+const CustomerPasswordReset = lazy(() => import('../pages/customer-login/CustomerPasswordReset.jsx'));
 const SupplierProducts = lazy(() => import('../pages/order-creation/SupplierProducts.jsx'));
 const PersonnelTasks = lazy(() => import('../pages/personnel-mobile/PersonnelTasks.jsx'));
 const PersonnelLabels = lazy(() => import('../pages/personnel-mobile/PersonnelLabels.jsx'));
@@ -86,6 +87,11 @@ export const router = createBrowserRouter([
       {
         path: '/musteri/login',
         element: withRouteSuspense(<CustomerLogin />),
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/musteri/sifre-sifirla',
+        element: withRouteSuspense(<CustomerPasswordReset />),
         errorElement: <RouteError />,
       },
       {

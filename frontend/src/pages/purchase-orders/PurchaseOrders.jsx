@@ -24,6 +24,19 @@ import { formatCurrency, formatDate, formatDateOnly, formatNumber, formatTurkish
 import { procurementService } from '../../services/procurementService.js';
 import { supplierService } from '../../services/supplierService.js';
 import { userService } from '../../services/userService.js';
+import {
+  getPurchaseOrderManualActionTransitions,
+  getPurchaseOrderStatusHelp,
+  getPurchaseOrderStatusLabel,
+  getPurchaseOrderStatusTone,
+  getVisiblePurchaseOrderStatusLabel,
+  LEGACY_PURCHASE_ORDER_STATUS_MAP,
+  mapPurchaseOrderStatusToVisibleStatus,
+  normalizePurchaseOrderStatus,
+  PURCHASE_ORDER_MANUAL_ACTION_TRANSITIONS,
+  PURCHASE_ORDER_STATUSES,
+  VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE,
+} from '../../utils/purchaseOrderLifecycle.js';
 
 const normalizeMoneyInput = (value) => String(value ?? '').replace(',', '.');
 
@@ -34,202 +47,29 @@ const parseMoneyInput = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-const STATUS_DEFINITIONS = [
-  {
-    value: 'submitted_for_approval',
-    valueGroup: 'approval',
-    label: 'Onaya Gönderildi',
-    tone: 'primary',
-    next: ['approved', 'cancelled'],
-    help: 'Sipariş onay kuyruğuna gönderildi ve kontrol bekliyor.',
-  },
-  {
-    value: 'approved',
-    valueGroup: 'approval',
-    label: 'Onaylandı',
-    tone: 'success',
-    next: ['supplier_notified', 'cancelled'],
-    help: 'Sipariş onaylandı ve tedarikçiye iletim adımına hazır.',
-  },
-  {
-    value: 'supplier_notified',
-    valueGroup: 'approval',
-    label: 'Tedarikçiye İletildi',
-    tone: 'primary',
-    next: ['preparing', 'cancelled'],
-    help: 'Sipariş tedarikçiye iletildi, hazırlık onayı bekleniyor.',
-  },
-  {
-    value: 'preparing',
-    valueGroup: 'shipping',
-    label: 'Hazırlanıyor',
-    tone: 'warning',
-    next: ['ready_to_ship', 'cancelled'],
-    help: 'Sipariş hazırlık aşamasında, sevk öncesi kontroller yürütülüyor.',
-  },
-  {
-    value: 'ready_to_ship',
-    valueGroup: 'shipping',
-    label: 'Sevke Hazır',
-    tone: 'warning',
-    next: ['in_transit'],
-    help: 'Sipariş sevkiyat için hazır; rota ve çıkış planı yapılabilir.',
-  },
-  {
-    value: 'in_transit',
-    valueGroup: 'shipping',
-    label: 'Yola Çıktı',
-    tone: 'warning',
-    next: ['delivered'],
-    help: 'Sipariş yolda. Depo/mağaza teslimat takibi bu aşamada yapılır.',
-  },
-  {
-    value: 'delivered',
-    valueGroup: 'delivery',
-    label: 'Depoya Ulaştı',
-    tone: 'success',
-    next: ['goods_receipt_pending'],
-    help: 'Sipariş depoya ulaştı; mal kabul kararı bu aşamada verilir.',
-  },
-  {
-    value: 'goods_receipt_pending',
-    valueGroup: 'delivery',
-    label: 'Mal Kabul Bekliyor',
-    tone: 'warning',
-    next: ['goods_receipt_completed', 'cancelled'],
-    help: 'Sipariş depoya ulaştı ve mal kabul kontrolü bekliyor.',
-  },
-  {
-    value: 'goods_receipt_completed',
-    valueGroup: 'delivery',
-    label: 'Mal Kabul Yapıldı',
-    tone: 'success',
-    next: ['stock_entry_pending', 'completed'],
-    help: 'Mal kabul tamamlandı; stok girişi otomatik veya manuel ilerletilir.',
-  },
-  {
-    value: 'stock_entry_pending',
-    valueGroup: 'delivery',
-    label: 'Stok Girişi Bekleniyor',
-    tone: 'warning',
-    next: ['completed', 'cancelled'],
-    help: 'Mal kabul sonrası manuel stok girişi bekleniyor.',
-  },
-  {
-    value: 'completed',
-    valueGroup: 'delivery',
-    label: 'Tamamlandı',
-    tone: 'success',
-    next: ['archived'],
-    help: 'Sipariş operasyonel olarak tamamlandı.',
-  },
-  {
-    value: 'archived',
-    valueGroup: 'delivery',
-    label: 'Arşivlendi',
-    tone: 'neutral',
-    next: ['archived'],
-    help: 'Sipariş arşive taşındı.',
-  },
-  {
-    value: 'cancelled',
-    valueGroup: 'cancel',
-    label: 'İptal Edildi',
-    tone: 'danger',
-    next: ['cancelled'],
-    help: 'Sipariş iptal edildi. Bu işlem operasyon akışını sonlandırır.',
-  },
-  // Legacy statuses kept for backwards compatibility with existing records.
-  {
-    value: 'partially_delivered',
-    valueGroup: 'delivery',
-    label: 'Depoya Ulaştı',
-    tone: 'success',
-    next: ['delivered', 'cancelled'],
-    help: 'Eski kayıt durumu: yeni akışta Depoya Ulaştı ile eşdeğer.',
-    hidden: true,
-  },
-  {
-    value: 'closed',
-    valueGroup: 'delivery',
-    label: 'Depoya Ulaştı',
-    tone: 'success',
-    next: ['closed'],
-    help: 'Eski kayıt durumu: yeni akışta Depoya Ulaştı ile eşdeğer.',
-    hidden: true,
-  },
-  {
-    value: 'sourcing',
-    valueGroup: 'shipping',
-    label: 'Hazırlanıyor',
-    tone: 'warning',
-    next: ['ready_to_ship', 'cancelled'],
-    help: 'Eski kayıt durumu: yeni akışta Hazırlanıyor ile eşdeğer.',
-    hidden: true,
-  },
-  {
-    value: 'delivery_planned',
-    valueGroup: 'shipping',
-    label: 'Sevke Hazır',
-    tone: 'warning',
-    next: ['in_transit', 'cancelled'],
-    help: 'Eski kayıt durumu: yeni akışta Sevke Hazır ile eşdeğer.',
-    hidden: true,
-  },
-  {
-    value: 'return_in_progress',
-    valueGroup: 'cancel',
-    label: 'İptal Edildi',
-    tone: 'danger',
-    next: ['cancelled'],
-    help: 'Eski kayıt durumu: yeni akışta İptal Edildi ile eşdeğer.',
-    hidden: true,
-  },
-];
+const ORDER_STATUSES = VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE.map((value) => ({
+  value,
+  valueGroup: value === 'cancelled' ? 'cancel' : ['goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending', 'completed'].includes(value) ? 'delivery' : ['preparing', 'ready_to_ship', 'in_transit'].includes(value) ? 'shipping' : 'approval',
+  label: getPurchaseOrderStatusLabel(value),
+}));
 
-const STATUS_META_BY_VALUE = STATUS_DEFINITIONS.reduce((acc, item) => {
-  acc[item.value] = item;
-  return acc;
-}, {});
-
-const ORDER_STATUSES = STATUS_DEFINITIONS
-  .filter((item) => item.hidden !== true)
-  .map(({ value, valueGroup, label }) => ({ value, valueGroup, label }));
-
-const ORDER_STATUS_SEQUENCE = ORDER_STATUSES.map((item) => item.value);
-
-const STATUS_TRANSITIONS = STATUS_DEFINITIONS.reduce((acc, item) => {
-  acc[item.value] = Array.isArray(item.next) && item.next.length ? item.next : [item.value];
-  return acc;
-}, {});
-
-const STATUS_HELP = STATUS_DEFINITIONS.reduce((acc, item) => {
-  acc[item.value] = item.help;
-  return acc;
-}, {});
-
-const statusTone = STATUS_DEFINITIONS.reduce((acc, item) => {
-  acc[item.value] = item.tone;
+const ORDER_STATUS_SEQUENCE = VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE;
+const STATUS_TRANSITIONS = PURCHASE_ORDER_MANUAL_ACTION_TRANSITIONS;
+const STATUS_HELP = PURCHASE_ORDER_STATUSES.reduce((acc, status) => {
+  acc[status] = getPurchaseOrderStatusHelp(status);
   return acc;
 }, {});
 
 const getStatusMeta = (value) => {
-  if (STATUS_META_BY_VALUE[value]) return STATUS_META_BY_VALUE[value];
-  const label = String(value || '-').replaceAll('_', ' ');
+  const normalized = normalizePurchaseOrderStatus(value);
   return {
-    value: value || '-',
-    valueGroup: 'approval',
-    label: label.charAt(0).toUpperCase() + label.slice(1),
-    tone: 'neutral',
-    next: [value],
-    help: 'Bu durum için açıklama tanımlı değil.',
+    value: normalized,
+    valueGroup: normalized === 'cancelled' ? 'cancel' : ['goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending', 'completed'].includes(normalized) ? 'delivery' : ['preparing', 'ready_to_ship', 'in_transit'].includes(normalized) ? 'shipping' : 'approval',
+    label: getPurchaseOrderStatusLabel(normalized),
+    tone: getPurchaseOrderStatusTone(normalized),
+    next: getPurchaseOrderManualActionTransitions(normalized),
+    help: getPurchaseOrderStatusHelp(normalized),
   };
-};
-
-const PRIORITY_LABELS = {
-  low: 'Düşük',
-  normal: 'Normal',
-  high: 'Yüksek',
 };
 
 const initialFilters = {
@@ -243,11 +83,11 @@ const initialFilters = {
   createdBy: '',
 };
 
-const ARCHIVE_STATUSES = new Set(['archived', 'closed']);
-const CANCELLED_STATUSES = new Set(['cancelled', 'canceled', 'iptal', 'iptal_edildi']);
+const ARCHIVE_STATUSES = new Set(['archived']);
+const CANCELLED_STATUSES = new Set(['cancelled']);
 const ORDER_CANCEL_ARCHIVE_DELAY_MS = 24 * 60 * 60 * 1000;
 const APPROVAL_PENDING_STATUSES = new Set(['submitted_for_approval']);
-const DELIVERY_REACHED_STATUSES = new Set(['delivered', 'goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending', 'completed', 'archived', 'closed', 'partially_delivered']);
+const DELIVERY_REACHED_STATUSES = new Set(['delivered', 'goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending', 'completed', 'archived']);
 const canManageOrderStatus = (order = {}) => {
   const normalizedStatus = normalizeOrderStatus(order?.status);
   if (!normalizedStatus || ARCHIVE_STATUSES.has(normalizedStatus)) return false;
@@ -255,7 +95,16 @@ const canManageOrderStatus = (order = {}) => {
   return transitions.some((nextStatus) => nextStatus !== normalizedStatus);
 };
 
-const normalizeOrderStatus = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+const normalizeOrderStatus = (value) => normalizePurchaseOrderStatus(value);
+
+const normalizeStatusLookupKey = (value) => String(value || '')
+  .trim()
+  .toLocaleLowerCase('tr-TR')
+  .replace(/ı/g, 'i')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '');
 
 const normalizeOrderNumber = (value, fallbackSeed = '') => {
   const raw = String(value || '').trim();
@@ -274,14 +123,17 @@ const normalizeOrderNumber = (value, fallbackSeed = '') => {
 };
 
 const resolveStatusBadgeTone = (status) => {
-  const normalized = normalizeOrderStatus(status);
-  if (normalized === 'submitted_for_approval') return 'warning';
-  if (normalized === 'approved' || normalized === 'supplier_notified') return 'primary';
-  if (normalized === 'preparing' || normalized === 'ready_to_ship') return 'warning';
-  if (normalized === 'in_transit') return 'primary';
-  if (normalized === 'delivered' || normalized === 'goods_receipt_completed' || normalized === 'completed' || normalized === 'archived') return 'success';
-  if (normalized === 'cancelled' || normalized === 'return_in_progress') return 'danger';
-  return statusTone[normalized] || 'neutral';
+  const lookupKey = normalizeStatusLookupKey(status);
+  if (!lookupKey) return 'neutral';
+  const isKnownStatus = PURCHASE_ORDER_STATUSES.includes(lookupKey) || Boolean(LEGACY_PURCHASE_ORDER_STATUS_MAP[lookupKey]);
+  if (!isKnownStatus) return 'neutral';
+  const normalizedStatus = normalizeOrderStatus(status);
+  return getPurchaseOrderStatusTone(normalizedStatus) || 'neutral';
+};
+
+const isKnownOrderStatus = (status) => {
+  const lookupKey = normalizeStatusLookupKey(status);
+  return Boolean(lookupKey && (PURCHASE_ORDER_STATUSES.includes(lookupKey) || LEGACY_PURCHASE_ORDER_STATUS_MAP[lookupKey]));
 };
 
 const resolveStockEntryMode = (order = {}) => {
@@ -319,7 +171,6 @@ const isStockEntryCompleted = (order = {}) => {
 
   const booleanFlags = [
     order.stockEntryCompleted,
-    order.goodsReceiptCompleted,
     order.isGoodsReceiptDone,
     order.irsaliyeAccepted,
   ];
@@ -344,7 +195,9 @@ const isManualStockEntryPending = (order = {}) => {
   if (isArchivedOrder(order)) return false;
 
   const normalizedStatus = normalizeOrderStatus(order.status);
-  if (normalizedStatus === 'stock_entry_pending') return true;
+  if (normalizedStatus === 'stock_entry_pending') {
+    return resolveStockEntryMode(order) !== 'auto' && !isStockEntryCompleted(order);
+  }
 
   const goodsReceiptCompleted = isGoodsReceiptCompletedOrder(order);
   const stockEntryCompleted = isStockEntryCompleted(order);
@@ -352,33 +205,8 @@ const isManualStockEntryPending = (order = {}) => {
 };
 
 const mapOrderStatusToTurkishLabel = (status) => {
-  const normalized = normalizeOrderStatus(status);
-  const directLabel = STATUS_META_BY_VALUE[normalized]?.label;
-  if (directLabel) return directLabel;
-
-  const fallbackMap = {
-    created: 'Oluşturuldu',
-    submitted_for_approval: 'Onaya Gönderildi',
-    supplier_notified: 'Tedarikçiye İletildi',
-    preparing: 'Hazırlanıyor',
-    ready_to_ship: 'Sevke Hazır',
-    in_transit: 'Yola Çıktı',
-    delivered: 'Depoya Ulaştı',
-    goods_receipt_pending: 'Mal Kabul Onayı Bekleniyor',
-    goods_receipt_completed: 'Mal Kabul Yapıldı',
-    stock_entry_pending: 'Stok Girişi Bekleniyor',
-    archived: 'Arşivlendi',
-    approved: 'Onaylandı',
-    shipped: 'Yola Çıktı',
-    arrived: 'Depoya Ulaştı',
-    received: 'Mal Kabul Yapıldı',
-    completed: 'Tamamlandı',
-    cancelled: 'İptal Edildi',
-    closed: 'Depoya Ulaştı',
-    partially_delivered: 'Depoya Ulaştı',
-  };
-
-  return fallbackMap[normalized] || 'Sipariş Güncellendi';
+  if (!isKnownOrderStatus(status)) return 'Bilinmeyen Durum';
+  return getVisiblePurchaseOrderStatusLabel(status) || 'Sipariş Güncellendi';
 };
 
 const canManualGoodsReceipt = (order = {}) => {
@@ -565,44 +393,20 @@ const ensurePdfReady = () => {
 
 const ORDER_TABLE_PAGE_SIZE = 5;
 
-const STATUS_STEP_HINTS = {
-  submitted_for_approval: 'Onay bekleniyor',
-  approved: 'Onay tamamlandı',
-  supplier_notified: 'Tedarikçi bilgilendirildi',
-  preparing: 'Hazırlık işlemleri sürüyor',
-  ready_to_ship: 'Sevk planı hazır',
-  in_transit: 'Teslimat sürecinde',
-  delivered: 'Depoya teslim edildi',
-  goods_receipt_pending: 'Mal kabul kararı bekleniyor',
-  goods_receipt_completed: 'Mal kabul tamamlandı',
-  stock_entry_pending: 'Stok girişi bekleniyor',
-  completed: 'Operasyon tamamlandı',
-  archived: 'Arşiv kaydı',
-  cancelled: 'İptal seçeneği',
-};
-
-const isCurrent = (currentStatus, value) => String(currentStatus || '') === String(value || '');
-
-const isSelectable = (selectableSet, value) => selectableSet.has(value);
-
-const isLocked = (selectableSet, value) => !isSelectable(selectableSet, value);
+const isCurrent = (currentStatus, value) => normalizeOrderStatus(currentStatus) === normalizeOrderStatus(value);
 
 const isCancelledOption = (value) => String(value || '') === 'cancelled';
 
-const LOCKED_STEP_MESSAGE = 'Bu adım bu işlem için kullanılamıyor';
-
 const getStatusStepTypeLabel = ({ current, locked }) => {
   if (current) return 'Mevcut';
-  if (locked) return 'Pasif';
+  if (locked) return 'Uygun değil';
   return 'Sonraki';
 };
 
-const getStatusStepDescription = ({ value, current, selectable, locked, cancelled }) => {
-  if (current) return 'Geçerli durum.';
-  if (locked) return LOCKED_STEP_MESSAGE;
-  if (cancelled) return 'İptal adımı.';
-  if (selectable) return 'Geçiş yapılabilir.';
-  return STATUS_STEP_HINTS[value] || 'Durum akış adımı';
+const getStatusStepDescription = ({ current, selectable }) => {
+  if (current) return 'Mevcut';
+  if (selectable) return 'Sonraki';
+  return '';
 };
 
 function StatusStepCard({
@@ -614,13 +418,14 @@ function StatusStepCard({
   locked,
   completed,
   cancelled,
+  actionTarget,
   onSelect,
 }) {
   const meta = getStatusMeta(value);
   const typeLabel = getStatusStepTypeLabel({ current, locked });
   const description = getStatusStepDescription({ value, current, selectable, locked, cancelled });
 
-  const isPreparing = value === 'preparing' || value === 'sourcing' || value === 'submitted_for_approval';
+  const isPreparing = value === 'preparing' || value === 'submitted_for_approval';
 
   const className = [
     'status-step-card',
@@ -642,7 +447,7 @@ function StatusStepCard({
       style={{ '--status-step-index': index }}
       onClick={() => {
         if (locked) return;
-        onSelect(value);
+        onSelect(actionTarget || value);
       }}
       role="radio"
       aria-label={`${meta.label} - ${typeLabel}`}
@@ -660,7 +465,7 @@ function StatusStepCard({
         <span className="status-step-badge">{typeLabel}</span>
       </span>
 
-      <small className="status-step-description">{description}</small>
+      {description ? <small className="status-step-description">{description}</small> : null}
 
       <span className="status-step-flow" aria-hidden="true">
         <span className="status-step-flow-dot" />
@@ -670,10 +475,23 @@ function StatusStepCard({
 }
 
 function OrderStatusFlowPanel({ currentStatus, selectedStatus, onSelectStatus, isLoading = false }) {
-  const selectableSet = useMemo(
-    () => new Set([currentStatus, ...(STATUS_TRANSITIONS[currentStatus] || [])]),
-    [currentStatus],
+  const canonicalCurrentStatus = normalizeOrderStatus(currentStatus);
+  const visibleCurrentStatus = mapPurchaseOrderStatusToVisibleStatus(canonicalCurrentStatus);
+  const selectableActionMap = useMemo(
+    () => {
+      const entries = new Map();
+      entries.set(visibleCurrentStatus, canonicalCurrentStatus);
+      (STATUS_TRANSITIONS[canonicalCurrentStatus] || []).forEach((actionStatus) => {
+        const visibleStatus = actionStatus === 'approved'
+          ? 'supplier_notified'
+          : mapPurchaseOrderStatusToVisibleStatus(actionStatus);
+        entries.set(visibleStatus, actionStatus);
+      });
+      return entries;
+    },
+    [canonicalCurrentStatus, visibleCurrentStatus],
   );
+  const selectedVisibleStatus = mapPurchaseOrderStatusToVisibleStatus(selectedStatus);
 
   if (isLoading) {
     return (
@@ -691,14 +509,14 @@ function OrderStatusFlowPanel({ currentStatus, selectedStatus, onSelectStatus, i
   return (
     <div className="order-status-flow-panel" role="radiogroup" aria-label="Sipariş durumu seçimi">
       {ORDER_STATUS_SEQUENCE.map((value, index) => {
-        const current = isCurrent(currentStatus, value);
-        const selectable = isSelectable(selectableSet, value);
-        const locked = isLocked(selectableSet, value);
+        const current = isCurrent(visibleCurrentStatus, value);
+        const selectable = selectableActionMap.has(value);
+        const locked = !selectable;
         const cancelled = isCancelledOption(value);
-        const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(currentStatus);
+        const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(visibleCurrentStatus);
         const stepIndex = ORDER_STATUS_SEQUENCE.indexOf(value);
         const completed = !cancelled
-          && currentStatus !== 'cancelled'
+          && canonicalCurrentStatus !== 'cancelled'
           && currentIndex > -1
           && stepIndex > -1
           && stepIndex < currentIndex;
@@ -708,12 +526,13 @@ function OrderStatusFlowPanel({ currentStatus, selectedStatus, onSelectStatus, i
             key={value}
             value={value}
             index={index}
-            selected={selectedStatus === value}
+            selected={selectedVisibleStatus === value}
             current={current}
             selectable={selectable}
             locked={locked}
             completed={completed}
             cancelled={cancelled}
+            actionTarget={selectableActionMap.get(value)}
             onSelect={onSelectStatus}
           />
         );
@@ -789,7 +608,7 @@ export default function PurchaseOrders() {
       setRows(normalizedOrders);
       setSuppliers(supplierList);
     } catch (error) {
-      setToast({ type: 'error', title: 'Satın Alma Siparişleri', message: error.message || 'Siparişler yüklenemedi.' });
+      setToast({ type: 'error', title: 'Sipariş Takibi', message: error.message || 'Siparişler yüklenemedi.' });
     } finally {
       setIsLoading(false);
     }
@@ -1014,7 +833,7 @@ export default function PurchaseOrders() {
       return;
     }
     setStatusModalOrder(order);
-    setNextStatus(order.status);
+    setNextStatus(normalizeOrderStatus(order.status));
     setStatusNote('');
   };
 
@@ -1022,20 +841,22 @@ export default function PurchaseOrders() {
     event.preventDefault();
     if (!statusModalOrder || !nextStatus) return;
 
-    const allowedTransitions = STATUS_TRANSITIONS[statusModalOrder.status] || [statusModalOrder.status];
-    if (!allowedTransitions.includes(nextStatus)) {
-      setToast({ type: 'error', title: 'Satın Alma Siparişleri', message: 'Seçilen durum geçişi bu aşamada geçerli değil.' });
+    const currentStatus = normalizeOrderStatus(statusModalOrder.status);
+    const normalizedNextStatus = normalizeOrderStatus(nextStatus);
+    const allowedTransitions = STATUS_TRANSITIONS[currentStatus] || [currentStatus];
+    if (!allowedTransitions.includes(normalizedNextStatus)) {
+      setToast({ type: 'error', title: 'Sipariş Takibi', message: 'Seçilen durum geçişi bu aşamada geçerli değil.' });
       return;
     }
 
     try {
       setProcessingId(statusModalOrder.id);
-      await procurementService.updateOrderStatus(statusModalOrder.id, { status: nextStatus, note: statusNote });
-      setToast({ type: 'success', title: 'Satın Alma Siparişleri', message: 'Sipariş durumu güncellendi.' });
+      await procurementService.updateOrderStatus(statusModalOrder.id, { status: normalizedNextStatus, note: statusNote });
+      setToast({ type: 'success', title: 'Sipariş Takibi', message: 'Sipariş durumu güncellendi.' });
       setStatusModalOrder(null);
       await loadData();
     } catch (error) {
-      setToast({ type: 'error', title: 'Satın Alma Siparişleri', message: error.message || 'Durum güncellenemedi.' });
+      setToast({ type: 'error', title: 'Sipariş Takibi', message: error.message || 'Durum güncellenemedi.' });
     } finally {
       setProcessingId('');
     }
@@ -1048,7 +869,7 @@ export default function PurchaseOrders() {
       setDetailOrder(order);
       setDetailItems(items);
     } catch (error) {
-      setToast({ type: 'error', title: 'Satın Alma Siparişleri', message: error.message || 'Sipariş detayları yüklenemedi.' });
+      setToast({ type: 'error', title: 'Sipariş Takibi', message: error.message || 'Sipariş detayları yüklenemedi.' });
     } finally {
       setProcessingId('');
     }
@@ -1245,7 +1066,7 @@ export default function PurchaseOrders() {
     {
       key: 'status',
       label: 'Durum',
-      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{row.statusLabel || row.status}</StatusBadge>,
+      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{mapOrderStatusToTurkishLabel(row.status)}</StatusBadge>,
       sortable: false,
     },
     {
@@ -1322,7 +1143,7 @@ export default function PurchaseOrders() {
     {
       key: 'status',
       label: 'Durum',
-      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{row.statusLabel || row.status}</StatusBadge>,
+      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{mapOrderStatusToTurkishLabel(row.status)}</StatusBadge>,
       sortable: false,
     },
     {
@@ -1391,7 +1212,7 @@ export default function PurchaseOrders() {
     {
       key: 'status',
       label: 'Durum',
-      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{row.statusLabel || mapOrderStatusToTurkishLabel(row.status)}</StatusBadge>,
+      render: (row) => <StatusBadge tone={resolveStatusBadgeTone(row.status)}>{mapOrderStatusToTurkishLabel(row.status)}</StatusBadge>,
       sortable: false,
     },
     {
@@ -2066,7 +1887,7 @@ export default function PurchaseOrders() {
                     <span>Mevcut Durum</span>
                     <strong>
                       <StatusBadge tone={resolveStatusBadgeTone(statusModalOrder.status)}>
-                        {statusModalOrder.statusLabel || statusModalOrder.status}
+                        {mapOrderStatusToTurkishLabel(statusModalOrder.status)}
                       </StatusBadge>
                     </strong>
                   </div>
@@ -2160,7 +1981,7 @@ export default function PurchaseOrders() {
                 </div>
 
                 <div className="po-snapshot-item"><span>Tedarikçi</span><strong>{detailOrder?.supplierName || '-'}</strong></div>
-                <div className="po-snapshot-item is-status"><span>Sipariş Durumu</span><strong><StatusBadge tone={resolveStatusBadgeTone(detailOrder?.status)}>{detailOrder?.statusLabel || detailOrder?.status}</StatusBadge></strong></div>
+                <div className="po-snapshot-item is-status"><span>Sipariş Durumu</span><strong><StatusBadge tone={resolveStatusBadgeTone(detailOrder?.status)}>{mapOrderStatusToTurkishLabel(detailOrder?.status)}</StatusBadge></strong></div>
                 <div className="po-snapshot-item"><span>Oluşturan</span><strong>{detailOrder?.createdByName || detailOrder?.createdBy || 'Sistem'}</strong></div>
 
                 <div className="po-snapshot-item"><span>Sipariş Tarihi</span><strong>{formatDate(detailOrder?.createdAt)}</strong></div>

@@ -165,6 +165,7 @@ export default function ESLManagement() {
   const [lastPreview, setLastPreview] = useState(null);
   const [previewNonce, setPreviewNonce] = useState(0);
   const [productSearch, setProductSearch] = useState('');
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
   const [scanValue, setScanValue] = useState('');
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState('');
@@ -174,13 +175,17 @@ export default function ESLManagement() {
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [confirmClearLabelOpen, setConfirmClearLabelOpen] = useState(false);
   const autoTemplateProductRef = useRef('');
+  const productSearchRequestRef = useRef(0);
 
   const showToast = (type, title, message) => {
     if (isMountedRef.current) setToast({ type, title, message });
   };
 
-  useEffect(() => () => {
-    isMountedRef.current = false;
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -212,21 +217,18 @@ export default function ESLManagement() {
   const loadData = useCallback(async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const [devicesResult, productsResult, historyResult, statsResult] = await Promise.allSettled([
+      const [devicesResult, historyResult, statsResult] = await Promise.allSettled([
         eslService.listDevices(),
-        productService.list({ fetchAll: true, includeGeneralCampaigns: true }),
-        eslService.listHistory(),
+        eslService.listHistory({ page: 1, limit: HISTORY_PAGE_SIZE }),
         eslService.getStats(),
       ]);
 
       const devicesData = devicesResult.status === 'fulfilled' ? devicesResult.value : [];
-      const productsData = productsResult.status === 'fulfilled' ? productsResult.value : [];
       const historyData = historyResult.status === 'fulfilled' ? historyResult.value : [];
       const statsData = statsResult.status === 'fulfilled' ? statsResult.value : null;
 
       if (!isMountedRef.current) return;
       setDevices(normalizeEslList(devicesData, normalizeEslDevice));
-      setProducts(normalizeEslList(productsData, normalizeEslProduct));
       setHistory(normalizeEslList(historyData, normalizeEslHistoryEntry));
       setStats(statsData);
 
@@ -234,9 +236,8 @@ export default function ESLManagement() {
         showToast('warning', 'Uyarı', 'ESL geçmiş kaydı geçici olarak okunamadı. Sistem güvenli modda devam ediyor.');
       }
 
-      if (!silent && (devicesResult.status === 'rejected' || productsResult.status === 'rejected')) {
-        const baseError = devicesResult.status === 'rejected' ? devicesResult.reason : productsResult.reason;
-        throw baseError;
+      if (!silent && devicesResult.status === 'rejected') {
+        throw devicesResult.reason;
       }
     } catch (err) {
       showToast('error', 'Yükleme Hatası', err?.message || 'ESL verileri yüklenemedi.');
@@ -248,20 +249,61 @@ export default function ESLManagement() {
   useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
+    const query = productSearch.trim();
+    const requestId = productSearchRequestRef.current + 1;
+    productSearchRequestRef.current = requestId;
+
+    if (query.length < 2) {
+      setProductSearchLoading(false);
+      return undefined;
+    }
+
+    setProductSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      productService.list({
+        search: query,
+        page: 1,
+        limit: 30,
+        includeTotal: false,
+        includeGeneralCampaigns: true,
+      })
+        .then((rows) => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          setProducts(normalizeEslList(rows, normalizeEslProduct));
+        })
+        .catch(() => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          setProducts([]);
+        })
+        .finally(() => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          setProductSearchLoading(false);
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [productSearch]);
+
+  useEffect(() => {
     const quickAssignProductId = location.state?.quickAssignProductId;
-    if (!quickAssignProductId || products.length === 0) {
+    if (!quickAssignProductId) {
       return;
     }
 
-    const targetProduct = products.find((item) => item.id === quickAssignProductId);
-    if (!targetProduct) {
-      return;
-    }
+    let active = true;
 
-    setSelectedProductId(targetProduct.id);
-    setProductSearch('');
-    setScanMatch(null);
-    setScanError('');
+    const selectQuickAssignProduct = async () => {
+      const cachedProduct = products.find((item) => item.id === quickAssignProductId);
+      const targetProduct = cachedProduct || await productService.getById(quickAssignProductId, { includeGeneralCampaigns: true });
+      if (!active || !targetProduct) return;
+
+      setProducts((current) => (
+        current.some((item) => item.id === targetProduct.id) ? current : [normalizeEslProduct(targetProduct), ...current].filter(Boolean)
+      ));
+      setSelectedProductId(targetProduct.id);
+      setProductSearch('');
+      setScanMatch(null);
+      setScanError('');
 
     if (location.state?.openDeviceSelection) {
       setToast({
@@ -272,7 +314,14 @@ export default function ESLManagement() {
       scrollToDeviceSelection();
     }
 
-    window.history.replaceState({}, '');
+      window.history.replaceState({}, '');
+    };
+
+    selectQuickAssignProduct().catch(() => {});
+
+    return () => {
+      active = false;
+    };
   }, [location.state, products, scrollToDeviceSelection]);
 
   const handleRefresh = useCallback(async () => {
@@ -282,8 +331,8 @@ export default function ESLManagement() {
     try {
       const [devicesData, statsData] = await withTimeout(
         Promise.all([
-          eslService.listDevices(),
-          eslService.getStats(),
+          eslService.listDevices({ forceRefresh: true }),
+          eslService.getStats({ forceRefresh: true }),
         ]),
         REFRESH_TIMEOUT_MS,
         'Etiket durumları zaman aşımına uğradı.'
@@ -302,9 +351,9 @@ export default function ESLManagement() {
   const refreshAfterSend = useCallback(async () => {
     try {
       const [devicesData, historyData, statsData] = await Promise.all([
-        eslService.listDevices(),
-        eslService.listHistory(),
-        eslService.getStats(),
+        eslService.listDevices({ forceRefresh: true }),
+        eslService.listHistory({ page: 1, limit: HISTORY_PAGE_SIZE, forceRefresh: true }),
+        eslService.getStats({ forceRefresh: true }),
       ]);
       if (!isMountedRef.current) return;
       setDevices(normalizeEslList(devicesData, normalizeEslDevice));
@@ -399,7 +448,6 @@ export default function ESLManagement() {
 
     const payload = { deviceId: selectedDeviceId, productId: selectedProductId, template: effectiveTemplate };
 
-    setSending(true);
     let timeoutId;
     try {
       const result = await Promise.race([
@@ -422,11 +470,9 @@ export default function ESLManagement() {
       setScanError('');
       showToast('success', 'Gönderildi', result.message);
     } catch (err) {
-      console.error('[ESL] Gönderim hatası:', err);
-      showToast('error', 'Gönderim Hatası', err.message);
+      showToast('error', 'Gönderim Hatası', err?.message || 'Etiket gönderilemedi.');
     } finally {
       clearTimeout(timeoutId);
-      setSending(false);
       sendingRef.current = false;
       refreshAfterSend().catch(() => {});
     }
@@ -455,6 +501,9 @@ export default function ESLManagement() {
       }
 
       if (result.product?.id) {
+        setProducts((current) => (
+          current.some((item) => item.id === result.product.id) ? current : [normalizeEslProduct(result.product), ...current].filter(Boolean)
+        ));
         setSelectedProductId(result.product.id);
       }
     } catch (error) {
@@ -706,16 +755,16 @@ export default function ESLManagement() {
                   </div>
 
                   <div className="esl-scan-actions">
-                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-standard" onClick={() => handleQuickTemplateApply('standard')} disabled={!selectedDeviceId || !selectedProductId || sending}>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-standard" onClick={() => handleQuickTemplateApply('standard')} disabled={!selectedDeviceId || !selectedProductId}>
                       <LayoutTemplate size={14} /> Standart Etiket Uygula
                     </button>
-                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-campaign" onClick={() => handleQuickTemplateApply('campaign')} disabled={!selectedDeviceId || !selectedProductId || sending}>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-campaign" onClick={() => handleQuickTemplateApply('campaign')} disabled={!selectedDeviceId || !selectedProductId}>
                       Fırsat Etiketi Uygula
                     </button>
-                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-discount" onClick={() => handleQuickTemplateApply('discount')} disabled={!selectedDeviceId || !selectedProductId || sending}>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-discount" onClick={() => handleQuickTemplateApply('discount')} disabled={!selectedDeviceId || !selectedProductId}>
                       İndirim Etiketi Uygula
                     </button>
-                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-resend" onClick={() => handleSendToDevice()} disabled={!selectedDeviceId || !selectedProductId || sending}>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-resend" onClick={() => handleSendToDevice()} disabled={!selectedDeviceId || !selectedProductId}>
                       Etiketi Yeniden Gönder
                     </button>
                     <button type="button" className="btn esl-quick-action-btn esl-quick-action-match" onClick={() => {
@@ -753,7 +802,12 @@ export default function ESLManagement() {
               </label>
               {productSearch.trim() && (
                 <div className="esl-search-results">
-                  {filteredProducts.slice(0, 8).map((p) => (
+                  {productSearchLoading && (
+                    <div className="esl-search-empty">
+                      <RefreshCw size={16} className="spin" /> ÃœrÃ¼nler aranÄ±yor...
+                    </div>
+                  )}
+                  {!productSearchLoading && filteredProducts.slice(0, 8).map((p) => (
                     <button
                       key={p.id}
                       type="button"
@@ -767,7 +821,7 @@ export default function ESLManagement() {
                       <span className="esl-search-item-price">{getProductPriceLabel(resolveEslDisplayPricing(p))}</span>
                     </button>
                   ))}
-                  {filteredProducts.length === 0 && (
+                  {!productSearchLoading && filteredProducts.length === 0 && productSearch.trim().length >= 2 && (
                     <div className="esl-search-empty">
                       <AlertCircle size={16} /> Arama kriterine uygun ürün bulunamadı.
                     </div>
@@ -939,9 +993,9 @@ export default function ESLManagement() {
                 <button
                   className="btn btn-primary esl-send-btn"
                   onClick={() => handleSendToDevice()}
-                  disabled={!selectedProduct || !selectedDeviceId || sending || (selectedDevice && selectedDevice.status !== 'online')}
+                  disabled={!selectedProduct || !selectedDeviceId || (selectedDevice && selectedDevice.status !== 'online')}
                 >
-                  <Send size={16} /> {sending ? 'Gönderiliyor...' : selectedDevice && selectedDevice.status !== 'online' ? 'Cihaz Çevrimdışı' : 'Cihaza Gönder'}
+                  <Send size={16} /> {selectedDevice && selectedDevice.status !== 'online' ? 'Cihaz Çevrimdışı' : 'Cihaza Gönder'}
                 </button>
                 <button
                   className="btn btn-danger-outline"

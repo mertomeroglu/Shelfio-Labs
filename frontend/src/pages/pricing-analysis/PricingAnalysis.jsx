@@ -295,6 +295,54 @@ const normalizeActionKey = (value, fallback) => {
   return fallback;
 };
 
+const hasCanonicalRecommendationPayload = (row = {}) => Boolean(
+  row.discountSuggestion
+  || row.orderSuggestion
+  || row.suggestedAction
+  || row.reasonCodes
+  || row.blockingReasons
+  || row.sourceMetrics
+);
+
+const getBlockingReasons = (row = {}, discountSuggestion = {}) => [
+  ...(Array.isArray(row.blockingReasons) ? row.blockingReasons : []),
+  ...(Array.isArray(discountSuggestion.blockingReasons) ? discountSuggestion.blockingReasons : []),
+].filter(Boolean);
+
+const buildSystemActionModel = ({ merged = {}, fallbackActionType = 'keep', suggestedDiscount = 0 }) => {
+  const discountSuggestion = merged.discountSuggestion && typeof merged.discountSuggestion === 'object' ? merged.discountSuggestion : {};
+  const orderSuggestion = merged.orderSuggestion && typeof merged.orderSuggestion === 'object' ? merged.orderSuggestion : {};
+  const blockingReasons = getBlockingReasons(merged, discountSuggestion);
+  const isSuppressed = Boolean(merged.isSuppressed || discountSuggestion.isSuppressed || blockingReasons.length);
+
+  if (isSuppressed) {
+    if (blockingReasons.includes('active_campaign_conflict')) {
+      return { actionType: 'keep', actionLabel: 'Kampanya Aktif', tone: 'neutral', campaignEligible: false, campaignLabel: 'Taslak gerekmez' };
+    }
+    if (blockingReasons.some((reason) => reason.includes('margin') || reason.includes('cost'))) {
+      return { actionType: 'keep', actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya uygun değil' };
+    }
+    if (blockingReasons.some((reason) => reason.includes('stock') || reason.includes('replenishment') || reason.includes('lead_time') || reason.includes('receipt'))) {
+      return { actionType: 'urgent', actionLabel: 'Sipariş Önceliği Ver', tone: 'danger', campaignEligible: false, campaignLabel: 'Önce stok güvenceye alınmalı' };
+    }
+    return { actionType: 'keep', actionLabel: 'Temkinli İzle', tone: 'warning', campaignEligible: false, campaignLabel: 'Guardrail kontrolü var' };
+  }
+
+  if (discountSuggestion.hasSuggestion || suggestedDiscount > 0) {
+    return { actionType: 'discount', actionLabel: 'İndirim Öner', tone: 'warning', campaignEligible: true, campaignLabel: 'Kampanyaya uygun' };
+  }
+  if (orderSuggestion.hasSuggestion) {
+    return { actionType: 'urgent', actionLabel: 'Sipariş Önceliği Ver', tone: 'danger', campaignEligible: false, campaignLabel: 'Önce sipariş aksiyonu' };
+  }
+  if (merged.marginGuardrailFlag || merged.marginGuardrail?.blocksDiscount) {
+    return { actionType: 'keep', actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya uygun değil' };
+  }
+  if (fallbackActionType === 'increase') {
+    return { actionType: 'increase', actionLabel: 'Fiyatı Gözden Geçir', tone: 'primary', campaignEligible: false, campaignLabel: 'Kampanya değil fiyat aksiyonu' };
+  }
+  return { actionType: 'keep', actionLabel: 'Fiyatı Koru', tone: 'success', campaignEligible: false, campaignLabel: 'Kampanya gerekmiyor' };
+};
+
 const appendAnalysisRows = (target, rows, sourceSection) => {
   if (!Array.isArray(rows)) return;
   rows.forEach((row) => {
@@ -406,8 +454,8 @@ const normalizePricingActionRow = (sourceRow, index) => {
   const discountSuggestion = merged.discountSuggestion && typeof merged.discountSuggestion === 'object' ? merged.discountSuggestion : {};
   const rawDiscount = getFirstValue(
     merged,
-    ['suggestedDiscountRate', 'suggestedDiscount', 'discountRate', 'discountPercent', 'actionPercent'],
-    discountSuggestion.discountRate,
+    ['recommendedDiscountRate', 'suggestedDiscountRate', 'suggestedDiscount', 'discountRate', 'discountPercent', 'actionPercent'],
+    discountSuggestion.recommendedDiscountRate ?? discountSuggestion.discountRate,
   );
   const suggestedDiscount = clampPercent(rawDiscount);
   const computedActionType = classifyActionType({
@@ -416,10 +464,14 @@ const normalizePricingActionRow = (sourceRow, index) => {
     salesVelocity,
     stock: stockLevel,
   });
-  const normalizedActionType = normalizeActionKey(
-    getFirstValue(merged, ['actionType', 'suggestedAction', 'recommendedAction', 'actionSuggestion']),
-    computedActionType,
-  );
+  const hasBackendPayload = hasCanonicalRecommendationPayload(merged);
+  const normalizedActionType = hasBackendPayload
+    ? computedActionType
+    : normalizeActionKey(
+      getFirstValue(merged, ['actionType', 'suggestedAction', 'recommendedAction', 'actionSuggestion']),
+      computedActionType,
+    );
+  const systemAction = buildSystemActionModel({ merged, fallbackActionType: normalizedActionType, suggestedDiscount });
   const currentMarginPercent = calculateMarginPercent(currentPrice, cost);
   const riskScoreFromSource = getOptionalNumber(getFirstValue(merged, ['riskScore', 'score']));
   const riskScore = Number.isFinite(riskScoreFromSource)
@@ -429,9 +481,9 @@ const normalizePricingActionRow = (sourceRow, index) => {
     getFirstValue(merged, ['riskLevel', 'risk', 'riskStatus']),
     getRiskLevelFromScore(riskScore),
   );
-  const action = getActionModel({
+  const simulationAction = getActionModel({
     currentPrice,
-    actionType: normalizedActionType,
+    actionType: suggestedDiscount > 0 ? (systemAction.actionType === 'urgent' ? 'urgent' : 'discount') : systemAction.actionType,
     actionPercent: suggestedDiscount,
     suggestedPrice: getFirstValue(merged, ['suggestedPrice', 'newPrice'], discountSuggestion.newPrice),
   });
@@ -441,7 +493,7 @@ const normalizePricingActionRow = (sourceRow, index) => {
       ? merged.salesTrend
       : Array.isArray(merged.trend) ? merged.trend : [];
   const trend = trendSource.map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  const estimatedMarginPercent = calculateMarginPercent(action.suggestedPrice, cost);
+  const estimatedMarginPercent = calculateMarginPercent(simulationAction.suggestedPrice, cost);
 
   const row = {
     id,
@@ -453,14 +505,32 @@ const normalizePricingActionRow = (sourceRow, index) => {
     category: hasText(merged.categoryName || merged.category || merged.category?.name) ? String(merged.categoryName || merged.category || merged.category?.name).trim() : 'Kategori yok',
     currentPrice,
     cost,
-    suggestedPrice: action.suggestedPrice,
-    suggestedDiscount: action.actionPercent,
-    simulatedDiscount: action.actionPercent,
-    actionType: action.actionType,
-    actionLabel: action.actionLabel,
-    actionPercent: action.actionPercent,
-    actionSimulationText: action.simulationText,
-    priceChangePercent: action.priceChangePercent,
+    suggestedPrice: simulationAction.suggestedPrice,
+    suggestedDiscount: simulationAction.actionPercent,
+    simulatedDiscount: simulationAction.actionPercent,
+    actionType: systemAction.actionType,
+    actionLabel: systemAction.actionLabel,
+    actionTone: systemAction.tone,
+    actionPercent: suggestedDiscount,
+    actionSimulationText: simulationAction.simulationText,
+    priceChangePercent: simulationAction.priceChangePercent,
+    campaignEligible: systemAction.campaignEligible,
+    campaignLabel: systemAction.campaignLabel,
+    blockingReasons: getBlockingReasons(merged, discountSuggestion),
+    reasonCodes: Array.isArray(merged.reasonCodes) ? merged.reasonCodes : (Array.isArray(discountSuggestion.reasonCodes) ? discountSuggestion.reasonCodes : []),
+    isSuppressed: Boolean(merged.isSuppressed || discountSuggestion.isSuppressed),
+    activeCampaignFlag: Boolean(merged.activeCampaignFlag || discountSuggestion.activeCampaignFlag || merged.hasActiveDiscount),
+    lowStockGuardrailFlag: Boolean(merged.lowStockGuardrailFlag || discountSuggestion.lowStockGuardrailFlag),
+    marginGuardrailFlag: Boolean(merged.marginGuardrailFlag || discountSuggestion.marginGuardrailFlag),
+    replenishmentSupportFlag: Boolean(merged.replenishmentSupportFlag || discountSuggestion.replenishmentSupportFlag),
+    sourceMetrics: merged.sourceMetrics || discountSuggestion.sourceMetrics || {},
+    sold7: toSafeNumber(getFirstValue(merged, ['sold7', 'salesLast7Days'], discountSuggestion.sourceMetrics?.sold7), 0),
+    sold30: toSafeNumber(getFirstValue(merged, ['sold30', 'salesLast30Days'], discountSuggestion.sourceMetrics?.sold30), 0),
+    trendDirection: getFirstValue(merged, ['trendDirection'], discountSuggestion.sourceMetrics?.trendDirection || 'flat'),
+    lastPriceChangeDate: getFirstValue(merged, ['lastPriceChangeDate', 'lastPriceChangeAt'], ''),
+    originalPrice: normalizePrice(getFirstValue(merged, ['originalPrice', 'salePrice'], currentPrice)),
+    discountedPrice: getOptionalNumber(getFirstValue(merged, ['discountedPrice', 'campaignPrice'])),
+    hasActiveDiscount: Boolean(merged.hasActiveDiscount || merged.activeCampaignFlag || discountSuggestion.activeCampaignFlag),
     riskLevel,
     riskScore,
     riskLabel: `${toRiskLabel(riskLevel)} • ${riskScore}`,
@@ -788,8 +858,11 @@ const enrichPricingActionRowForTable = (row, simulationDiscounts = {}) => {
     ...row,
     simulatedDiscount,
     suggestedPrice,
-    actionLabel: simulatedAction.actionLabel,
-    actionPercent: simulatedAction.actionPercent,
+    simulationLabel: simulatedAction.actionLabel,
+    simulationPercent: simulatedAction.actionPercent,
+    simulationText: simulatedAction.simulationText,
+    simulationPriceChangePercent: simulatedAction.priceChangePercent,
+    actionPercent: row.actionPercent,
     actionSimulationText: simulatedAction.simulationText,
     priceChangePercent: simulatedAction.priceChangePercent,
     estimatedMarginPercent,
@@ -1749,9 +1822,11 @@ function PricingAnalysis() {
         ...row,
         simulatedDiscount,
         suggestedPrice: simulatedAction.suggestedPrice,
-        actionLabel: simulatedAction.actionLabel,
-        actionPercent: simulatedAction.actionPercent,
+        simulationLabel: simulatedAction.actionLabel,
+        simulationPercent: simulatedAction.actionPercent,
+        simulationText: simulatedAction.simulationText,
         actionSimulationText: simulatedAction.simulationText,
+        simulationPriceChangePercent: simulatedAction.priceChangePercent,
         priceChangePercent: simulatedAction.priceChangePercent,
       };
     });
@@ -1761,6 +1836,11 @@ function PricingAnalysis() {
     const selectedSet = new Set(selectedIds);
     return visibleRows.filter((row) => selectedSet.has(row.id));
   }, [selectedIds, visibleRows]);
+
+  const selectedCampaignEligibleRows = useMemo(
+    () => selectedRows.filter((row) => row.campaignEligible),
+    [selectedRows],
+  );
 
   const bulkModalProducts = useMemo(() => {
     if (products.length) return products;
@@ -2027,7 +2107,11 @@ function PricingAnalysis() {
     }
 
     if (action === BULK_ACTIONS.ADD_CAMPAIGN) {
-      openCampaignFlow(selectedRows, 'campaign');
+      if (!selectedCampaignEligibleRows.length) {
+        setToast({ type: 'warning', message: 'Seçili ürünlerde kampanya için uygun öneri yok. Guardrail durumunu kontrol edin.' });
+        return;
+      }
+      openCampaignFlow(selectedCampaignEligibleRows, 'campaign');
       return;
     }
 
@@ -2423,8 +2507,8 @@ function PricingAnalysis() {
           <button type="button" className="primary-button" aria-label="Toplu Indirim Uygula" onClick={() => handleBulkAction(BULK_ACTIONS.APPLY_DISCOUNT)}>
             Toplu İndirim Uygula
           </button>
-          <button type="button" className="ghost-button" onClick={() => handleBulkAction(BULK_ACTIONS.ADD_CAMPAIGN)}>
-            Kampanyaya Ekle
+          <button type="button" className="ghost-button" onClick={() => handleBulkAction(BULK_ACTIONS.ADD_CAMPAIGN)} disabled={!selectedCampaignEligibleRows.length}>
+            Kampanya Taslağına Gönder{selectedCampaignEligibleRows.length ? ` (${selectedCampaignEligibleRows.length})` : ''}
           </button>
           <button type="button" className="ghost-button" onClick={() => handleBulkAction(BULK_ACTIONS.KEEP_PRICE)}>
             Fiyatı Koru
@@ -2487,12 +2571,12 @@ function PricingAnalysis() {
                         />
                     </th>
                     <th>Ürün</th>
-                    <th>Kategori</th>
-                    <th>Mevcut Fiyat</th>
-                    <th>Önerilen Aksiyon</th>
-                    <th>Risk Seviyesi</th>
-                    <th>Marj / Satış / Stok Etkisi</th>
-                    <th>Öneri Nedeni</th>
+                    <th>Fiyat</th>
+                    <th>Operasyonel Risk</th>
+                    <th>Sistem Önerisi</th>
+                    <th>Talep / Stok</th>
+                    <th>Simülasyon</th>
+                    <th>Detay</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2503,11 +2587,13 @@ function PricingAnalysis() {
                   const actionLabel = hasText(row.actionLabel) ? row.actionLabel : 'Aksiyon yok';
                   const riskLabel = hasText(row.riskLabel) ? row.riskLabel : toRiskLabel(row.riskLevel);
                   const reasonLabel = normalizeRecommendationReasonText(row.recommendationReason || row.reasonSummary) || 'Satış verisi sınırlı olduğu için güvenli öneri üretildi.';
-                  const actionTone = row.actionType === 'urgent' ? 'danger' : row.actionType === 'discount' ? 'warning' : row.actionType === 'increase' ? 'primary' : row.actionType === 'none' ? 'neutral' : 'success';
+                  const actionTone = row.actionTone || (row.actionType === 'urgent' ? 'danger' : row.actionType === 'discount' ? 'warning' : row.actionType === 'increase' ? 'primary' : row.actionType === 'none' ? 'neutral' : 'success');
                   const marginText = Number.isFinite(row.currentMarginPercent) && Number.isFinite(row.estimatedMarginPercent)
-                    ? <>Marj: {formatPercent(row.currentMarginPercent)} → <span className={dangerMargin ? 'pricing-emphasis is-danger' : 'pricing-emphasis'}>{formatPercent(row.estimatedMarginPercent)}</span></>
+                    ? <>{formatPercent(row.currentMarginPercent)} → <span className={dangerMargin ? 'pricing-emphasis is-danger' : 'pricing-emphasis'}>{formatPercent(row.estimatedMarginPercent)}</span></>
                     : 'Marj: Hesaplanamadı';
                   const profitClass = Number.isFinite(row.impact?.profitImpact) && row.impact.profitImpact < 0 ? 'pricing-impact-negative' : 'pricing-impact-positive';
+                  const campaignTone = row.campaignEligible ? 'success' : row.activeCampaignFlag ? 'neutral' : row.isSuppressed ? 'warning' : 'neutral';
+                  const fdtLabel = row.lastPriceChangeDate ? String(row.lastPriceChangeDate).slice(0, 10) : '-';
                   return (
                     <Fragment key={row.id}>
                       <tr className={`pricing-action-row pricing-action-row--${row.actionType || 'default'} ${row.actionType === 'urgent' ? 'pricing-row--urgent' : ''} ${isExpanded ? 'pricing-action-row--selected' : ''}`.trim()}>
@@ -2524,60 +2610,51 @@ function PricingAnalysis() {
                             {row.isCatalogUnlisted ? <span className="product-new-badge">Yeni</span> : null}
                             {String(row.productName || '').trim() || 'Bilinmeyen ürün'}
                           </strong>
-                          <div className="pricing-row-subtext">SKU: {String(row.sku || '').trim() || '-'}</div>
+                          <div className="pricing-row-subtext">SKU: {String(row.sku || '').trim() || '-'} · {String(row.category || '').trim() || '-'}</div>
                           <div className="pricing-row-subtext">Tedarikçi: {String(row.supplierName || '').trim() || '-'}</div>
-                          <ActionSparkline values={row.trend} />
-                        </td>
-                        <td>{String(row.category || '').trim() || '-'}</td>
-                        <td>
-                          <div>{formatCurrency(row.currentPrice)}</div>
-                          <div className="pricing-emphasis">{formatCurrency(row.suggestedPrice)}</div>
-                          <div className="pricing-row-subtext">
-                            {row.priceChangePercent < 0 ? `${formatPercent(Math.abs(row.priceChangePercent))} indirim` : row.priceChangePercent > 0 ? `${formatPercent(row.priceChangePercent)} zam` : 'Değişim yok'}
-                          </div>
                         </td>
                         <td>
-                          <div className="pricing-action-cell">
-                            {hasText(actionLabel) ? <StatusBadge tone={actionTone}>{actionLabel}</StatusBadge> : <span>Aksiyon yok</span>}
-                            {row.actionSimulationText ? <div className="pricing-row-subtext">{row.actionSimulationText}</div> : null}
+                          <div className="pricing-price-stack">
+                            <span>Efektif</span>
+                            <strong>{formatCurrency(row.currentPrice)}</strong>
+                            <small>Alış: {formatCurrency(row.cost)}</small>
+                            {row.hasActiveDiscount ? <small>Kampanyalı fiyat aktif</small> : null}
                           </div>
                         </td>
                         <td>
                           <div className="pricing-risk-cell">
                             {hasText(riskLabel) ? <StatusBadge tone={riskToneMap[row.riskLevel] || 'neutral'}>{riskLabel}</StatusBadge> : <StatusBadge tone="neutral">Belirsiz</StatusBadge>}
-                            <div className="pricing-row-subtext">
-                              SKT: {toSktLabel(row.expirationRisk)} | Satış: {row.salesSpeedKey === 'slow' ? 'Yavaş' : row.salesSpeedKey === 'fast' ? 'Hızlı' : row.salesSpeedKey === 'normal' ? 'Normal' : 'Belirsiz'}
-                            </div>
+                            <div className="pricing-row-subtext">SKT: {toSktLabel(row.expirationRisk)}</div>
+                            <div className="pricing-row-subtext">Tükeniş: {Number.isFinite(row.stockEndEstimate) ? `${row.stockEndEstimate} gün` : 'Veri yok'}</div>
                           </div>
                         </td>
                         <td>
-                          <div className="pricing-metric-stack">
-                            <div className="pricing-mini-metric">
-                              <span>Marj</span>
-                              <strong>{marginText}</strong>
-                            </div>
-                            <div className="pricing-mini-metric">
-                              <span>Satış</span>
-                              <strong>{Number.isFinite(row.salesImpact) ? formatPercent(row.salesImpact) : 'Veri yok'}</strong>
-                            </div>
-                            <div className="pricing-mini-metric">
-                              <span>Ciro</span>
-                              <strong>{Number.isFinite(row.impact?.revenueImpact) ? formatSignedCurrency(row.impact.revenueImpact) : 'Veri yok'}</strong>
-                            </div>
-                            <div className={`pricing-mini-metric ${profitClass}`}>
-                              <span>Kar</span>
-                              <strong>{Number.isFinite(row.impact?.profitImpact) ? formatSignedCurrency(row.impact.profitImpact) : 'Kar etkisi hesaplanamadı'}</strong>
-                            </div>
-                            {Number.isFinite(row.stockEndEstimate) ? (
-                              <div className="pricing-mini-metric">
-                                <span>Stok bitiş</span>
-                                <strong>{row.stockEndEstimate} gün</strong>
-                              </div>
-                            ) : null}
+                          <div className="pricing-action-cell">
+                            {hasText(actionLabel) ? <StatusBadge tone={actionTone}>{actionLabel}</StatusBadge> : <span>Aksiyon yok</span>}
+                            <StatusBadge tone={campaignTone}>{row.campaignLabel || 'Kampanya durumu yok'}</StatusBadge>
+                            {row.blockingReasons?.length ? <div className="pricing-row-subtext">Guardrail: {row.blockingReasons.slice(0, 2).join(', ')}</div> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="pricing-demand-cell">
+                            <strong>{row.salesSpeedKey === 'slow' ? 'Yavaş' : row.salesSpeedKey === 'fast' ? 'Hızlı' : row.salesSpeedKey === 'normal' ? 'Normal' : 'Belirsiz'}</strong>
+                            <span>7g: {toSafeNumber(row.sold7, 0)} · 30g: {toSafeNumber(row.sold30, 0)}</span>
+                            <span>Stok: {Math.round(row.stockLevel)}</span>
+                            <ActionSparkline values={row.trend} />
+                          </div>
+                        </td>
+                        <td>
+                          <div className="pricing-simulation-cell">
+                            <span>Sistemden bağımsız deneme</span>
+                            <strong>{row.simulationLabel || row.actionSimulationText || 'Fiyat korunur'}</strong>
+                            <small>Simüle fiyat: {formatCurrency(row.suggestedPrice)}</small>
+                            <small className={profitClass}>Kar etkisi: {Number.isFinite(row.impact?.profitImpact) ? formatSignedCurrency(row.impact.profitImpact) : 'Veri yok'}</small>
                           </div>
                         </td>
                         <td>
                           <div className="pricing-row-reason" title={reasonLabel}>{reasonLabel}</div>
+                          <div className="pricing-row-subtext">Marj: {marginText}</div>
+                          <div className="pricing-row-subtext">FDT: {fdtLabel}</div>
                           <button
                             type="button"
                             className="ghost-button pricing-reason-toggle"

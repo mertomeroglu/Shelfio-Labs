@@ -82,7 +82,6 @@ const initialBulkEditForm = {
 };
 
 const TABLE_PAGE_SIZE = 7;
-const ARCHIVE_STORAGE_KEY = 'shelfio.purchaseSuggestions.archive.v1';
 const PURCHASE_SUGGESTION_HANDOFF_STORAGE_KEY = 'shelfio.purchaseSuggestions.handoffs.v1';
 
 const riskTone = {
@@ -101,24 +100,22 @@ const riskLabel = {
 
 const statusTone = {
   pending: 'warning',
-  sent_to_order: 'info',
-  ordered: 'info',
   approved: 'success',
   rejected: 'danger',
   archived: 'neutral',
+  stale: 'warning',
 };
 
 const statusLabel = {
   pending: 'Bekleyen',
-  sent_to_order: 'Siparişe gönderildi',
-  ordered: 'Siparişe gönderildi',
-  approved: 'Onaylandı',
+  approved: 'Siparişe dönüştü',
   rejected: 'Reddedildi',
   archived: 'Arşivlendi',
+  stale: 'Yeniden hesap gerekli',
 };
 
 const ACTIVE_SUGGESTION_STATUSES = new Set(['pending']);
-const ARCHIVED_SUGGESTION_STATUSES = new Set(['sent_to_order', 'ordered', 'approved', 'rejected', 'archived']);
+const ARCHIVED_SUGGESTION_STATUSES = new Set(['approved', 'rejected', 'archived', 'stale']);
 const PACKAGED_ORDER_UNITS = new Set(['koli', 'kasa', 'paket', 'çuval']);
 
 const trendLabel = { up: 'Yükseliş', flat: 'Dengeli', down: 'Düşüş' };
@@ -148,7 +145,7 @@ const normalizeSuggestionStatus = (value = '') => {
     .trim()
     .toLocaleLowerCase('tr-TR')
     .replace(/[\s-]+/g, '_');
-  if (normalized === 'senttoorder') return 'sent_to_order';
+  if (['senttoorder', 'sent_to_order', 'ordered'].includes(normalized)) return 'approved';
   return normalized || 'pending';
 };
 
@@ -179,26 +176,6 @@ const getTotalStockValue = (item) => {
   const directTotal = Number(item?.totalStock);
   if (Number.isFinite(directTotal) && directTotal >= 0) return directTotal;
   return null;
-};
-
-const readArchiveStore = () => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(ARCHIVE_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const persistArchiveStore = (archiveStore) => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(ARCHIVE_STORAGE_KEY, JSON.stringify(archiveStore));
-  } catch {
-    // no-op
-  }
 };
 
 const readSuggestionHandoffStore = () => {
@@ -237,18 +214,6 @@ const writeSuggestionHandoff = ({ mode, items, invalidReasons }) => {
   };
   persistSuggestionHandoffStore(handoffStore);
   return handoffId;
-};
-
-const getActorLabel = (user = {}) => {
-  return String(
-    user?.fullName
-    || user?.displayName
-    || user?.name
-    || user?.username
-    || user?.email
-    || user?.id
-    || 'Sistem'
-  ).trim() || 'Sistem';
 };
 
 const resolveActorName = (value) => {
@@ -386,43 +351,6 @@ const buildNavigationItem = (item = {}) => {
   };
 };
 
-const createArchiveSnapshot = (item = {}) => ({
-  id: item.id,
-  productId: item.productId,
-  productName: item.productName,
-  sku: item.sku,
-  supplierId: item.supplierId,
-  supplierName: item.supplierName,
-  suggestedQty: item.suggestedQty,
-  purchasePrice: item.purchasePrice || item.unitPrice || 0,
-  currentStock: item.currentStock ?? item.stockLevel ?? 0,
-  shelfStock: item.shelfStock ?? 0,
-  warehouseStock: item.warehouseStock ?? 0,
-  reason: item.reason,
-  actionableReason: item.actionableReason,
-  riskLevel: item.riskLevel,
-  orderUnit: resolveOrderUnit(item),
-  unitsPerPack: item.unitsPerPack,
-  unitsPerCase: item.unitsPerCase,
-  unitsPerPallet: item.unitsPerPallet,
-  packageSize: resolvePackageSize(item, resolveOrderUnit(item)),
-  createdAt: item.createdAt,
-  updatedAt: item.updatedAt,
-});
-
-const buildArchiveSeedRows = (archiveStore = {}, liveRows = []) => {
-  const liveIds = new Set(liveRows.map((item) => String(item.id || '')));
-  return Object.values(archiveStore)
-    .filter((entry) => entry?.snapshot?.id && !liveIds.has(String(entry.snapshot.id)))
-    .map((entry) => ({
-      ...entry.snapshot,
-      status: entry.status,
-      actionAt: entry.actionAt,
-      actionBy: entry.actionBy,
-      archivedSource: 'local',
-    }));
-};
-
 const formatSuggestedQuantityCell = (item = {}) => {
   const orderUnit = resolveOrderUnit(item);
   const packageSize = resolvePackageSize(item, orderUnit);
@@ -477,6 +405,7 @@ const buildBetterReason = (row = {}) => {
 };
 
 const computeConfidenceScore = (row = {}) => {
+  if (row.isStale || row.dataFreshness?.isStale) return 28;
   const salesReliability = Math.min(30, Math.round((Number(row.sold14 || 0) / 2) + (Number(row.avgDailySales || row.avgDaily7 || 0) * 2)));
   const stockRisk = Number.isFinite(row.daysToStockout) ? Math.max(0, 25 - Math.min(25, Math.round(row.daysToStockout * 2))) : 6;
   const supplierSignal = row.supplierId ? 20 : 6;
@@ -484,6 +413,25 @@ const computeConfidenceScore = (row = {}) => {
   const qtySignal = Number(row.suggestedQty || 0) > 0 ? Math.max(8, 16 - Math.min(8, Math.abs(Math.round(Number(row.suggestedQty || 0) - Number(row.roundedFromQty || row.suggestedQty || 0))))) : 3;
   const seedBoost = deterministicSeed(`${row.id || row.productId || row.sku}`) % 7;
   return Math.max(18, Math.min(97, salesReliability + stockRisk + supplierSignal + leadTimeSignal + qtySignal + seedBoost));
+};
+
+const staleReasonLabel = {
+  stock_changed: 'Canlı stok değişti',
+  critical_stock_changed: 'Kritik eşik değişti',
+  calculation_expired: 'Hesap eski',
+  calculation_time_missing: 'Hesap zamanı yok',
+  legacy_payload_drift: 'Eski payload çelişkisi',
+  product_missing: 'Ürün bulunamadı',
+  supplier_missing: 'Tedarikçi bulunamadı',
+  product_inactive: 'Ürün pasif',
+  supplier_inactive: 'Tedarikçi pasif',
+};
+
+const buildFreshnessText = (item = {}) => {
+  const freshness = item.dataFreshness || {};
+  if (!freshness.isStale) return 'Güncel';
+  const firstReason = Array.isArray(freshness.reasons) ? freshness.reasons[0] : '';
+  return staleReasonLabel[firstReason] || 'Yeniden hesap gerekli';
 };
 
 const formatPriorityStockout = (item = {}) => {
@@ -550,6 +498,15 @@ function MinimalPaginationControls({ page, pageSize, total, onPageChange, label 
 }
 
 function StockoutDisplay({ item }) {
+  if (item.isStale) {
+    return (
+      <div className="ps-stockout-cell">
+        <strong>Yeniden hesap gerekli</strong>
+        <span>{item.freshnessText || 'Veri güncelliği doğrulanmalı'}</span>
+      </div>
+    );
+  }
+
   const totalStock = getTotalStockValue(item);
   if (totalStock !== null && totalStock <= 0) {
     return (
@@ -589,7 +546,8 @@ function RecommendationTable({
   setSelectedIds,
   explanationOpenId,
   setExplanationOpenId,
-  handleApproveNavigation,
+  handleConvertToOrder,
+  handleOpenComposeScreen,
   setRejectTarget,
   processingId,
   isAdmin,
@@ -657,7 +615,16 @@ function RecommendationTable({
                   <td>{formatNumber(item.avgDailySales || 0)}</td>
                   <td><StockoutDisplay item={item} /></td>
                   <td>{formatNumber(item.leadTimeDays || 0)}</td>
-                  <td>{item.confidenceText}</td>
+                  <td>
+                    <div className="ps-supplier-cell">
+                      <strong>{item.confidenceText}</strong>
+                      {item.isStale ? (
+                        <StatusBadge tone="warning">{item.freshnessText || 'Yeniden hesap gerekli'}</StatusBadge>
+                      ) : (
+                        <span>Güncel veri</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="ps-total-stock-cell">
                     {totalStockValue === null ? <span className="muted-text">Veri yok</span> : formatNumber(totalStockValue)}
                   </td>
@@ -695,10 +662,18 @@ function RecommendationTable({
                           <button
                             className="text-button success"
                             type="button"
-                            onClick={() => handleApproveNavigation(item)}
+                            onClick={() => handleConvertToOrder(item)}
                             disabled={processingId === item.id || normalizeSuggestionStatus(item.status) !== 'pending'}
                           >
-                            Onaya Gönder
+                            Siparişe Dönüştür
+                          </button>
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() => handleOpenComposeScreen(item)}
+                            disabled={processingId === item.id || normalizeSuggestionStatus(item.status) !== 'pending'}
+                          >
+                            Taslakta Düzenle
                           </button>
                           <button
                             className="text-button danger"
@@ -722,6 +697,7 @@ function RecommendationTable({
                           <span>
                             Trend: {trendLabel[item.explanation.trend] || '-'}
                             {' '}| Güven: {item.confidenceText}
+                            {item.isStale ? ` | Veri durumu: ${item.freshnessText || 'Yeniden hesap gerekli'}` : ''}
                             {' '}| Tahmini stok bitiş: {item.explanation.estimatedStockoutDate || '-'}
                           </span>
                         </div>
@@ -770,7 +746,6 @@ export default function PurchaseSuggestions() {
   const [explanationOpenId, setExplanationOpenId] = useState('');
   const [listPage, setListPage] = useState(1);
   const [archivePage, setArchivePage] = useState(1);
-  const [archiveStore, setArchiveStore] = useState(() => readArchiveStore());
 
   const hasAutoGeneratedRef = useRef(false);
   const generationInFlightRef = useRef(false);
@@ -848,15 +823,6 @@ export default function PurchaseSuggestions() {
     bootstrap();
   }, []);
 
-  useEffect(() => {
-    persistArchiveStore(archiveStore);
-  }, [archiveStore]);
-
-  const mergedRows = useMemo(
-    () => [...rows, ...buildArchiveSeedRows(archiveStore, rows)],
-    [archiveStore, rows]
-  );
-
   const supplierOptionsByProduct = useMemo(() => {
     const map = new Map();
     supplierProducts.forEach((row) => {
@@ -888,7 +854,7 @@ export default function PurchaseSuggestions() {
   }, [suppliers]);
 
   const enrichedRows = useMemo(() => {
-    return mergedRows.map((item) => {
+    return rows.map((item) => {
       const productId = String(item.productId || '');
       const product = productMap.get(productId) || {};
       const options = [...(supplierOptionsByProduct.get(productId) || [])].sort((a, b) => {
@@ -905,20 +871,20 @@ export default function PurchaseSuggestions() {
       const daysToStockout = estimateDaysToStockout({ ...rowContext, avgDailySales, leadTimeDays });
       const riskLevel = String(item.riskLevel || classifyStockoutRisk(daysToStockout)).toLowerCase('tr-TR');
       const suggestedQty = Number(item.suggestedQty || buildSuggestionQuantity({ ...rowContext, avgDailySales, leadTimeDays }));
-      const confidenceScore = computeConfidenceScore({ ...rowContext, avgDailySales, leadTimeDays, daysToStockout, suggestedQty });
-      const explanation = buildRecommendationExplanation({ ...rowContext, avgDailySales, leadTimeDays, suggestedQty, confidenceScore });
+      const dataFreshness = item.dataFreshness || { isStale: Boolean(item.isStale), reasons: item.staleReasons || [] };
+      const isStale = Boolean(item.isStale || dataFreshness.isStale);
+      const confidenceScore = computeConfidenceScore({ ...rowContext, avgDailySales, leadTimeDays, daysToStockout, suggestedQty, dataFreshness, isStale });
+      const explanation = buildRecommendationExplanation({ ...rowContext, avgDailySales, leadTimeDays, suggestedQty, confidenceScore, dataFreshness, isStale });
       const salesTrend = Array.isArray(item.salesTrendLast14Days) ?
         item.salesTrendLast14Days
         : [];
-      const archiveEntry = archiveStore[String(item.id || '')] || null;
-      const effectiveStatus = normalizeSuggestionStatus(archiveEntry?.status || item.status);
+      const effectiveStatus = normalizeSuggestionStatus(item.status);
       const supplierName = item.supplierName && item.supplierName !== '-'
         ? item.supplierName
         : (chosenSupplier?.name || fallbackSupplier?.supplierName || 'Varsayılan tedarikçi yok');
 
       return {
         ...item,
-        ...(archiveEntry?.snapshot || {}),
         supplierId: chosenSupplierId || item.supplierId,
         supplierName,
         supplierMissing: !chosenSupplierId,
@@ -933,19 +899,22 @@ export default function PurchaseSuggestions() {
         daysToStockout,
         riskLevel,
         suggestedQty,
+        dataFreshness,
+        isStale,
+        freshnessText: buildFreshnessText({ ...item, dataFreshness, isStale }),
         status: effectiveStatus,
         confidenceScore,
-        confidenceText: `${confidenceScore}%`,
+        confidenceText: isStale ? 'İnceleme gerekli' : `${confidenceScore}%`,
         estimatedStockoutDate: estimateStockoutDate({ ...rowContext, avgDailySales, leadTimeDays }),
         trendDirection: resolveTrendDirection(item),
         explanation,
         salesTrend,
         actionableReason: buildBetterReason({ ...item, sold7: Number(item.sold7 || 0), leadTimeDays, currentStock: Number(item.currentStock || 0), criticalStock: Number(item.criticalStock || 0) }),
-        actionAt: archiveEntry?.actionAt || getArchiveActionAt(item),
-        actionBy: archiveEntry?.actionBy || resolveArchiveActor(item),
+        actionAt: getArchiveActionAt(item),
+        actionBy: resolveArchiveActor(item),
       };
     });
-  }, [archiveStore, mergedRows, productMap, supplierMap, supplierOptionsByProduct]);
+  }, [productMap, rows, supplierMap, supplierOptionsByProduct]);
 
   const filteredRows = useMemo(() => {
     const query = String(filters.search || '').trim().toLocaleLowerCase('tr-TR');
@@ -991,7 +960,6 @@ export default function PurchaseSuggestions() {
     total: activeFilteredRows.length,
     pending: activeFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'pending').length,
     approved: archiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'approved').length,
-    sentToOrder: archiveFilteredRows.filter((item) => ['sent_to_order', 'ordered'].includes(normalizeSuggestionStatus(item.status))).length,
     criticalRisk: activeFilteredRows.filter((item) => ['critical', 'high'].includes(String(item.riskLevel || '').toLowerCase())).length,
     calendarSensitive: activeFilteredRows.filter((item) => containsCalendarSignal(item.reasonTags)).length,
     urgentByLeadTime: activeFilteredRows.filter((item) => Number(item.daysToStockout || 999) <= Number(item.leadTimeDays || 0) + 2).length,
@@ -1028,9 +996,9 @@ export default function PurchaseSuggestions() {
 
   const purchaseStatusChartData = useMemo(() => ([
     { name: 'Bekleyen', count: summary.pending },
-    { name: 'Siparişe Gönderildi', count: summary.sentToOrder },
-    { name: 'Onaylanan', count: summary.approved },
+    { name: 'Siparişe Dönüştü', count: summary.approved },
     { name: 'Reddedilen', count: archiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'rejected').length },
+    { name: 'Yeniden Hesap', count: archiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'stale').length },
   ]), [archiveFilteredRows, summary]);
 
   const leadTimeComparisonData = useMemo(() => (
@@ -1072,34 +1040,6 @@ export default function PurchaseSuggestions() {
     const activeIdSet = new Set(activeRows.map((item) => item.id));
     setSelectedIds((current) => current.filter((id) => activeIdSet.has(id)));
   }, [activeRows]);
-
-  const recordArchiveEntries = (items, nextStatus) => {
-    const actionAt = new Date().toISOString();
-    const actionBy = getActorLabel(user);
-    const normalizedStatus = normalizeSuggestionStatus(nextStatus);
-
-    setArchiveStore((current) => {
-      const next = { ...current };
-      items.forEach((item) => {
-        if (!item?.id) return;
-        next[item.id] = {
-          id: item.id,
-          status: normalizedStatus,
-          actionAt,
-          actionBy,
-          snapshot: createArchiveSnapshot(item),
-        };
-      });
-      return next;
-    });
-  };
-
-  const syncRowsStatus = (items, nextStatus) => {
-    const idSet = new Set(items.map((item) => item.id));
-    const normalizedStatus = normalizeSuggestionStatus(nextStatus);
-    const actionAt = new Date().toISOString();
-    setRows((current) => current.map((row) => (idSet.has(row.id) ? { ...row, status: normalizedStatus, updatedAt: actionAt } : row)));
-  };
 
   const buildNavigationPayload = (inputRows, mode) => {
     const validItems = [];
@@ -1155,18 +1095,50 @@ export default function PurchaseSuggestions() {
     };
   };
 
-  const handleApproveNavigation = (item) => {
+  const handleOpenComposeScreen = (item) => {
     const { validItems, invalidReasons, href, state } = buildNavigationPayload([item], 'single');
     if (!validItems.length) {
-      setToast({ type: 'error', title: 'Onaya Gönder', message: invalidReasons[0] || 'Ürün siparişe aktarılamadı.' });
+      setToast({ type: 'error', title: 'Taslakta Düzenle', message: invalidReasons[0] || 'Ürün sipariş ekranına taşınamadı.' });
       return;
     }
 
     if (invalidReasons.length) {
-      setToast({ type: 'warning', title: 'Onaya Gönder', message: invalidReasons[0] });
+      setToast({ type: 'warning', title: 'Taslakta Düzenle', message: invalidReasons[0] });
     }
 
     navigate(href, { state });
+  };
+
+  const openLinkedOrder = (order) => {
+    const orderId = String(order?.id || order?.linkedOrderId || '').trim();
+    const orderNumber = String(order?.orderNumber || order?.linkedOrderNumber || '').trim();
+    navigate('/siparis-takibi', {
+      state: {
+        from: '/siparis-onerileri',
+        openOrderId: orderId,
+        openOrderNumber: orderNumber,
+      },
+    });
+  };
+
+  const handleConvertToOrder = async (item) => {
+    if (!item?.id) return;
+    try {
+      setProcessingId(item.id);
+      const order = await procurementService.approveSuggestion(item.id, {});
+      setToast({
+        type: 'success',
+        title: 'Siparişe Dönüştür',
+        message: `${order?.orderNumber || 'Satın alma siparişi'} oluşturuldu ve öneri backend'de güncellendi.`,
+      });
+      setSelectedIds((current) => current.filter((id) => id !== item.id));
+      await loadData(filters);
+      if (order?.id) openLinkedOrder(order);
+    } catch (error) {
+      setToast({ type: 'error', title: 'Siparişe Dönüştür', message: error.message || 'Öneri siparişe dönüştürülemedi.' });
+    } finally {
+      setProcessingId('');
+    }
   };
 
   const handleEditSave = async (event) => {
@@ -1197,10 +1169,9 @@ export default function PurchaseSuggestions() {
       setProcessingId(rejectTarget.id);
       await procurementService.rejectSuggestion(rejectTarget.id);
       setToast({ type: 'success', title: 'Sipariş Önerileri', message: 'Öneri reddedildi.' });
-      recordArchiveEntries([rejectTarget], 'rejected');
-      syncRowsStatus([rejectTarget], 'rejected');
       setSelectedIds((current) => current.filter((id) => id !== rejectTarget.id));
       setRejectTarget(null);
+      await loadData(filters);
     } catch (error) {
       setToast({ type: 'error', title: 'Sipariş Önerileri', message: error.message || 'Reddetme işlemi başarısız.' });
       setRejectTarget(null);
@@ -1214,22 +1185,54 @@ export default function PurchaseSuggestions() {
     try {
       setProcessingId(`bulk-${actionType}`);
 
-      if (actionType === 'convert') {
+      if (actionType === 'compose') {
         const { validItems, invalidReasons, href, state } = buildNavigationPayload(selectedRows, 'bulk');
         if (!validItems.length) {
-          setToast({ type: 'error', title: 'Toplu Sipariş', message: invalidReasons[0] || 'Geçerli sipariş önerisi bulunamadı.' });
+          setToast({ type: 'error', title: 'Oluşturma Ekranına Taşı', message: invalidReasons[0] || 'Geçerli sipariş önerisi bulunamadı.' });
           return;
         }
 
         if (invalidReasons.length) {
           setToast({
             type: 'warning',
-            title: 'Toplu Sipariş',
+            title: 'Oluşturma Ekranına Taşı',
             message: `${formatNumber(validItems.length)} öneri aktarıldı, ${formatNumber(invalidReasons.length)} kayıt atlandı.`,
           });
         }
 
         navigate(href, { state });
+      }
+
+      if (actionType === 'convert') {
+        const results = [];
+        for (const item of selectedRows) {
+          try {
+            const order = await procurementService.approveSuggestion(item.id, {});
+            results.push({ ok: true, item, order });
+          } catch (error) {
+            results.push({ ok: false, item, error });
+          }
+        }
+
+        const successCount = results.filter((result) => result.ok).length;
+        const failed = results.filter((result) => !result.ok);
+        setSelectedIds([]);
+        await loadData(filters);
+
+        if (failed.length) {
+          setToast({
+            type: successCount ? 'warning' : 'error',
+            title: 'Toplu Siparişe Dönüştür',
+            message: `${formatNumber(successCount)} öneri siparişe dönüştü, ${formatNumber(failed.length)} öneri başarısız.`,
+          });
+          return;
+        }
+
+        setToast({
+          type: 'success',
+          title: 'Toplu Siparişe Dönüştür',
+          message: `${formatNumber(successCount)} öneri için satın alma siparişi oluşturuldu.`,
+        });
       }
 
     } catch (error) {
@@ -1332,7 +1335,7 @@ export default function PurchaseSuggestions() {
           </div>
           <div className="ps-kpi ps-kpi-green">
             <span className="ps-kpi-icon"><CheckCircle2 size={18} /></span>
-            <div><div className="ps-kpi-title">Onaylanan</div><div className="ps-kpi-value">{formatNumber(summary.approved)}</div></div>
+            <div><div className="ps-kpi-title">Siparişe Dönüşen</div><div className="ps-kpi-value">{formatNumber(summary.approved)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-red">
             <span className="ps-kpi-icon"><AlertTriangle size={18} /></span>
@@ -1452,9 +1455,9 @@ export default function PurchaseSuggestions() {
                   <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}>
                     <option value="">Tüm Durumlar</option>
                     <option value="pending">Bekleyen</option>
-                    <option value="sent_to_order">Siparişe Gönderildi</option>
-                    <option value="approved">Onaylandı</option>
+                    <option value="approved">Siparişe Dönüştü</option>
                     <option value="rejected">Reddedildi</option>
+                    <option value="stale">Yeniden Hesap Gerekli</option>
                   </select>
                 </label>
                 <label className="field-group ps-filter-field ps-filter-field--risk">
@@ -1561,8 +1564,9 @@ export default function PurchaseSuggestions() {
                 <strong>{formatNumber(selectedRows.length)} öneri seçildi</strong>
                 <span>{formatNumber(selectedSupplierCount)} tedarikçiye dağılmış durumda.</span>
               </div>
-              <div className="ps-bulk-actions">
-                <button type="button" className="primary-button ps-btn" onClick={() => runBulkAction('convert')} disabled={processingId.startsWith('bulk-')}>Toplu Siparişe Gönder</button>
+            <div className="ps-bulk-actions">
+                <button type="button" className="primary-button ps-btn" onClick={() => runBulkAction('convert')} disabled={processingId.startsWith('bulk-')}>Toplu Siparişe Dönüştür</button>
+                <button type="button" className="ghost-button ps-btn" onClick={() => runBulkAction('compose')} disabled={processingId.startsWith('bulk-')}>Oluşturma Ekranına Taşı</button>
               </div>
             </div>
           ) : null}
@@ -1594,7 +1598,7 @@ export default function PurchaseSuggestions() {
                 <Info size={18} />
                 <div>
                   <h4>Aktif sipariş önerisi kalmadı</h4>
-                  <p>Uygulanan ve reddedilen öneriler aşağıdaki arşiv tablosuna taşındı.</p>
+                  <p>Siparişe dönüşen, reddedilen veya yeniden hesap gerektiren öneriler aşağıdaki arşiv tablosunda tutuluyor.</p>
                 </div>
               </div>
             </div>
@@ -1603,8 +1607,8 @@ export default function PurchaseSuggestions() {
               <div className="ps-empty-head">
                 <Info size={18} />
                 <div>
-                  <h4>Henüz sipariş önerisi oluşturulmadı</h4>
-                  <p>Stok, satış ve temin verileri analiz edildiğinde sistem sipariş önerisi üretir.</p>
+                  <h4>Şu anda net sipariş ihtiyacı görünmüyor</h4>
+                  <p>Kritik stok altında ürün yok veya mevcut/yoldaki siparişler ihtiyacı karşılıyor olabilir. Öneri üretimi, net ihtiyaç oluştuğunda pending kayıt yaratır.</p>
                 </div>
               </div>
               <div className="ps-empty-metrics">
@@ -1626,12 +1630,12 @@ export default function PurchaseSuggestions() {
                 <div>
                   <strong>{formatNumber(emptyBreakdown.sufficientStock)}</strong>
                   <span>Stoku yeterli ürün</span>
-                  <small>Bu ürünler için mevcut stok sipariş ihtiyacını karşılıyor.</small>
+                  <small>Bu ürünlerde current stock hedef stok ve kritik eşik üstünde.</small>
                 </div>
               </div>
               <div className="ps-empty-actions">
                 <button className="primary-button ps-btn" type="button" onClick={() => regenerateSuggestions('manual')} disabled={isGeneratingSuggestions}>
-                  Sipariş Önerisi Üret
+                  Yeniden Hesapla
                 </button>
                 <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/urunler')}>Eksik Verileri Tamamla</button>
                 <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/siparis-olustur')}>Tedarikçi Ayarlarına Git</button>
@@ -1651,7 +1655,8 @@ export default function PurchaseSuggestions() {
                     setSelectedIds={setSelectedIds}
                     explanationOpenId={explanationOpenId}
                     setExplanationOpenId={setExplanationOpenId}
-                    handleApproveNavigation={handleApproveNavigation}
+                    handleConvertToOrder={handleConvertToOrder}
+                    handleOpenComposeScreen={handleOpenComposeScreen}
                     setRejectTarget={setRejectTarget}
                     processingId={processingId}
                     isAdmin={isAdmin}
@@ -1666,7 +1671,8 @@ export default function PurchaseSuggestions() {
               setSelectedIds={setSelectedIds}
               explanationOpenId={explanationOpenId}
               setExplanationOpenId={setExplanationOpenId}
-              handleApproveNavigation={handleApproveNavigation}
+              handleConvertToOrder={handleConvertToOrder}
+              handleOpenComposeScreen={handleOpenComposeScreen}
               setRejectTarget={setRejectTarget}
               processingId={processingId}
               isAdmin={isAdmin}
@@ -1681,7 +1687,7 @@ export default function PurchaseSuggestions() {
               <div className="mod-card-icon mod-icon-emerald"><ClipboardList size={16} /></div>
               <div>
                 <h3>Öneri Arşivi</h3>
-                <p>Siparişe gönderilen, onaylanan ve reddedilen öneriler burada tutulur.</p>
+                <p>Siparişe dönüşen ve reddedilen öneriler burada tutulur.</p>
               </div>
             </div>
             <MinimalPaginationControls
@@ -1726,6 +1732,15 @@ export default function PurchaseSuggestions() {
                             <StatusBadge tone={statusTone[normalizeSuggestionStatus(item.status)] || 'neutral'}>
                               {statusLabel[normalizeSuggestionStatus(item.status)] || item.status || '-'}
                             </StatusBadge>
+                            {item.linkedOrderId ? (
+                              <button
+                                className="text-button"
+                                type="button"
+                                onClick={() => openLinkedOrder({ id: item.linkedOrderId })}
+                              >
+                                Siparişi Aç
+                              </button>
+                            ) : null}
                           </td>
                           <td className="ps-archive-cell-date">{formatActionDateTime(item.actionAt)}</td>
                           <td className="ps-archive-cell-actor" title={resolveArchiveActor(item)}>

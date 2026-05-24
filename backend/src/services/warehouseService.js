@@ -468,11 +468,12 @@ export const warehouseService = {
   async listLocations(query = {}) {
     const locations = await ensureInitialized();
     const filtered = applyFilters(locations, query);
-    const [products, sections, stocks] = await Promise.all([
+    const includeShelfDetails = !['0', 'false', 'no'].includes(String(query.includeShelfDetails ?? 'true').trim().toLowerCase());
+    const [products, sections, stocks] = includeShelfDetails ? await Promise.all([
       productRepo.getAll(),
       sectionRepo.getAll(),
       stockRepo.getAll(),
-    ]);
+    ]) : [[], [], []];
 
     const productId = String(query.productId || '').trim();
     const suggestMode = String(query.suggestMode || 'nearest').toLowerCase();
@@ -489,9 +490,9 @@ export const warehouseService = {
     const suggested = findSuggestedLocation(locations, productId, suggestMode, requiredStorageType);
     const depotAssignments = buildDepotAssignments(locations);
     const depotZones = buildDepotZones(locations);
-    const shelfPlan = buildShelfPlan({ products, sections, stocks });
-    const shelfZones = buildShelfZones({ sections, shelfPlan });
-    const virtualOverflowSummary = buildVirtualOverflowSummary({ products, stocks });
+    const shelfPlan = includeShelfDetails ? buildShelfPlan({ products, sections, stocks }) : [];
+    const shelfZones = includeShelfDetails ? buildShelfZones({ sections, shelfPlan }) : [];
+    const virtualOverflowSummary = includeShelfDetails ? buildVirtualOverflowSummary({ products, stocks }) : null;
 
     return {
       rows: filtered.map(enrichLocationRow),
@@ -499,9 +500,11 @@ export const warehouseService = {
       structure: WAREHOUSE_STRUCTURE,
       depotAssignments,
       depotZones,
-      shelfPlan,
-      shelfZones,
-      virtualOverflowSummary,
+      ...(includeShelfDetails ? {
+        shelfPlan,
+        shelfZones,
+        virtualOverflowSummary,
+      } : {}),
       suggestedLocation: suggested ? {
         id: suggested.id,
         locationCode: suggested.locationCode,
@@ -600,6 +603,7 @@ export const warehouseService = {
     const batchNo = String(payload.batchNo || '').trim();
     const skt = String(payload.skt || '').trim();
     const description = String(payload.description || '').trim();
+    const movementPayload = payload.payload && typeof payload.payload === 'object' ? payload.payload : null;
     const qty = Math.max(0, Number(payload.qty || 0));
 
     if (!productId || !locationCode || !qty) {
@@ -714,6 +718,7 @@ export const warehouseService = {
       createdBy: user?.id || null,
       createdByName: user?.name || 'Sistem',
       description,
+      payload: movementPayload,
     };
 
     await warehouseMovementRepo.create(movement);

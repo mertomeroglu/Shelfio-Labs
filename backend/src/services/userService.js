@@ -14,6 +14,7 @@ import { AppError, createNotFoundError } from '../utils/appError.js';
 import { formatMovementRouteLabel, formatPermissionLabel, replacePermissionCodesInText } from '../utils/displayLabels.js';
 import { hashPassword } from '../utils/password.js';
 import { sanitizeUserInput, validateUserPayload } from '../utils/validators.js';
+import { getPurchaseOrderStatusLabel, normalizePurchaseOrderStatus } from '../domain/purchaseOrderLifecycle.js';
 
 const SUPER_ADMIN_ID = 'u-admin-1';
 const SUPER_ADMIN_USERNAME = 'mert.omeroglu@shelfio.com';
@@ -31,6 +32,26 @@ const formatOrderReference = (value, fallbackSeed = '') => {
     hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
   }
   return `siparis-${String(Math.abs(hash) % 100000).padStart(5, '0')}`;
+};
+
+const purchaseOrderActivityLabel = (status, type = '') => {
+  const normalizedStatus = normalizePurchaseOrderStatus(status, '');
+  const normalizedType = String(type || '').trim();
+  if (normalizedStatus === 'goods_receipt_pending') return 'Mal kabul beklemeye alındı';
+  if (normalizedStatus === 'goods_receipt_completed') return 'Mal kabulü tamamladı';
+  if (normalizedStatus === 'stock_entry_pending') return 'Stok girişi beklemeye alındı';
+  if (normalizedStatus === 'completed') return 'Stok girişini tamamladı';
+  if (normalizedStatus === 'archived') return 'Siparişi arşivledi';
+  if (normalizedStatus === 'cancelled') return 'Siparişi iptal etti';
+  if (normalizedType === 'status_auto_progress') return 'Sipariş durumunu otomatik ilerletti';
+  return 'Satın alma durumunu güncelledi';
+};
+
+const purchaseOrderActivityModule = (status) => {
+  const normalizedStatus = normalizePurchaseOrderStatus(status, '');
+  if (['delivered', 'goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending'].includes(normalizedStatus)) return 'Mal Kabul';
+  if (['completed', 'archived'].includes(normalizedStatus)) return 'Satın Alma';
+  return 'Satın Alma';
 };
 
 const DEPARTMENT_DEFAULTS = {

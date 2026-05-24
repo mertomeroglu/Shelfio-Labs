@@ -101,7 +101,6 @@ const PURCHASE_MODAL_MODES = {
 const RECENT_PRODUCTS_STORAGE_KEY = 'shelfio.purchaseRecentProducts';
 const RECENT_PRODUCTS_MAX = 40;
 const PRODUCT_QUICK_PICK_LIMIT = 5;
-const PURCHASE_SUGGESTION_ARCHIVE_STORAGE_KEY = 'shelfio.purchaseSuggestions.archive.v1';
 const PURCHASE_SUGGESTION_HANDOFF_STORAGE_KEY = 'shelfio.purchaseSuggestions.handoffs.v1';
 const PURCHASE_SUGGESTION_QUERY_KEYS = ['source', 'intent', 'count', 'handoffId', 'productId', 'supplierId', 'productIds', 'supplierIds'];
 const SUPPLIER_PRODUCTS_PAGE_LIMIT = 50;
@@ -127,26 +126,6 @@ const sanitizePurchaseSuggestionState = (state) => {
   delete nextState.purchaseSuggestions;
   delete nextState.purchaseSuggestionFlow;
   return Object.keys(nextState).length ? nextState : null;
-};
-
-const readPurchaseSuggestionArchiveStore = () => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(PURCHASE_SUGGESTION_ARCHIVE_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const persistPurchaseSuggestionArchiveStore = (archiveStore) => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(PURCHASE_SUGGESTION_ARCHIVE_STORAGE_KEY, JSON.stringify(archiveStore));
-  } catch {
-    // no-op
-  }
 };
 
 const readPurchaseSuggestionHandoffStore = () => {
@@ -183,16 +162,6 @@ const removePurchaseSuggestionHandoff = (handoffId = '') => {
   delete handoffStore[normalizedId];
   persistPurchaseSuggestionHandoffStore(handoffStore);
 };
-
-const resolvePurchaseSuggestionActorLabel = (user = {}) => String(
-  user?.fullName
-  || user?.displayName
-  || user?.name
-  || user?.username
-  || user?.email
-  || user?.id
-  || 'Sistem'
-).trim() || 'Sistem';
 
 const buildPurchaseSuggestionArchiveSnapshot = (item = {}) => ({
   id: String(item.suggestionId || item.id || '').trim(),
@@ -3903,28 +3872,6 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     );
   }, [location.hash, location.pathname, location.state, navigate, searchParams]);
 
-  const archivePurchaseSuggestions = useCallback((items, nextStatus = 'sent_to_order') => {
-    if (!Array.isArray(items) || !items.length) return;
-    const actionAt = new Date().toISOString();
-    const actionBy = resolvePurchaseSuggestionActorLabel(user);
-    const archiveStore = readPurchaseSuggestionArchiveStore();
-
-    items.forEach((item) => {
-      const snapshot = buildPurchaseSuggestionArchiveSnapshot(item);
-      const archiveId = String(snapshot.id || item.suggestionId || item.id || '').trim();
-      if (!archiveId) return;
-      archiveStore[archiveId] = {
-        id: archiveId,
-        status: nextStatus,
-        actionAt,
-        actionBy,
-        snapshot,
-      };
-    });
-
-    persistPurchaseSuggestionArchiveStore(archiveStore);
-  }, [user]);
-
   const queueBulkItem = (item, options = {}) => {
     if (!item || !item.id) return;
 
@@ -3961,6 +3908,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
           unitPrice,
           purchasePrice: unitPrice,
           priceUnit: item.priceUnit || next[existingIndex].priceUnit || 'adet',
+          purchaseSuggestionId: options.purchaseSuggestionId || options.suggestionId || next[existingIndex].purchaseSuggestionId || '',
         });
         return next;
       }
@@ -3997,6 +3945,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
         unitsPerPallet: Number(item.unitsPerPallet || 1),
         casesPerPallet: Number(item.casesPerPallet || 1),
         recommendationReason: options.recommendationReason || '',
+        purchaseSuggestionId: String(options.purchaseSuggestionId || options.suggestionId || '').trim(),
       };
       const editableUnits = getBulkLineEditableUnits(created);
       if (!editableUnits.includes(normalizeOrderUnit(created.unit || 'adet'))) {
@@ -4531,6 +4480,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
 
           await procurementService.createOrder({
             supplierProductId: line.supplierProductId,
+            purchaseSuggestionId: line.purchaseSuggestionId || undefined,
             quantity: Number(line.quantity || 1),
             orderUnit: line.unit || 'adet',
             baseQuantity: Number(
@@ -4557,6 +4507,10 @@ export default function SupplierProducts({ initialView = 'compare' }) {
             approvalRequested: true,
             orderReason: form.orderReason || 'critical_restock',
             operationalNote: form.operationalNote || '',
+            procurementContext: {
+              purchaseSuggestionId: line.purchaseSuggestionId || undefined,
+              purchaseSuggestionMode: line.purchaseSuggestionId ? 'compose_bulk' : undefined,
+            },
             vatRate: summary.vatRate,
             shippingFee: lineShippingFee,
             manualOverrideTl: lineShippingFee,
@@ -4760,6 +4714,8 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     setOrderModalContext({
       source: options.source || 'compare',
       cartItemId: options.cartItemId || null,
+      purchaseSuggestionId: String(options.purchaseSuggestionId || options.suggestionId || '').trim(),
+      purchaseSuggestionMode: options.purchaseSuggestionMode || '',
     });
     setOrderSubmitMode('approval');
     setOrderForm({
@@ -5046,6 +5002,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
 
     const payload = {
       supplierProductId: orderModalItem.id,
+      purchaseSuggestionId: orderModalContext.purchaseSuggestionId || undefined,
       quantity,
       orderUnit: orderForm.unit || orderModalItem.priceUnit || orderModalItem.orderUnit || 'adet',
       note: orderForm.supplierNote || orderForm.operationalNote || '',
@@ -5066,6 +5023,8 @@ export default function SupplierProducts({ initialView = 'compare' }) {
       subtotal,
       grandTotal,
       procurementContext: {
+        purchaseSuggestionId: orderModalContext.purchaseSuggestionId || undefined,
+        purchaseSuggestionMode: orderModalContext.purchaseSuggestionMode || undefined,
         orderReason: orderForm.orderReason,
         demandSource: orderForm.demandSource,
         demandLevel: orderForm.demandLevel,
@@ -5173,7 +5132,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
         type: 'success',
         title: 'Satın Alma',
         message: orderSubmitMode === 'approval' ?
-           'Satın alma siparişi onaya gönderildi. Detayları Satın Alma Siparişleri ekranından takip edebilirsiniz.'
+           'Satın alma siparişi onaya gönderildi. Detayları Sipariş Takibi ekranından takip edebilirsiniz.'
           : 'Satın alma siparişi taslak olarak kaydedildi.',
       });
 
@@ -5368,10 +5327,11 @@ export default function SupplierProducts({ initialView = 'compare' }) {
           initialUnit: target.suggestion.orderUnit || target.row.defaultOrderUnit,
           purchaseUnitPrice: target.suggestion.purchaseUnitPrice,
           recommendationReason: target.suggestion.recommendationReason || target.suggestion.reason || '',
+          purchaseSuggestionId: target.suggestion.suggestionId || target.suggestion.id || '',
+          purchaseSuggestionMode: 'compose_single',
         }
       );
       if (didOpen) {
-        archivePurchaseSuggestions([target.suggestion], 'sent_to_order');
         clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
       } else {
         suggestionAutoOpenSignatureRef.current = '';
@@ -5395,6 +5355,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
           initialUnit: suggestion.orderUnit || row.defaultOrderUnit,
           unitPrice: suggestion.purchaseUnitPrice,
           recommendationReason: suggestion.recommendationReason || suggestion.reason || '',
+          purchaseSuggestionId: suggestion.suggestionId || suggestion.id || '',
           replaceExisting: true,
         }
       );
@@ -5402,7 +5363,6 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     selectProductForComparison(resolvedSelections[0]?.row?.productId || '');
     setBulkNoteTab('operational');
     setIsBulkOrderModalOpen(true);
-    archivePurchaseSuggestions(resolvedSelections.map(({ suggestion }) => suggestion), 'sent_to_order');
     clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
 
     const unresolvedCount = candidateItems.length - resolvedSelections.length;
@@ -5415,7 +5375,6 @@ export default function SupplierProducts({ initialView = 'compare' }) {
       });
     }
   }, [
-    archivePurchaseSuggestions,
     clearPurchaseSuggestionNavigationContext,
     isCatalogPage,
     isLoading,
@@ -6791,7 +6750,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
         modalClassName="supplier-catalog-modal modal-header-standardized"
         onClose={() => setIsCatalogModalOpen(false)}
       >
-        <div className="proc-catalog-workspace proc-catalog-workspace-modal">
+        <div className="proc-catalog-workspace proc-catalog-workspace-modal supplier-catalog-modal-workspace">
           {renderCatalogWorkspace({ inModal: true })}
         </div>
       </FormModal>

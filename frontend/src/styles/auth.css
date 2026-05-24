@@ -324,6 +324,25 @@
   font-size: 0.75rem;
 }
 
+.auth-footer-link {
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 auto 6px;
+  padding: 2px 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-footer-link:hover {
+  text-decoration: underline;
+}
+
 /* "?"? Eyebrow (kept for other pages) "?"? */
 .eyebrow {
   display: inline-flex;

@@ -1,9 +1,15 @@
-﻿const TOKEN_KEY = 'stock_tracking_token';
+const TOKEN_KEY = 'stock_tracking_token';
+const REFRESH_TOKEN_KEY = 'stock_tracking_refresh_token';
 const USER_KEY = 'stock_tracking_user';
 const SESSION_CACHE = new Map();
 const SESSION_CACHE_PENDING = new Map();
+const DEVELOPER_LOG_DUPLICATE_WINDOW_MS = 30 * 1000;
+const DEVELOPER_LOG_RECENT = new Map();
+let pendingStaffRefreshPromise = null;
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+export const AUTH_SESSION_EXPIRED_EVENT = 'shelfio:auth-session-expired';
+export const AUTH_SESSION_REFRESHED_EVENT = 'shelfio:auth-session-refreshed';
 
 const normalizeNfcDeep = (value) => {
   if (typeof value === 'string') {
@@ -105,19 +111,47 @@ const queueDeveloperLog = (payload) => {
     return;
   }
 
-  const token = getAuthToken();
-  if (!token) {
+  const statusCode = Number(payload.statusCode || 0);
+  if (statusCode > 0 && statusCode < 500) {
     return;
   }
 
+  const signature = [
+    payload.level,
+    payload.source,
+    payload.message,
+    payload.endpoint,
+    payload.stack,
+  ].map((value) => String(value || '').trim()).join('|');
+  const now = Date.now();
+  const previous = DEVELOPER_LOG_RECENT.get(signature);
+  DEVELOPER_LOG_RECENT.set(signature, now);
+  for (const [key, at] of DEVELOPER_LOG_RECENT.entries()) {
+    if (now - at > DEVELOPER_LOG_DUPLICATE_WINDOW_MS) DEVELOPER_LOG_RECENT.delete(key);
+  }
+  if (previous && now - previous < DEVELOPER_LOG_DUPLICATE_WINDOW_MS) {
+    return;
+  }
+
+  const token = getAuthToken();
+  const storedUser = getStoredUser();
+  const logEndpoint = token ? '/settings/developer-logs' : '/settings/developer-logs/public';
+
   setTimeout(() => {
-    fetch(`${API_BASE_URL}/settings/developer-logs`, {
+    fetch(`${API_BASE_URL}${logEndpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify(maskSensitive(payload)),
+      body: JSON.stringify(maskSensitive({
+        timestamp: new Date().toISOString(),
+        browserInfo: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+        userId: storedUser?.id,
+        userName: storedUser?.name || storedUser?.username,
+        userRole: storedUser?.role,
+        ...payload,
+      })),
     }).catch(() => {
       // Log gönderimi opsiyoneldir; hata üretmemeli.
     });
@@ -238,8 +272,21 @@ export function setAuthToken(token) {
   safeStorageSet(TOKEN_KEY, token);
 }
 
+export function getAuthRefreshToken() {
+  return safeStorageGet(REFRESH_TOKEN_KEY) || '';
+}
+
+export function setAuthRefreshToken(token) {
+  if (token) {
+    safeStorageSet(REFRESH_TOKEN_KEY, token);
+    return;
+  }
+  safeStorageRemove(REFRESH_TOKEN_KEY);
+}
+
 export function clearAuthToken() {
   safeStorageRemove(TOKEN_KEY);
+  safeStorageRemove(REFRESH_TOKEN_KEY);
   safeStorageRemove(USER_KEY);
   clearSessionCache();
 }
@@ -260,6 +307,72 @@ export function getStoredUser() {
 
 export function setStoredUser(user) {
   safeStorageSet(USER_KEY, JSON.stringify(user));
+}
+
+const notifyAuthExpired = () => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT));
+};
+
+const notifyAuthRefreshed = (data) => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(AUTH_SESSION_REFRESHED_EVENT, { detail: data }));
+};
+
+async function refreshStaffSession() {
+  if (pendingStaffRefreshPromise) {
+    return pendingStaffRefreshPromise;
+  }
+
+  const refreshToken = getAuthRefreshToken();
+  if (!refreshToken) {
+    const error = new Error('Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+    error.status = 401;
+    throw error;
+  }
+
+  pendingStaffRefreshPromise = fetch(`${API_BASE_URL}/auth/refresh`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Accept: 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({ refreshToken }),
+  })
+    .then(async (response) => {
+      const contentType = response.headers.get('content-type') || '';
+      const payload = contentType.includes('application/json') ? normalizeNfcDeep(await response.json()) : null;
+      if (!response.ok) {
+        const error = new Error(payload?.message || 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+
+      const data = payload?.data ?? payload;
+      if (!data?.token || !data?.refreshToken || !data?.user) {
+        const error = new Error('Oturum yenileme başarısız.');
+        error.status = 401;
+        throw error;
+      }
+
+      setAuthToken(data.token);
+      setAuthRefreshToken(data.refreshToken);
+      setStoredUser(data.user);
+      clearSessionCache();
+      notifyAuthRefreshed(data);
+      return data;
+    })
+    .catch((error) => {
+      clearAuthToken();
+      notifyAuthExpired();
+      throw error;
+    })
+    .finally(() => {
+      pendingStaffRefreshPromise = null;
+    });
+
+  return pendingStaffRefreshPromise;
 }
 
 export function buildQueryString(params = {}) {
@@ -361,22 +474,58 @@ async function request(path, options = {}) {
   const payload = contentType.includes('application/json') ? normalizeNfcDeep(await response.json()) : null;
 
   if (!response.ok) {
+    const allowRefreshRetry = response.status === 401
+      && !options.__skipAuthRefresh
+      && !options.__retriedAfterRefresh
+      && !path.startsWith('/auth/login')
+      && !path.startsWith('/auth/refresh')
+      && Boolean(getAuthRefreshToken());
+
+    if (allowRefreshRetry) {
+      try {
+        await refreshStaffSession();
+        return request(path, {
+          ...options,
+          __retriedAfterRefresh: true,
+        });
+      } catch (refreshError) {
+        const error = new Error(refreshError?.message || 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+        error.status = 401;
+        error.payload = refreshError?.payload;
+        throw error;
+      }
+    }
+
+    const requestId = response.headers.get('x-request-id') || '';
+    const friendlyMessage = response.status === 401
+      ? 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.'
+      : response.status === 403
+        ? 'Bu işlem için yetkiniz bulunmuyor.'
+        : payload?.message || 'Bir işlem hatası oluştu';
     queueDeveloperLog({
-      level: response.status >= 500 ? 'error' : 'warning',
+      level: 'error',
       source: 'api',
-      message: payload?.message || 'API isteği başarısız',
+      message: friendlyMessage || 'API isteği başarısız',
       action: `${method} ${path}`,
       endpoint: path,
       requestUrl: `${API_BASE_URL}${path}`,
       requestPayload: parseBodyForLog(options.body),
       response: payload,
       statusCode: response.status,
-      errorType: response.status >= 500 ? 'api_error' : 'validation_error',
+      errorType: 'api_error',
+      requestId,
+      correlationId: requestId,
     });
 
-    const error = new Error(payload?.message || 'Bir işlem hatası oluştu');
+    if (response.status === 401) {
+      clearAuthToken();
+      notifyAuthExpired();
+    }
+
+    const error = new Error(friendlyMessage);
     error.status = response.status;
     error.payload = payload;
+    error.requestId = requestId;
     throw error;
   }
 

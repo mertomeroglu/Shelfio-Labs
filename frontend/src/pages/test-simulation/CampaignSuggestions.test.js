@@ -1,4 +1,5 @@
 ﻿import {
+  buildCampaignSuggestionPresentation,
   buildCampaignSuggestions,
   mapPricingRowsForCampaigns,
 } from '../_shared/settings-campaign-shell/campaignManagementUtils.js';
@@ -33,5 +34,22 @@ describe('CampaignSuggestions', () => {
     expect(suggestions.some((item) => item.id === 'brand-focus')).toBe(true);
     expect(suggestions.some((item) => item.id === 'gift-card-trigger')).toBe(true);
     expect(suggestions.some((item) => item.recommendedDiscount > 0)).toBe(true);
+  });
+
+  test('maps backend suggestion families into one primary module without duplicate cards', () => {
+    const presentation = buildCampaignSuggestionPresentation([
+      { id: 'near-expiry', title: '3 üründe SKT odaklı hızlı kampanya', type: 'product', productIds: ['p1'], affectedProductCount: 1, recommendedDiscount: 25, priority: 'critical' },
+      { id: 'slow-moving', title: '5 yavaş satan ürün için indirim kampanyası', type: 'product', productIds: ['p2'], affectedProductCount: 1, recommendedDiscount: 16, priority: 'high' },
+      { id: 'overstock', title: 'Kategori stok eritme kampanyası', type: 'category', categoryNames: ['Süt'], productIds: ['p3'], affectedProductCount: 1, recommendedDiscount: 14, priority: 'medium' },
+      { id: 'margin-watch', title: 'Düşük marjlı üründe kontrollü aksiyon', type: 'product', productIds: ['p4'], affectedProductCount: 1, recommendedDiscount: 6, priority: 'medium' },
+      { id: 'near-expiry', title: '3 üründe SKT odaklı hızlı kampanya', type: 'product', productIds: ['p1'], affectedProductCount: 1, recommendedDiscount: 25, priority: 'critical' },
+    ]);
+
+    expect(presentation.byModule.expiry).toHaveLength(1);
+    expect(presentation.byModule.sales).toHaveLength(1);
+    expect(presentation.byModule.category).toHaveLength(1);
+    expect(presentation.byModule.product).toHaveLength(1);
+    expect(presentation.all).toHaveLength(4);
+    expect(presentation.dashboardHighlights.some((item) => item.id === 'dashboard-high-priority-bundle')).toBe(true);
   });
 });

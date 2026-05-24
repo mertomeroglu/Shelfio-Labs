@@ -45,62 +45,51 @@ import { reportService } from '../../services/reportService.js';
 import { customerAdminService } from '../../services/customerAdminService.js';
 import { formatCurrency, formatDateInTimeZone, joinDisplayParts, normalizeTurkishText } from '../../services/formatters.js';
 import { isRequestCancellation } from '../../services/api.js';
+import {
+  VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE,
+  getVisiblePurchaseOrderStatusLabel,
+  mapPurchaseOrderStatusToVisibleStatus,
+  normalizePurchaseOrderStatus,
+} from '../../utils/purchaseOrderLifecycle.js';
 import '../../styles/dashboard_redesign.css';
 
-const STATUS_LABELS = {
-  submitted_for_approval: 'Onaya Gönderildi',
-  approved: 'Onaylandı',
-  supplier_notified: 'Tedarikçiye İletildi',
-  in_transit: 'Yolda',
-  delivered: 'Mal Kabul',
-  completed: 'Tamamlandı',
-  cancelled: 'İptal Edildi',
-};
-
-const LIFECYCLE_ORDER = [
+const DASHBOARD_LIFECYCLE_ORDER = VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE;
+const LIFECYCLE_TIME_FILTERS = Object.freeze([
+  { key: 'all', label: 'Tüm Zamanlar', days: null },
+  { key: '7d', label: 'Son 7 Gün', days: 7 },
+  { key: '24h', label: 'Son 24 Saat', hours: 24 },
+]);
+const SMART_ALERT_SEVERITY_WEIGHT = Object.freeze({
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+});
+const SMART_ALERT_ICON_BY_TYPE = Object.freeze({
+  goods_receipt_pending_orders: Truck,
+  stock_entry_pending_aging: Activity,
+  delivery_delay: Clock,
+  critical_stock_without_pipeline: AlertTriangle,
+  receiving_location_fallback: MapPin,
+});
+const OPEN_PURCHASE_ORDER_STATUSES = new Set([
   'submitted_for_approval',
   'approved',
   'supplier_notified',
+  'preparing',
+  'ready_to_ship',
   'in_transit',
   'delivered',
-  'completed',
-  'cancelled',
-];
-
-const STATUS_ALIASES = {
-  submitted_for_approval: 'submitted_for_approval',
-  awaiting_approval: 'submitted_for_approval',
-  pending_approval: 'submitted_for_approval',
-  onaya_gonderildi: 'submitted_for_approval',
-  approved: 'approved',
-  onaylandi: 'approved',
-  supplier_notified: 'supplier_notified',
-  sent_to_supplier: 'supplier_notified',
-  tedarikciye_iletildi: 'supplier_notified',
-  in_transit: 'in_transit',
-  shipped: 'in_transit',
-  yolda: 'in_transit',
-  delivered: 'delivered',
-  goods_receipt_pending: 'delivered',
-  goods_receipt_completed: 'delivered',
-  stock_entry_pending: 'delivered',
-  mal_kabul: 'delivered',
-  completed: 'completed',
-  tamamlandi: 'completed',
-  cancelled: 'cancelled',
-  canceled: 'cancelled',
-  rejected: 'cancelled',
-  iptal_edildi: 'cancelled',
-};
+  'goods_receipt_pending',
+  'goods_receipt_completed',
+  'stock_entry_pending',
+]);
+const GOODS_RECEIPT_WAITING_STATUSES = new Set(['delivered', 'goods_receipt_pending']);
+const STOCK_ENTRY_WAITING_STATUSES = new Set(['stock_entry_pending']);
+const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['completed', 'archived']);
 
 const DASHBOARD_REFRESH_TIMEOUT_MS = 15000;
 let dashboardCache = null;
-
-const normalizeLifecycleStatus = (value) => {
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return '';
-  return STATUS_ALIASES[raw] || '';
-};
 
 const withTimeout = (promise, timeoutMs, controller) => new Promise((resolve, reject) => {
   const timeoutId = window.setTimeout(() => {
@@ -313,6 +302,32 @@ const resolveDashboardKpiTrend = (comparison, { decimals = 1 } = {}) => {
   };
 };
 
+const normalizeSmartAlertSeverity = (value) => {
+  const severity = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'critical'].includes(severity) ? severity : 'medium';
+};
+
+const getSmartAlertRoute = (alert) => String(alert?.actionRoute || '').trim() || '/anasayfa';
+
+const getSmartAlertKey = (alert, index = 0) => String(alert?.id || alert?.type || `smart-alert-${index}`);
+
+const getLifecycleOrderAmount = (order = {}) => Number(
+  order.totalAmount
+  ?? order.grandTotal
+  ?? order.subtotalAmount
+  ?? order.totalPrice
+  ?? order.amount
+  ?? 0
+);
+
+const getLifecycleOrderDate = (order = {}) => (
+  order.createdAt || order.approvedAt || order.updatedAt || order.estimatedDeliveryDate || null
+);
+
+const getLifecycleOrderEta = (order = {}) => (
+  order.estimatedDeliveryDate || order.requestedDeliveryDate || order.deliveryDate || null
+);
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [data, setData] = useState(dashboardCache);
@@ -322,6 +337,7 @@ export default function Dashboard() {
   const [activityModalOpen, setActivityModalOpen] = useState(false);
   const [activityFilters, setActivityFilters] = useState({ startDate: '', endDate: '' });
   const [activityDraftFilters, setActivityDraftFilters] = useState({ startDate: '', endDate: '' });
+  const [lifecycleTimeFilter, setLifecycleTimeFilter] = useState('7d');
   const mountedRef = useRef(false);
   const activeRequestIdRef = useRef(0);
   const activeControllerRef = useRef(null);
@@ -652,6 +668,23 @@ export default function Dashboard() {
     };
   }, [data?.customerOverview, data?.customerReport, data?.customerList]);
 
+  const smartAlerts = useMemo(() => {
+    const rows = Array.isArray(data?.smartAlerts) ? data.smartAlerts : [];
+    return rows
+      .filter((alert) => Number(alert?.count || 0) > 0 && String(alert?.title || '').trim())
+      .map((alert, index) => ({
+        ...alert,
+        key: getSmartAlertKey(alert, index),
+        severity: normalizeSmartAlertSeverity(alert.severity),
+        count: Number(alert.count || 0),
+      }))
+      .sort((left, right) => (
+        (SMART_ALERT_SEVERITY_WEIGHT[right.severity] || 0) - (SMART_ALERT_SEVERITY_WEIGHT[left.severity] || 0)
+        || Number(right.count || 0) - Number(left.count || 0)
+        || String(left.title || '').localeCompare(String(right.title || ''), 'tr')
+      ));
+  }, [data?.smartAlerts]);
+
   const sortedActivityRows = useMemo(() => {
     const rows = Array.isArray(data?.activityFeed)
       ? data.activityFeed
@@ -680,21 +713,61 @@ export default function Dashboard() {
 
   const lifecycleOrders = useMemo(() => {
     const rows = Array.isArray(data?.orderApprovalLeadReport) ? data.orderApprovalLeadReport : [];
+    const selectedFilter = LIFECYCLE_TIME_FILTERS.find((item) => item.key === lifecycleTimeFilter) || LIFECYCLE_TIME_FILTERS[1];
+    const now = Date.now();
+    const since = selectedFilter.hours
+      ? now - selectedFilter.hours * 60 * 60 * 1000
+      : selectedFilter.days
+        ? now - selectedFilter.days * 24 * 60 * 60 * 1000
+        : null;
     return rows
       .map((row) => {
-        const normalized = normalizeLifecycleStatus(row?.currentStatus || row?.status);
-        return normalized ? { ...row, normalizedStatus: normalized } : null;
+        const normalized = normalizePurchaseOrderStatus(row?.currentStatus || row?.status, '');
+        const timestamp = new Date(row?.createdAt || row?.updatedAt || 0).getTime();
+        const visibleStatus = normalized ? mapPurchaseOrderStatusToVisibleStatus(normalized) : '';
+        return normalized ? { ...row, normalizedStatus: normalized, visibleStatus, timestamp } : null;
+      })
+      .filter((row) => row && (!since || (Number.isFinite(row.timestamp) && row.timestamp >= since)));
+  }, [data?.orderApprovalLeadReport, lifecycleTimeFilter]);
+
+  const lifecycleAllOrders = useMemo(() => {
+    const rows = Array.isArray(data?.orderApprovalLeadReport) ? data.orderApprovalLeadReport : [];
+    return rows
+      .map((row) => {
+        const normalized = normalizePurchaseOrderStatus(row?.currentStatus || row?.status, '');
+        const timestamp = new Date(row?.createdAt || row?.updatedAt || 0).getTime();
+        const completedTimestamp = new Date(row?.completedAt || row?.updatedAt || row?.createdAt || 0).getTime();
+        const visibleStatus = normalized ? mapPurchaseOrderStatusToVisibleStatus(normalized) : '';
+        return normalized ? { ...row, normalizedStatus: normalized, visibleStatus, timestamp, completedTimestamp } : null;
       })
       .filter(Boolean);
   }, [data?.orderApprovalLeadReport]);
 
+  const lifecycleEmptyStateSummary = useMemo(() => {
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    return {
+      openOrders: lifecycleAllOrders.filter((order) => OPEN_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)).length,
+      goodsReceiptWaiting: lifecycleAllOrders.filter((order) => GOODS_RECEIPT_WAITING_STATUSES.has(order.normalizedStatus)).length,
+      stockEntryWaiting: lifecycleAllOrders.filter((order) => STOCK_ENTRY_WAITING_STATUSES.has(order.normalizedStatus)).length,
+      completedLast7Days: lifecycleAllOrders.filter((order) => (
+        COMPLETED_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)
+        && Number.isFinite(order.completedTimestamp)
+        && order.completedTimestamp >= sevenDaysAgo
+      )).length,
+    };
+  }, [lifecycleAllOrders]);
+
   const lifecycleCounts = useMemo(() => {
-    const countMap = new Map(LIFECYCLE_ORDER.map((key) => [key, 0]));
+    const countMap = new Map(DASHBOARD_LIFECYCLE_ORDER.map((key) => [key, 0]));
     lifecycleOrders.forEach((row) => {
-      countMap.set(row.normalizedStatus, (countMap.get(row.normalizedStatus) || 0) + 1);
+      countMap.set(row.visibleStatus, (countMap.get(row.visibleStatus) || 0) + 1);
     });
     return countMap;
   }, [lifecycleOrders]);
+
+  const lifecycleViewMode = lifecycleOrders.length === 0
+    ? 'empty'
+    : lifecycleOrders.length <= 2 ? 'low-density' : 'normal';
 
   const priceCatalogOverview = useMemo(() => {
     const rows = Array.isArray(data?.priceCatalogDiffReport) ? data.priceCatalogDiffReport : [];
@@ -786,31 +859,114 @@ export default function Dashboard() {
       <div className="dashboard-main-grid">
         <div className="grid-col-8">
           <div className="panel-card lifecycle-card">
-            <div className="panel-header"><h3><Layers size={18} /> Sipariş Yaşam Döngüsü</h3><button className="panel-action" type="button" onClick={() => navigate('/siparis-takibi')}>Tümünü Gör <ChevronRight size={14} /></button></div>
+            <div className="panel-header lifecycle-panel-header">
+              <h3><Layers size={18} /> Sipariş Yaşam Döngüsü</h3>
+              <div className="lifecycle-panel-actions">
+                <div className="lifecycle-time-filter" role="group" aria-label="Sipariş akışı zaman filtresi">
+                  {LIFECYCLE_TIME_FILTERS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={lifecycleTimeFilter === option.key ? 'active' : ''}
+                      onClick={() => setLifecycleTimeFilter(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <button className="panel-action" type="button" onClick={() => navigate('/siparis-takibi')}>Tümünü Gör <ChevronRight size={14} /></button>
+              </div>
+            </div>
             <div className="lifecycle-stepper">
-              {LIFECYCLE_ORDER.map((status, idx) => {
+              {DASHBOARD_LIFECYCLE_ORDER.map((status, idx) => {
                 const count = lifecycleCounts.get(status) || 0;
                 return (
                   <div key={status} className={`step-item ${count > 0 ? 'active' : ''} step-${status}`}>
                     <div className="step-node">
                       <div className="step-circle">{idx + 1}</div>
-                      {idx < (LIFECYCLE_ORDER.length - 1) && <div className="step-line"></div>}
+                      {idx < (DASHBOARD_LIFECYCLE_ORDER.length - 1) && <div className="step-line"></div>}
                     </div>
-                    <div className="step-info"><span className="step-label">{STATUS_LABELS[status]}</span><strong className="step-count">{count}</strong></div>
+                    <div className="step-info"><span className="step-label">{getVisiblePurchaseOrderStatusLabel(status)}</span><strong className="step-count">{count}</strong></div>
                   </div>
                 );
               })}
             </div>
-            <div className="recent-orders-list">
-              {lifecycleOrders.slice(0, 3).map((order) => (
-                <div key={order.orderId} className="mini-order-card">
-                  <div className="order-main"><strong>{order.orderNumber}</strong><span>{order.supplierName}</span></div>
-                  <div className="order-stats">
-                    {order.onaylanmaSuresi ? <div className="stat-pill">Onay süresi: {order.onaylanmaSuresi}</div> : null}
-                    <div className={`status-badge ${order.normalizedStatus}`}>{STATUS_LABELS[order.normalizedStatus] || 'Bilinmiyor'}</div>
+            <div className={`recent-orders-list lifecycle-orders-${lifecycleViewMode}`}>
+              {lifecycleViewMode !== 'empty' ? (
+                <>
+                  {lifecycleOrders.slice(0, lifecycleViewMode === 'low-density' ? 2 : 3).map((order) => {
+                    const orderAmount = getLifecycleOrderAmount(order);
+                    const orderDate = getLifecycleOrderDate(order);
+                    const etaDate = getLifecycleOrderEta(order);
+                    return (
+                      <div key={order.orderId || order.id || order.orderNumber} className={`mini-order-card ${lifecycleViewMode === 'low-density' ? 'mini-order-card-featured' : ''}`.trim()}>
+                        <div className="order-main">
+                          <strong>{order.orderNumber || order.orderId || 'Sipariş'}</strong>
+                          <span>{order.supplierName || 'Tedarikçi bilgisi yok'}</span>
+                          {lifecycleViewMode === 'low-density' ? (
+                            <div className="order-featured-meta">
+                              <span>Oluşturma: {orderDate ? formatDateInTimeZone(orderDate, false, storeTimezone) : '-'}</span>
+                              <span>Tahmini teslim: {etaDate ? formatDateInTimeZone(etaDate, false, storeTimezone) : '-'}</span>
+                              <span>Tutar: {orderAmount > 0 ? formatCurrency(orderAmount) : '-'}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="order-stats">
+                          {order.onaylanmaSuresi ? <div className="stat-pill">Onay süresi: {order.onaylanmaSuresi}</div> : null}
+                          <div className={`status-badge ${order.visibleStatus}`}>{getVisiblePurchaseOrderStatusLabel(order.normalizedStatus) || 'Bilinmiyor'}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {lifecycleViewMode === 'low-density' ? (
+                    <div className="lifecycle-sparse-panel">
+                      <div className="lifecycle-sparse-head">
+                        <strong>Operasyon özeti</strong>
+                        <span>Az kayıtlı aralıkta takip edilmesi gereken ana durumlar.</span>
+                      </div>
+                      <div className="lifecycle-empty-metrics lifecycle-sparse-metrics" aria-label="Sipariş operasyon özeti">
+                        <div className="lifecycle-empty-metric"><span>Açık sipariş</span><strong>{lifecycleEmptyStateSummary.openOrders.toLocaleString('tr-TR')}</strong></div>
+                        <div className="lifecycle-empty-metric"><span>Mal kabul bekleyen</span><strong>{lifecycleEmptyStateSummary.goodsReceiptWaiting.toLocaleString('tr-TR')}</strong></div>
+                        <div className="lifecycle-empty-metric"><span>Stok girişi bekleyen</span><strong>{lifecycleEmptyStateSummary.stockEntryWaiting.toLocaleString('tr-TR')}</strong></div>
+                        <div className="lifecycle-empty-metric"><span>Son 7 gün tamamlanan</span><strong>{lifecycleEmptyStateSummary.completedLast7Days.toLocaleString('tr-TR')}</strong></div>
+                      </div>
+                      <div className="lifecycle-empty-actions lifecycle-sparse-actions">
+                        <button type="button" className="primary-button" onClick={() => navigate('/siparis-olustur')}><ClipboardList size={14} /> Yeni Sipariş Oluştur</button>
+                        <button type="button" className="ghost-button" onClick={() => navigate('/siparis-takibi')}>Tüm Siparişleri Gör</button>
+                        <button type="button" className="ghost-button" onClick={() => navigate('/siparis-takibi?status=goods_receipt_pending')}>Mal Kabul Ekranına Git</button>
+                        <button type="button" className="ghost-button" onClick={() => navigate('/stok-islemleri')}>Stok İşlemlerine Git</button>
+                      </div>
+                      <div className="lifecycle-empty-note lifecycle-sparse-note">
+                        <Truck size={14} />
+                        <span>Siparişler onaya gönderildikten sonra yaşam döngüsünde izlenir.</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="lifecycle-empty-state">
+                  <div className="lifecycle-empty-copy">
+                    <strong>Bu aralıkta görünür sipariş yok</strong>
+                    <p>Seçili zaman filtresinde izlenen satın alma siparişi görünmüyor. Yeni sipariş oluşturabilir veya tüm siparişleri görüntüleyebilirsiniz.</p>
+                  </div>
+                  <div className="lifecycle-empty-metrics" aria-label="Sipariş operasyon özeti">
+                    <div className="lifecycle-empty-metric"><span>Açık sipariş</span><strong>{lifecycleEmptyStateSummary.openOrders.toLocaleString('tr-TR')}</strong></div>
+                    <div className="lifecycle-empty-metric"><span>Mal kabul bekleyen</span><strong>{lifecycleEmptyStateSummary.goodsReceiptWaiting.toLocaleString('tr-TR')}</strong></div>
+                    <div className="lifecycle-empty-metric"><span>Stok girişi bekleyen</span><strong>{lifecycleEmptyStateSummary.stockEntryWaiting.toLocaleString('tr-TR')}</strong></div>
+                    <div className="lifecycle-empty-metric"><span>Son 7 gün tamamlanan</span><strong>{lifecycleEmptyStateSummary.completedLast7Days.toLocaleString('tr-TR')}</strong></div>
+                  </div>
+                  <div className="lifecycle-empty-actions">
+                    <button type="button" className="primary-button" onClick={() => navigate('/siparis-olustur')}><ClipboardList size={14} /> Yeni Sipariş Oluştur</button>
+                    <button type="button" className="ghost-button" onClick={() => navigate('/siparis-takibi')}>Tüm Siparişleri Gör</button>
+                    <button type="button" className="ghost-button" onClick={() => navigate('/siparis-takibi?status=goods_receipt_pending')}>Mal Kabul Ekranına Git</button>
+                    <button type="button" className="ghost-button" onClick={() => navigate('/stok-islemleri')}>Stok İşlemlerine Git</button>
+                  </div>
+                  <div className="lifecycle-empty-note">
+                    <Truck size={14} />
+                    <span>Mal kabul ve stok girişi bekleyen siparişler burada öncelikli görünür.</span>
                   </div>
                 </div>
-              ))}
+              )}
             </div>
           </div>
         </div>
@@ -819,12 +975,35 @@ export default function Dashboard() {
           <div className="panel-card danger-light">
             <div className="panel-header"><h3><BellRing size={18} /> Akıllı Uyarılar</h3><span className="badge-red">Öncelikli</span></div>
             <div className="alerts-container">
+              {smartAlerts.map((alert, index) => {
+                const Icon = SMART_ALERT_ICON_BY_TYPE[alert.type] || AlertTriangle;
+                return (
+                  <button
+                    key={alert.key}
+                    type="button"
+                    className={`alert-item ${alert.severity}`.trim()}
+                    onClick={() => navigate(getSmartAlertRoute(alert))}
+                    title={alert.actionLabel || 'İlgili ekrana git'}
+                  >
+                    <div className="alert-icon"><Icon size={18} /></div>
+                    <div className="alert-body">
+                      <div className="alert-title-row">
+                        <strong>{alert.title}</strong>
+                        <span className={`alert-count-badge ${alert.severity}`.trim()}>{alert.count}</span>
+                      </div>
+                      <p>{alert.message}</p>
+                      {index < 3 && alert.actionLabel ? <small>{alert.actionLabel}</small> : null}
+                    </div>
+                    <ArrowRight size={16} />
+                  </button>
+                );
+              })}
               {overview.criticalCount > 0 && <button type="button" className="alert-item high" onClick={() => navigate('/stok-islemleri')}><div className="alert-icon"><AlertTriangle size={18} /></div><div className="alert-body"><strong>Kritik Stok Seviyesi</strong><p>{overview.criticalCount} ürün kritik stok eşiğinin altında.</p></div><ArrowRight size={16} /></button>}
               {overview.inTransitPurchaseOrders > 0 && <button type="button" className="alert-item medium" onClick={() => navigate('/siparis-takibi')}><div className="alert-icon"><Truck size={18} /></div><div className="alert-body"><strong>Yolda Olan Sevkiyat</strong><p>{overview.inTransitPurchaseOrders} sipariş depoya ulaşmak üzere.</p></div><ArrowRight size={16} /></button>}
               {goodsReceiptPerformanceReport.some((r) => r.gecikenGirisSayisi > 0) && <button type="button" className="alert-item high" onClick={() => navigate('/siparis-takibi')}><div className="alert-icon"><Activity size={18} /></div><div className="alert-body"><strong>Geciken Mal Kabul</strong><p>Bazı teslimatların stok girişi 24 saati geçti.</p></div><ArrowRight size={16} /></button>}
               {priceCatalogDiffReport.some((r) => r.zamGelenUrunSayisi > 0) && <button type="button" className="alert-item info" onClick={() => navigate('/tedarikciler')}><div className="alert-icon"><Tag size={18} /></div><div className="alert-body"><strong>Fiyat Değişim Analizi</strong><p>Tedarikçi kataloglarında yeni zamlar tespit edildi.</p></div><ArrowRight size={16} /></button>}
               {Number(operationalDistribution.expiryRiskCount || 0) > 0 && <button type="button" className="alert-item medium" onClick={() => navigate('/stok-islemleri')}><div className="alert-icon"><Clock size={18} /></div><div className="alert-body"><strong>SKT Yaklaşan Ürünler</strong><p>{operationalDistribution.expiryRiskCount} ürünün son kullanma tarihi yaklaşıyor.</p></div><ArrowRight size={16} /></button>}
-              {Number(overview.criticalCount || 0) <= 0 && Number(overview.inTransitPurchaseOrders || 0) <= 0 && !goodsReceiptPerformanceReport.some((r) => r.gecikenGirisSayisi > 0) && !priceCatalogDiffReport.some((r) => r.zamGelenUrunSayisi > 0) && Number(operationalDistribution.expiryRiskCount || 0) <= 0 ? <div className="dashboard-empty-note">Öncelikli uyarı bulunmuyor.</div> : null}
+              {smartAlerts.length <= 0 && Number(overview.criticalCount || 0) <= 0 && Number(overview.inTransitPurchaseOrders || 0) <= 0 && !goodsReceiptPerformanceReport.some((r) => r.gecikenGirisSayisi > 0) && !priceCatalogDiffReport.some((r) => r.zamGelenUrunSayisi > 0) && Number(operationalDistribution.expiryRiskCount || 0) <= 0 ? <div className="dashboard-empty-note">Öncelikli uyarı bulunmuyor.</div> : null}
             </div>
           </div>
         </div>

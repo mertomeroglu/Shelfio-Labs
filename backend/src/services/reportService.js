@@ -31,6 +31,12 @@ import {
   formatStorageTypeLabel,
 } from '../utils/displayLabels.js';
 import { deriveShelfStockAlert } from '../utils/retailStockPolicy.js';
+import {
+  PURCHASE_ORDER_WAITING_DELIVERY_STATUSES,
+  PURCHASE_ORDER_CANCELLED_STATUSES,
+  PURCHASE_ORDER_GOODS_RECEIPT_STATUSES,
+  normalizePurchaseOrderStatus,
+} from '../domain/purchaseOrderLifecycle.js';
 
 const sortByNewest = (items) => [...items].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -60,57 +66,84 @@ const toNumberValue = (value) => {
 
 const fromDateValue = (value) => (value instanceof Date ? value.toISOString() : value ?? null);
 
-const CLOSED_TASK_STATUSES = new Set([
-  'completed',
-  'complete',
-  'done',
-  'closed',
-  'resolved',
-  'cancelled',
-  'canceled',
-  'archived',
-  'tamamlandi',
-  'tamamlandı',
-  'Tamamlandı',
-  'Tamamlandi',
-  'kapandi',
-  'kapandı',
-  'Kapandı',
-  'Kapandi',
-  'iptal',
-  'iptal_edildi',
-  'İptal',
-  'Iptal',
-  'İptal Edildi',
-  'Iptal Edildi',
-  'arsiv',
-  'arşiv',
-  'Arşiv',
-  'Arsiv',
-]);
-const OPEN_TASK_STATUSES = new Set(['pending', 'open', 'in_progress', 'overdue', 'assigned', 'todo', 'new', 'beklemede', 'acik', 'açık']);
-const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['delivered', 'completed', 'archived', 'rejected']);
-const WAITING_DELIVERY_PURCHASE_ORDER_STATUSES = new Set(['approved', 'supplier_notified', 'sent_to_supplier', 'in_transit', 'shipped']);
-const CANCELLED_PURCHASE_ORDER_STATUSES = new Set(['cancelled', 'canceled', 'iptal', 'iptal_edildi', 'rejected']);
+const TASK_STATUS_ALIASES = {
+  pending: 'open',
+  bekliyor: 'open',
+  beklemede: 'open',
+  waiting: 'open',
+  wait: 'open',
+  open: 'open',
+  acik: 'open',
+  active: 'open',
+  assigned: 'open',
+  todo: 'open',
+  new: 'open',
+  in_progress: 'open',
+  inprogress: 'open',
+  devam_ediyor: 'open',
+  devam: 'open',
+  ongoing: 'open',
+  processing: 'open',
+  overdue: 'open',
+  gecikmis: 'open',
+  late: 'open',
+  completed: 'closed',
+  complete: 'closed',
+  done: 'closed',
+  resolved: 'closed',
+  closed: 'closed',
+  kapandi: 'closed',
+  kapatildi: 'closed',
+  tamamlandi: 'closed',
+  finished: 'closed',
+  cancelled: 'closed',
+  canceled: 'closed',
+  rejected: 'closed',
+  iptal: 'closed',
+  iptal_edildi: 'closed',
+  archived: 'closed',
+  arsiv: 'closed',
+  arsivlendi: 'closed',
+};
+const CLOSED_TASK_STATUSES = new Set(Object.entries(TASK_STATUS_ALIASES).filter(([, value]) => value === 'closed').map(([key]) => key));
+const OPEN_TASK_STATUSES = new Set(Object.entries(TASK_STATUS_ALIASES).filter(([, value]) => value === 'open').map(([key]) => key));
+const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['completed']);
+const ARCHIVED_PURCHASE_ORDER_STATUSES = new Set(['archived']);
+const CLOSED_PURCHASE_ORDER_STATUSES = new Set([...COMPLETED_PURCHASE_ORDER_STATUSES, ...ARCHIVED_PURCHASE_ORDER_STATUSES]);
+const WAITING_DELIVERY_PURCHASE_ORDER_STATUSES = PURCHASE_ORDER_WAITING_DELIVERY_STATUSES;
+const CANCELLED_PURCHASE_ORDER_STATUSES = PURCHASE_ORDER_CANCELLED_STATUSES;
 
 const normalizeStatusKey = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+const normalizePurchaseStatusKey = (value) => normalizePurchaseOrderStatus(value, '');
 
-const isTaskCompletedStatus = (value) => CLOSED_TASK_STATUSES.has(normalizeStatusKey(value));
+const normalizeTaskStatusKey = (value) => {
+  const text = String(value || '')
+    .trim()
+    .toLocaleLowerCase('tr-TR')
+    .replace(/ı/g, 'i')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return TASK_STATUS_ALIASES[text] || text;
+};
+
+const isTaskCompletedStatus = (value) => normalizeTaskStatusKey(value) === 'closed';
 
 const isTaskOpenStatus = (value) => {
-  const normalized = normalizeStatusKey(value);
-  if (!normalized) return true;
+  const normalized = normalizeTaskStatusKey(value);
+  if (!normalized) return false;
   if (isTaskCompletedStatus(normalized)) return false;
-  return OPEN_TASK_STATUSES.has(normalized);
+  return normalized === 'open' || OPEN_TASK_STATUSES.has(normalized);
 };
 
 const isPurchaseOrderOpenStatus = (value) => {
-  const normalized = normalizeStatusKey(value);
-  return normalized ? !COMPLETED_PURCHASE_ORDER_STATUSES.has(normalized) && !CANCELLED_PURCHASE_ORDER_STATUSES.has(normalized) : true;
+  const normalized = normalizePurchaseOrderStatus(value, '');
+  return normalized ? !CLOSED_PURCHASE_ORDER_STATUSES.has(normalized) && !CANCELLED_PURCHASE_ORDER_STATUSES.has(normalized) : true;
 };
 
 const isPurchaseOrderWaitingDeliveryStatus = (value) => {
-  const normalized = normalizeStatusKey(value);
+  const normalized = normalizePurchaseOrderStatus(value, '');
   return WAITING_DELIVERY_PURCHASE_ORDER_STATUSES.has(normalized);
 };
 
@@ -118,19 +151,265 @@ const getPurchaseOrderCancelledAt = (order = {}) => {
   const history = Array.isArray(order.statusHistory) ? order.statusHistory : [];
   const cancellationEntry = [...history]
     .reverse()
-    .find((entry) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizeStatusKey(entry?.status)));
+    .find((entry) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizePurchaseStatusKey(entry?.status)));
   return cancellationEntry?.at || order.cancelledAt || order.canceledAt || order.updatedAt || order.completedAt || order.createdAt || null;
 };
 
-const isPurchaseOrderCancelledStatus = (value) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizeStatusKey(value));
+const isPurchaseOrderCancelledStatus = (value) => CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizePurchaseStatusKey(value));
 
 const isPurchaseOrderArchivedForDashboard = (order = {}, now = new Date()) => {
-  const status = normalizeStatusKey(order?.status || order?.currentStatus);
+  const status = normalizePurchaseStatusKey(order?.status || order?.currentStatus);
   if (status === 'archived' || order?.archived === true || order?.archivedAt) return true;
   if (!isPurchaseOrderCancelledStatus(status)) return false;
   const cancelledAt = new Date(getPurchaseOrderCancelledAt(order) || 0);
   if (!Number.isFinite(cancelledAt.getTime())) return false;
   return now.getTime() - cancelledAt.getTime() >= MS_PER_DAY;
+};
+
+const SMART_ALERT_SEVERITY_WEIGHT = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+};
+
+const PROCUREMENT_PIPELINE_STATUSES_FOR_REPLENISHMENT = new Set([
+  'supplier_notified',
+  'preparing',
+  'ready_to_ship',
+  'in_transit',
+  'delivered',
+  'goods_receipt_pending',
+  'goods_receipt_completed',
+  'stock_entry_pending',
+]);
+
+const PRE_DELIVERY_PURCHASE_ORDER_STATUSES_FOR_ALERTS = new Set([
+  'submitted_for_approval',
+  'approval_pending',
+  'approved',
+  'supplier_notified',
+  'preparing',
+  'ready_to_ship',
+  'in_transit',
+]);
+
+const normalizeAlertDate = (value) => {
+  if (!value) return null;
+  const text = String(value).slice(0, 10);
+  const parsed = new Date(`${text}T23:59:59.999`);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+};
+
+const getCurrentStatusEnteredAt = (order = {}) => {
+  const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+  const history = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+  const matching = history
+    .filter((entry) => normalizePurchaseOrderStatus(entry?.status, '') === status && entry?.at)
+    .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
+  return matching[0]?.at || order.updatedAt || order.createdAt || null;
+};
+
+const hoursSince = (value, now = new Date()) => {
+  const time = toTimestamp(value);
+  if (!Number.isFinite(time)) return 0;
+  return Math.max(0, Math.floor((now.getTime() - time) / (60 * 60 * 1000)));
+};
+
+const daysLateFrom = (dateValue, now = new Date()) => {
+  const expected = normalizeAlertDate(dateValue);
+  if (!expected) return 0;
+  return Math.max(0, Math.ceil((now.getTime() - expected.getTime()) / MS_PER_DAY));
+};
+
+const resolveAlertOrderRef = (order = {}) => ({
+  id: order.id,
+  orderNumber: formatOrderReference(order.orderNumber, order.id),
+  supplierName: order.supplier?.name || '-',
+  status: normalizePurchaseOrderStatus(order.status || order.currentStatus, ''),
+});
+
+const readNestedValue = (source, path = []) => path.reduce((cursor, key) => {
+  if (!cursor || typeof cursor !== 'object') return undefined;
+  return cursor[key];
+}, source);
+
+const hasFallbackPlacementSignal = (order = {}) => {
+  const payload = order?.payload && typeof order.payload === 'object' ? order.payload : {};
+  const fallbackCandidates = [
+    readNestedValue(payload, ['stockEntry', 'fallbackLines']),
+    readNestedValue(payload, ['stockEntry', 'fallback_lines']),
+    payload.fallbackLines,
+    payload.fallback_lines,
+    payload.overflowLines,
+    payload.overflow_lines,
+    payload.noFitLines,
+    payload.no_fit_lines,
+  ];
+  const hasFallbackLines = fallbackCandidates.some((value) => Array.isArray(value) && value.length > 0);
+  if (hasFallbackLines) return true;
+
+  const text = JSON.stringify(payload).toLocaleLowerCase('tr-TR');
+  return /fallback|overflow|uygun boş depo lokasyonu bulunamadı|lokasyon bulunamadı|no[_-]?fit|placement_failed|warehouse_receipt_failed/.test(text);
+};
+
+const buildSmartAlert = ({ id, type, title, message, severity, count, entityIds = [], references = [], actionLabel, actionRoute, ownerRole, metadata = {}, nowIso }) => ({
+  id,
+  type,
+  title,
+  message,
+  severity,
+  count,
+  entityIds,
+  references,
+  actionLabel,
+  actionRoute,
+  ownerRole,
+  metadata,
+  createdAt: nowIso,
+  updatedAt: nowIso,
+});
+
+const buildDashboardSmartAlerts = ({ purchaseOrders = [], criticalItems = [], now = new Date() } = {}) => {
+  const nowIso = now.toISOString();
+  const alerts = [];
+  const orders = Array.isArray(purchaseOrders) ? purchaseOrders : [];
+  const criticalRows = Array.isArray(criticalItems) ? criticalItems : [];
+
+  const goodsReceiptPending = orders.filter((order) => normalizePurchaseOrderStatus(order.status || order.currentStatus, '') === 'goods_receipt_pending');
+  if (goodsReceiptPending.length > 0) {
+    const count = goodsReceiptPending.length;
+    alerts.push(buildSmartAlert({
+      id: 'smart-alert:goods-receipt-pending',
+      type: 'goods_receipt_pending_orders',
+      title: 'Mal kabul bekleyen siparişler',
+      message: `Mal kabul işlemi bekleyen ${count} sipariş var.`,
+      severity: count >= 8 ? 'critical' : count >= 4 ? 'high' : 'medium',
+      count,
+      entityIds: goodsReceiptPending.map((order) => order.id).filter(Boolean),
+      references: goodsReceiptPending.slice(0, 5).map(resolveAlertOrderRef),
+      actionLabel: 'Sipariş Takibi',
+      actionRoute: '/siparis-takibi?status=goods_receipt_pending',
+      ownerRole: 'receiving',
+      metadata: { trigger: 'status=goods_receipt_pending' },
+      nowIso,
+    }));
+  }
+
+  const stockEntryPending = orders
+    .filter((order) => normalizePurchaseOrderStatus(order.status || order.currentStatus, '') === 'stock_entry_pending')
+    .map((order) => ({ order, ageHours: hoursSince(getCurrentStatusEnteredAt(order), now) }))
+    .filter((row) => row.ageHours >= 24);
+  if (stockEntryPending.length > 0) {
+    const count = stockEntryPending.length;
+    const maxAgeHours = Math.max(...stockEntryPending.map((row) => row.ageHours));
+    alerts.push(buildSmartAlert({
+      id: 'smart-alert:stock-entry-pending-aging',
+      type: 'stock_entry_pending_aging',
+      title: 'Bekleyen stok girişleri',
+      message: `${count} siparişte stok girişi bekleniyor. En eski kayıt ${maxAgeHours} saattir açık.`,
+      severity: maxAgeHours >= 72 ? 'critical' : maxAgeHours >= 48 ? 'high' : 'medium',
+      count,
+      entityIds: stockEntryPending.map((row) => row.order.id).filter(Boolean),
+      references: stockEntryPending.slice(0, 5).map((row) => ({ ...resolveAlertOrderRef(row.order), ageHours: row.ageHours })),
+      actionLabel: 'Stok İşlemleri',
+      actionRoute: '/stok-islemleri?status=stock_entry_pending',
+      ownerRole: 'stock',
+      metadata: { trigger: 'status=stock_entry_pending AND ageHours>=24', maxAgeHours },
+      nowIso,
+    }));
+  }
+
+  const delayedOrders = orders
+    .filter((order) => {
+      const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+      return PRE_DELIVERY_PURCHASE_ORDER_STATUSES_FOR_ALERTS.has(status)
+        && !PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status)
+        && !CLOSED_PURCHASE_ORDER_STATUSES.has(status)
+        && !CANCELLED_PURCHASE_ORDER_STATUSES.has(status)
+        && daysLateFrom(order.estimatedDeliveryDate, now) > 0;
+    })
+    .map((order) => ({ order, lateDays: daysLateFrom(order.estimatedDeliveryDate, now) }));
+  if (delayedOrders.length > 0) {
+    const count = delayedOrders.length;
+    const maxLateDays = Math.max(...delayedOrders.map((row) => row.lateDays));
+    alerts.push(buildSmartAlert({
+      id: 'smart-alert:delivery-delay',
+      type: 'delivery_delay',
+      title: 'Teslim gecikmesi',
+      message: `${count} sipariş planlanan teslim tarihini geçti.`,
+      severity: maxLateDays >= 4 ? 'critical' : maxLateDays >= 2 ? 'high' : 'medium',
+      count,
+      entityIds: delayedOrders.map((row) => row.order.id).filter(Boolean),
+      references: delayedOrders.slice(0, 5).map((row) => ({ ...resolveAlertOrderRef(row.order), lateDays: row.lateDays, estimatedDeliveryDate: row.order.estimatedDeliveryDate })),
+      actionLabel: 'Sipariş Takibi',
+      actionRoute: '/siparis-takibi?filter=delayed',
+      ownerRole: 'procurement',
+      metadata: { trigger: 'estimatedDeliveryDate<today AND status before delivery', maxLateDays, derivedMetric: true },
+      nowIso,
+    }));
+  }
+
+  const pipelineProductIds = new Set();
+  orders.forEach((order) => {
+    const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+    if (!PROCUREMENT_PIPELINE_STATUSES_FOR_REPLENISHMENT.has(status)) return;
+    (Array.isArray(order.items) ? order.items : []).forEach((item) => {
+      if (item?.productId) pipelineProductIds.add(String(item.productId));
+    });
+  });
+  const criticalWithoutPipeline = criticalRows.filter((item) => item?.productId && !pipelineProductIds.has(String(item.productId)));
+  if (criticalWithoutPipeline.length > 0) {
+    const count = criticalWithoutPipeline.length;
+    alerts.push(buildSmartAlert({
+      id: 'smart-alert:critical-stock-no-pipeline',
+      type: 'critical_stock_without_pipeline',
+      title: 'Kritik stokta, yolda sipariş yok',
+      message: `${count} kritik ürün için aktif tedarik akışı görünmüyor.`,
+      severity: count >= 20 ? 'critical' : count >= 8 ? 'high' : 'medium',
+      count,
+      entityIds: criticalWithoutPipeline.map((item) => item.productId).filter(Boolean),
+      references: criticalWithoutPipeline.slice(0, 5).map((item) => ({
+        productId: item.productId,
+        sku: item.sku,
+        productName: item.productName,
+        currentStock: item.currentStock ?? item.quantity,
+        criticalStock: item.criticalStock,
+      })),
+      actionLabel: 'Sipariş Önerileri',
+      actionRoute: '/siparis-onerileri?preset=critical-no-pipeline',
+      ownerRole: 'procurement',
+      metadata: { trigger: 'criticalStock=true AND no active procurement pipeline' },
+      nowIso,
+    }));
+  }
+
+  const fallbackOrders = orders.filter(hasFallbackPlacementSignal);
+  if (fallbackOrders.length > 0) {
+    const count = fallbackOrders.length;
+    alerts.push(buildSmartAlert({
+      id: 'smart-alert:receiving-location-fallback',
+      type: 'receiving_location_fallback',
+      title: 'Lokasyona sığmayan mal kabul',
+      message: `${count} siparişte uygun lokasyon bulunamadı; fallback yerleşim kullanıldı.`,
+      severity: count >= 6 ? 'critical' : count >= 3 ? 'high' : 'medium',
+      count,
+      entityIds: fallbackOrders.map((order) => order.id).filter(Boolean),
+      references: fallbackOrders.slice(0, 5).map(resolveAlertOrderRef),
+      actionLabel: 'Lokasyon Yönetimi',
+      actionRoute: '/lokasyon-yonetimi?filter=receiving-fallback',
+      ownerRole: 'warehouse',
+      metadata: { trigger: 'payload.stockEntry.fallbackLines OR overflow/no-fit placement signal' },
+      nowIso,
+    }));
+  }
+
+  return alerts
+    .sort((left, right) => (
+      (SMART_ALERT_SEVERITY_WEIGHT[right.severity] || 0) - (SMART_ALERT_SEVERITY_WEIGHT[left.severity] || 0)
+      || Number(right.count || 0) - Number(left.count || 0)
+      || String(left.title || '').localeCompare(String(right.title || ''), 'tr')
+    ));
 };
 
 const toPositiveInt = (value, fallback = 0) => {
@@ -939,11 +1218,14 @@ const buildSupplierPerformanceReport = async (inventory, purchaseOrdersOverride 
 
     const supplierOrders = (purchaseOrders || []).filter((order) => order.supplierId === supplier.id);
     const delayedOrderCount = supplierOrders.filter((order) => {
-      if (!order.expectedDeliveryDate) return false;
-      const expected = new Date(order.expectedDeliveryDate);
-      const completedDate = order.receivedAt ? new Date(order.receivedAt) : null;
+      const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+      if (PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status) || CLOSED_PURCHASE_ORDER_STATUSES.has(status) || CANCELLED_PURCHASE_ORDER_STATUSES.has(status)) return false;
+      const expectedValue = order.expectedDeliveryDate || order.estimatedDeliveryDate;
+      if (!expectedValue) return false;
+      const expected = new Date(expectedValue);
+      const completedDate = order.deliveredAt || order.receivedAt ? new Date(order.deliveredAt || order.receivedAt) : null;
       if (completedDate) return completedDate > expected;
-      return !['completed', 'cancelled'].includes(order.status) && new Date() > expected;
+      return isPurchaseOrderOpenStatus(status) && new Date() > expected;
     }).length;
 
     const criticalRatio = items.length > 0 ? Number(((criticalItemCount / items.length) * 100).toFixed(2)) : 0;
@@ -1155,6 +1437,29 @@ const buildFastDailyMovements = async (prisma) => {
   return [...byDay.values()];
 };
 
+const isSystemActorId = (value) => {
+  const actor = String(value || '').trim().toLocaleLowerCase('tr-TR');
+  return !actor || ['system', 'auto', 'automation', 'scheduler', 'daily-closing-job', 'proximity-rule-engine', 'unknown'].includes(actor);
+};
+
+const countUniqueOperationKeys = (rows = [], keyBuilder) => {
+  const keys = new Set();
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const key = keyBuilder(row);
+    if (key) keys.add(key);
+  });
+  return keys.size;
+};
+
+const isSyntheticTaskRecord = (task = {}) => {
+  const id = String(task.id || '');
+  const payload = task.payload && typeof task.payload === 'object' ? task.payload : {};
+  return id.startsWith('task-realistic-')
+    || id.startsWith('task-demo-')
+    || id.startsWith('task-seed-')
+    || Boolean(payload.generatedScenario || payload.demo || payload.mock || payload.seed);
+};
+
 const buildLast24hActivityCount = async (prisma, since) => {
   const [
     stockMovements,
@@ -1166,50 +1471,133 @@ const buildLast24hActivityCount = async (prisma, since) => {
     eslHistory,
     priceEvents,
     tasks,
-    taskComments,
     purchaseOrderActivities,
     accessAuditLogs,
   ] = await Promise.all([
-    prisma.stockMovement.count({ where: { createdAt: { gte: since } } }),
-    prisma.warehouseMovement.count({ where: { createdAt: { gte: since } } }),
-    prisma.purchaseOrder.count({ where: { createdAt: { gte: since } } }),
-    prisma.sale.count({ where: { type: 'sale', createdAt: { gte: since } } }),
-    prisma.customerOrder.count({ where: { createdAt: { gte: since } } }),
-    prisma.sale.count({ where: { type: 'return', createdAt: { gte: since } } }),
-    prisma.eslHistory.count({ where: { createdAt: { gte: since } } }),
-    prisma.productPriceEvent.count({ where: { createdAt: { gte: since } } }),
-    prisma.task.count({ where: { createdAt: { gte: since } } }),
-    prisma.taskComment.count({ where: { createdAt: { gte: since } } }),
-    prisma.purchaseOrderActivityLog.count({ where: { at: { gte: since } } }),
-    prisma.accessAuditLog.count({ where: { createdAt: { gte: since } } }),
+    prisma.stockMovement.findMany({
+      where: { createdAt: { gte: since }, userId: { not: null } },
+      select: { id: true, referenceNo: true, type: true, reasonCode: true, transferRequestId: true, userId: true, createdAt: true },
+    }),
+    prisma.warehouseMovement.findMany({
+      where: { createdAt: { gte: since }, createdBy: { not: null } },
+      select: { id: true, movementType: true, createdBy: true, productId: true, locationId: true, createdAt: true },
+    }),
+    prisma.purchaseOrder.findMany({
+      where: { createdAt: { gte: since }, createdBy: { not: null } },
+      select: { id: true, createdBy: true, createdAt: true },
+    }),
+    prisma.sale.findMany({
+      where: { type: 'sale', createdAt: { gte: since }, cashierId: { not: null } },
+      select: { id: true, referenceNo: true, cashierId: true, createdAt: true },
+    }),
+    prisma.customerOrder.findMany({
+      where: { createdAt: { gte: since }, customerId: { not: null } },
+      select: { id: true, customerId: true, createdAt: true },
+    }),
+    prisma.sale.findMany({
+      where: { type: 'return', createdAt: { gte: since }, cashierId: { not: null } },
+      select: { id: true, referenceNo: true, originalSaleRef: true, cashierId: true, createdAt: true },
+    }),
+    prisma.eslHistory.findMany({
+      where: { createdAt: { gte: since } },
+      select: { id: true, deviceId: true, productId: true, payload: true, customFields: true, createdAt: true },
+    }),
+    prisma.productPriceEvent.findMany({
+      where: { createdAt: { gte: since } },
+      select: { id: true, productId: true, source: true, payload: true, createdAt: true },
+    }),
+    prisma.task.findMany({
+      where: {
+        OR: [
+          { createdAt: { gte: since } },
+          { updatedAt: { gte: since } },
+        ],
+      },
+      select: { id: true, status: true, createdBy: true, assignedTo: true, payload: true, createdAt: true, updatedAt: true },
+    }),
+    prisma.purchaseOrderActivityLog.findMany({
+      where: { at: { gte: since }, by: { not: null } },
+      select: { id: true, orderId: true, type: true, status: true, by: true, at: true },
+    }),
+    prisma.accessAuditLog.findMany({
+      where: { createdAt: { gte: since }, actorId: { not: null } },
+      select: { id: true, action: true, userId: true, permission: true, requestId: true, actorId: true, createdAt: true },
+    }),
   ]);
 
+  const stockMovementCount = countUniqueOperationKeys(
+    stockMovements.filter((row) => !isSystemActorId(row.userId)),
+    (row) => `stock:${row.userId}:${row.referenceNo || row.transferRequestId || row.id}`,
+  );
+  const warehouseMovementCount = countUniqueOperationKeys(
+    warehouseMovements.filter((row) => !isSystemActorId(row.createdBy)),
+    (row) => `warehouse:${row.createdBy}:${row.id}`,
+  );
+  const purchaseOrderCount = countUniqueOperationKeys(
+    purchaseOrders.filter((row) => !isSystemActorId(row.createdBy)),
+    (row) => `purchase-order:create:${row.createdBy}:${row.id}`,
+  );
+  const saleCount = countUniqueOperationKeys(
+    sales.filter((row) => !isSystemActorId(row.cashierId)),
+    (row) => `sale:${row.cashierId}:${row.referenceNo || row.id}`,
+  );
+  const customerOrderCount = countUniqueOperationKeys(
+    customerOrders.filter((row) => !isSystemActorId(row.customerId)),
+    (row) => `customer-order:${row.customerId}:${row.id}`,
+  );
+  const returnCount = countUniqueOperationKeys(
+    returns.filter((row) => !isSystemActorId(row.cashierId)),
+    (row) => `return:${row.cashierId}:${row.referenceNo || row.originalSaleRef || row.id}`,
+  );
+  const eslHistoryCount = countUniqueOperationKeys(
+    eslHistory.filter((row) => !isSystemActorId(row.payload?.actorId || row.payload?.userId || row.customFields?.actorId || row.customFields?.userId)),
+    (row) => `esl:${row.payload?.actorId || row.payload?.userId || row.customFields?.actorId || row.customFields?.userId}:${row.id}`,
+  );
+  const priceEventCount = countUniqueOperationKeys(
+    priceEvents.filter((row) => !isSystemActorId(row.payload?.approvedBy || row.payload?.actorId || row.payload?.userId)),
+    (row) => `price:${row.payload?.approvedBy || row.payload?.actorId || row.payload?.userId}:${row.id || row.productId}`,
+  );
+  const taskCreateCount = countUniqueOperationKeys(
+    tasks.filter((row) => !isSyntheticTaskRecord(row) && row.createdAt && new Date(row.createdAt).getTime() >= since.getTime() && !isSystemActorId(row.createdBy)),
+    (row) => `task:create:${row.createdBy}:${row.id}`,
+  );
+  const taskCompleteCount = countUniqueOperationKeys(
+    tasks.filter((row) => !isSyntheticTaskRecord(row) && row.updatedAt && new Date(row.updatedAt).getTime() >= since.getTime() && isTaskCompletedStatus(row.status) && !isSystemActorId(row.assignedTo || row.createdBy)),
+    (row) => `task:complete:${row.assignedTo || row.createdBy}:${row.id}`,
+  );
+  const purchaseOrderActivityCount = countUniqueOperationKeys(
+    purchaseOrderActivities.filter((row) => !isSystemActorId(row.by) && normalizeStatusKey(row.type) !== 'created'),
+    (row) => `purchase-order:${row.by}:${row.orderId}:${row.type || 'activity'}:${row.status || ''}:${fromDateValue(row.at) || row.id}`,
+  );
+  const accessAuditCount = countUniqueOperationKeys(
+    accessAuditLogs.filter((row) => !isSystemActorId(row.actorId)),
+    (row) => `access:${row.actorId}:${row.requestId || row.id}:${row.action || ''}`,
+  );
+  const taskCount = taskCreateCount + taskCompleteCount;
   return {
-    total: Number(stockMovements || 0)
-      + Number(warehouseMovements || 0)
-      + Number(purchaseOrders || 0)
-      + Number(sales || 0)
-      + Number(customerOrders || 0)
-      + Number(returns || 0)
-      + Number(eslHistory || 0)
-      + Number(priceEvents || 0)
-      + Number(tasks || 0)
-      + Number(taskComments || 0)
-      + Number(purchaseOrderActivities || 0)
-      + Number(accessAuditLogs || 0),
+    total: stockMovementCount
+      + warehouseMovementCount
+      + purchaseOrderCount
+      + saleCount
+      + customerOrderCount
+      + returnCount
+      + eslHistoryCount
+      + priceEventCount
+      + taskCount
+      + purchaseOrderActivityCount
+      + accessAuditCount,
     breakdown: {
-      stockMovements,
-      warehouseMovements,
-      purchaseOrders,
-      sales,
-      customerOrders,
-      returns,
-      eslHistory,
-      priceEvents,
-      tasks,
-      taskComments,
-      purchaseOrderActivities,
-      accessAuditLogs,
+      stockMovements: stockMovementCount,
+      warehouseMovements: warehouseMovementCount,
+      purchaseOrders: purchaseOrderCount,
+      sales: saleCount,
+      customerOrders: customerOrderCount,
+      returns: returnCount,
+      eslHistory: eslHistoryCount,
+      priceEvents: priceEventCount,
+      tasks: taskCount,
+      purchaseOrderActivities: purchaseOrderActivityCount,
+      accessAuditLogs: accessAuditCount,
     },
   };
 };
@@ -1420,10 +1808,12 @@ const PURCHASE_STATUS_ACTIONS = {
   approved: 'siparişi onayladı',
   supplier_notified: 'siparişi tedarikçiye iletti',
   in_transit: 'siparişi sevkiyata aldı',
-  delivered: 'mal kabul kaydı oluşturdu',
+  delivered: 'sipariş teslim alındı',
+  goods_receipt_pending: 'mal kabul beklemeye aldı',
   goods_receipt_completed: 'mal kabulü tamamladı',
-  stock_entry_completed: 'stok girişini tamamladı',
+  stock_entry_pending: 'stok girişini beklemeye aldı',
   completed: 'siparişi tamamladı',
+  archived: 'siparişi arşivledi',
   cancelled: 'siparişi iptal etti',
   rejected: 'siparişi reddetti',
 };
@@ -1595,12 +1985,12 @@ const buildFastActivityFeed = async (prisma, recentStockMovements = []) => {
     });
 
     purchaseActivityLogs.forEach((log) => {
-      const status = cleanText(log.status || log.type);
+      const status = normalizePurchaseOrderStatus(log.status || log.type, cleanText(log.status || log.type));
       rows.push(normalizeActivity({
         userById,
         id: `purchase:${log.id}`,
         eventType: `purchase_${status || 'activity'}`,
-        module: status === 'goods_receipt_completed' || status === 'delivered' ? 'Mal Kabul' : 'Satın Alma',
+        module: ['delivered', 'goods_receipt_pending', 'goods_receipt_completed', 'stock_entry_pending'].includes(status) ? 'Mal Kabul' : 'Satın Alma',
         actionSummary: PURCHASE_STATUS_ACTIONS[status] || PURCHASE_STATUS_ACTIONS[cleanText(log.type)] || 'satın alma hareketi işledi',
         referenceId: log.order?.id || log.id,
         referenceCode: formatOrderReference(log.order?.orderNumber, log.order?.id || log.id),
@@ -1811,22 +2201,18 @@ const buildFastDashboardReport = async () => {
     unreadNotifications,
     totalNotifications,
     readNotifications,
-    openTasks,
-    criticalTasks,
-    completedTasks,
-    overdueTasks,
     completedPurchaseOrders,
     approvalPendingOrders,
     waitingDeliveryOrders,
     delayedPurchaseOrders,
     supplierOperationRows,
-    taskStatusRows,
-    taskPriorityRows,
+    taskRowsForMetrics,
     last24hActivity,
     customerOverview,
     inventory,
     criticalItems,
     dailyMovements,
+    purchaseOrdersForSmartAlerts,
   ] = await withPostgresQueryLogging('GET /api/reports/dashboard', () => Promise.all([
     prisma.$queryRaw`
       SELECT
@@ -1873,7 +2259,7 @@ const buildFastDashboardReport = async () => {
     prisma.sale.aggregate({ where: { type: 'sale', createdAt: { gte: previousStart, lt: previousEnd } }, _sum: { totalAmount: true }, _count: { id: true } }),
     prisma.saleItem.aggregate({ where: { sale: { type: 'sale', createdAt: { gte: start, lt: end } } }, _sum: { quantity: true } }),
     prisma.purchaseSuggestion.count({ where: { status: 'pending' } }),
-    prisma.purchaseOrder.count({ where: { status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES, ...CANCELLED_PURCHASE_ORDER_STATUSES] } } }),
+    prisma.purchaseOrder.count({ where: { status: { notIn: [...CLOSED_PURCHASE_ORDER_STATUSES, ...CANCELLED_PURCHASE_ORDER_STATUSES] } } }),
     prisma.purchaseOrder.count({ where: { status: 'in_transit' } }),
     prisma.stockMovement.findMany({
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1925,19 +2311,11 @@ const buildFastDashboardReport = async () => {
     prisma.notification.count({ where: { isRead: { not: true } } }),
     prisma.notification.count(),
     prisma.notification.count({ where: { isRead: true } }),
-    prisma.task.count({ where: { status: { notIn: [...CLOSED_TASK_STATUSES] } } }),
-    prisma.task.count({ where: { status: { notIn: [...CLOSED_TASK_STATUSES] }, priority: { in: ['high', 'critical'] } } }),
-    prisma.task.count({ where: { status: { in: [...CLOSED_TASK_STATUSES] } } }),
-    prisma.task.count({
-      where: {
-        status: { notIn: [...CLOSED_TASK_STATUSES] },
-        dueDate: { lt: new Date().toISOString() },
-      },
-    }),
     prisma.purchaseOrder.count({
       where: {
         OR: [
           { status: { in: [...COMPLETED_PURCHASE_ORDER_STATUSES] } },
+          { status: { in: [...ARCHIVED_PURCHASE_ORDER_STATUSES] } },
           { archived: true },
           { archivedAt: { not: null } },
           {
@@ -1951,7 +2329,7 @@ const buildFastDashboardReport = async () => {
     prisma.purchaseOrder.count({ where: { status: { in: [...WAITING_DELIVERY_PURCHASE_ORDER_STATUSES] } } }),
     prisma.purchaseOrder.count({
       where: {
-        status: { notIn: [...COMPLETED_PURCHASE_ORDER_STATUSES, ...CANCELLED_PURCHASE_ORDER_STATUSES] },
+        status: { in: [...WAITING_DELIVERY_PURCHASE_ORDER_STATUSES] },
         estimatedDeliveryDate: { lt: new Date().toISOString().slice(0, 10) },
       },
     }),
@@ -1972,13 +2350,36 @@ const buildFastDashboardReport = async () => {
         },
       },
     }),
-    prisma.task.groupBy({ by: ['status'], _count: { id: true } }),
-    prisma.task.groupBy({ by: ['priority'], where: { status: { notIn: [...CLOSED_TASK_STATUSES] } }, _count: { id: true } }),
+    prisma.task.findMany({ select: { id: true, status: true, priority: true, dueDate: true, payload: true } }),
     buildLast24hActivityCount(prisma, since24h),
     buildCustomerOverview(prisma, since30Days, start),
     buildFastInventoryRows(prisma, { take: 80, settings }),
     buildFastInventoryRows(prisma, { take: 0, criticalOnly: true, settings }),
     buildFastDailyMovements(prisma),
+    prisma.purchaseOrder.findMany({
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: 1000,
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        currentStatus: true,
+        estimatedDeliveryDate: true,
+        stockEntryMode: true,
+        stockEntryCompleted: true,
+        goodsReceiptCompleted: true,
+        payload: true,
+        createdAt: true,
+        updatedAt: true,
+        deliveredAt: true,
+        completedAt: true,
+        archived: true,
+        archivedAt: true,
+        supplier: { select: { name: true } },
+        items: { select: { productId: true, quantity: true } },
+        statusHistory: { orderBy: { at: 'asc' }, select: { status: true, at: true } },
+      },
+    }),
   ]));
 
   const totals = inventoryTotals?.[0] || {};
@@ -2009,12 +2410,14 @@ const buildFastDashboardReport = async () => {
     const openOrderCount = orders.filter((order) => isPurchaseOrderOpenStatus(order.status)).length;
     const waitingDeliveryCount = orders.filter((order) => isPurchaseOrderWaitingDeliveryStatus(order.status)).length;
     const delayedOrderCount = orders.filter((order) => {
+      const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+      if (PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status) || CLOSED_PURCHASE_ORDER_STATUSES.has(status) || CANCELLED_PURCHASE_ORDER_STATUSES.has(status)) return false;
       if (!order.estimatedDeliveryDate) return false;
       const expected = new Date(`${String(order.estimatedDeliveryDate).slice(0, 10)}T23:59:59.999`);
       if (Number.isNaN(expected.getTime())) return false;
       const completedAt = order.completedAt || order.deliveredAt;
       if (completedAt) return new Date(completedAt).getTime() > expected.getTime();
-      return isPurchaseOrderOpenStatus(order.status) && Date.now() > expected.getTime();
+      return isPurchaseOrderOpenStatus(status) && Date.now() > expected.getTime();
     }).length;
     const completedOrders = orders.filter((order) => !isPurchaseOrderOpenStatus(order.status));
     const deliveryDurations = completedOrders
@@ -2044,22 +2447,31 @@ const buildFastDashboardReport = async () => {
       riskLevel: delayedOrderCount > 0 ? 'high' : openOrderCount > 0 ? 'medium' : 'low',
     };
   }).filter((row) => row.orderCount > 0 || row.activeOrderCount > 0 || row.delayedOrderCount > 0 || row.waitingDeliveryCount > 0);
-  const taskStatusCounts = taskStatusRows.reduce((acc, row) => {
-    const status = normalizeStatusKey(row.status) || 'open';
-    acc[status] = Number(row._count?.id || 0);
+  const realTaskRows = (Array.isArray(taskRowsForMetrics) ? taskRowsForMetrics : []).filter((task) => !isSyntheticTaskRecord(task));
+  const taskStatusCounts = realTaskRows.reduce((acc, row) => {
+    const status = normalizeTaskStatusKey(row.status) || 'unknown';
+    acc[status] = Number(acc[status] || 0) + 1;
     return acc;
   }, {});
-  const normalizedOpenTasks = taskStatusRows.reduce((sum, row) => (
-    isTaskCompletedStatus(row.status) ? sum : sum + Number(row._count?.id || 0)
+  const normalizedOpenTasks = realTaskRows.reduce((sum, row) => (
+    isTaskOpenStatus(row.status) ? sum + 1 : sum
   ), 0);
-  const normalizedCompletedTasks = taskStatusRows.reduce((sum, row) => (
-    isTaskCompletedStatus(row.status) ? sum + Number(row._count?.id || 0) : sum
+  const normalizedCompletedTasks = realTaskRows.reduce((sum, row) => (
+    isTaskCompletedStatus(row.status) ? sum + 1 : sum
   ), 0);
-  const taskPriorityCounts = taskPriorityRows.reduce((acc, row) => {
+  const openTaskRows = realTaskRows.filter((task) => isTaskOpenStatus(task.status));
+  const taskPriorityCounts = openTaskRows.reduce((acc, row) => {
     const priority = normalizeStatusKey(row.priority) || 'normal';
-    acc[priority] = Number(row._count?.id || 0);
+    acc[priority] = Number(acc[priority] || 0) + 1;
     return acc;
   }, {});
+  const normalizedCriticalTasks = openTaskRows.filter((task) => ['high', 'critical'].includes(normalizeStatusKey(task.priority))).length;
+  const nowMs = Date.now();
+  const normalizedOverdueTasks = openTaskRows.filter((task) => {
+    if (!task.dueDate) return false;
+    const dueMs = new Date(task.dueDate).getTime();
+    return Number.isFinite(dueMs) && dueMs < nowMs;
+  }).length;
 
   const storeStatus = resolveStoreScheduleStatus(settings || {}, new Date());
   const todaySalesCount = Number(todaySales._count.id || 0);
@@ -2076,7 +2488,7 @@ const buildFastDashboardReport = async () => {
     return Number.isFinite(days) && days >= 0 && days <= 7;
   }).length;
   const pendingCriticalCount = Number(criticalNotifications || 0)
-    + Number(criticalTasks || 0)
+    + Number(normalizedCriticalTasks || 0)
     + Number(criticalItems?.length || 0)
     + Number(expiryRiskCount || 0);
   const userActionCount = Number(pendingAccessRequests || 0)
@@ -2087,6 +2499,12 @@ const buildFastDashboardReport = async () => {
   const lowStockCount = Number(stockRisks.lowStockCount || 0);
   const outOfStockCount = Number(stockRisks.outOfStockCount || 0);
   const overstockCount = Number(stockRisks.overstockCount || 0);
+  const smartAlerts = buildDashboardSmartAlerts({
+    purchaseOrders: (Array.isArray(purchaseOrdersForSmartAlerts) ? purchaseOrdersForSmartAlerts : [])
+      .filter((order) => !isPurchaseOrderArchivedForDashboard(order)),
+    criticalItems,
+    now: new Date(),
+  });
 
   return {
     generatedAt: new Date().toISOString(),
@@ -2144,6 +2562,7 @@ const buildFastDashboardReport = async () => {
     },
     inventory: inventory.map(stripLegacyInventoryFields),
     criticalItems: criticalItems.map(stripLegacyInventoryFields),
+    smartAlerts,
     latestProducts: inventory.slice(0, 5).map(stripLegacyInventoryFields),
     recentMovements,
     stockMovements: stockMovementRows,
@@ -2166,9 +2585,9 @@ const buildFastDashboardReport = async () => {
       unreadNotifications: Number(unreadNotifications || 0),
       pendingAccessRequests: Number(pendingAccessRequests || 0),
       openTasks: Number(normalizedOpenTasks || 0),
-      criticalTasks: Number(criticalTasks || 0),
-      completedTasks: Number(normalizedCompletedTasks || completedTasks || 0),
-      overdueTasks: Number(overdueTasks || 0),
+      criticalTasks: Number(normalizedCriticalTasks || 0),
+      completedTasks: Number(normalizedCompletedTasks || 0),
+      overdueTasks: Number(normalizedOverdueTasks || 0),
       approvalPendingOrders: Number(approvalPendingOrders || 0),
       criticalStockCount,
       expiryRiskCount: Number(expiryRiskCount || 0),
@@ -2204,8 +2623,8 @@ const buildFastDashboardReport = async () => {
       { kategori: 'Bildirim', metrik: 'Kritik Uyarı Sayısı', deger: criticalNotifications },
       { kategori: 'Bildirim', metrik: 'Okunma Oranı (%)', deger: notificationReadRate },
       { kategori: 'Görev', metrik: 'Açık Görevler', deger: normalizedOpenTasks },
-      { kategori: 'Görev', metrik: 'Tamamlanan Görevler', deger: normalizedCompletedTasks || completedTasks },
-      { kategori: 'Görev', metrik: 'Geciken Görevler', deger: overdueTasks },
+      { kategori: 'Görev', metrik: 'Tamamlanan Görevler', deger: normalizedCompletedTasks },
+      { kategori: 'Görev', metrik: 'Geciken Görevler', deger: normalizedOverdueTasks },
     ],
   };
 };
@@ -2272,7 +2691,7 @@ const buildOrderApprovalLeadReport = (orders = [], supplierNameById = new Map())
       depoyaUlasmaSuresiDakika: warehouseArrivalMinutes,
       depoyaUlasmaSuresi: formatDuration(warehouseArrivalMinutes),
       createdAt: order.createdAt,
-      currentStatus: order.status || order.currentStatus || '-',
+      currentStatus: normalizePurchaseOrderStatus(order.status || order.currentStatus, '-'),
     };
   });
 
@@ -2294,8 +2713,8 @@ const buildGoodsReceiptPerformanceReport = (orders = [], orderItems = [], produc
   const completionMinutesList = [];
 
   (orders || []).forEach((order) => {
-    const normalizedStatus = String(order?.status || order?.currentStatus || '').toLowerCase();
-    const isCancelled = ['cancelled', 'canceled', 'rejected'].includes(normalizedStatus);
+    const normalizedStatus = normalizePurchaseOrderStatus(order?.status || order?.currentStatus, '');
+    const isCancelled = CANCELLED_PURCHASE_ORDER_STATUSES.has(normalizedStatus);
     const isEntryCompleted = Boolean(order?.stockEntryCompleted || order?.stock_entry_completed || order?.stockBookedAt || order?.completedAt);
     const isPendingEntry = !isCancelled && !isEntryCompleted;
     const estimatedAtTs = toTimestamp(order?.estimatedDeliveryDate);
@@ -3146,8 +3565,8 @@ export const reportService = {
     const previousDaySalesCount = previousDaySales.length;
 
     const pendingPurchaseSuggestions = purchaseSuggestions.filter((item) => item.status === 'pending').length;
-    const activePurchaseOrders = purchaseOrders.filter((item) => !['delivered', 'cancelled'].includes(item.status)).length;
-    const inTransitPurchaseOrders = purchaseOrders.filter((item) => item.status === 'in_transit').length;
+    const activePurchaseOrders = purchaseOrders.filter((item) => isPurchaseOrderOpenStatus(item.status)).length;
+    const inTransitPurchaseOrders = purchaseOrders.filter((item) => normalizePurchaseOrderStatus(item.status, '') === 'in_transit').length;
 
     const criticalItems = inventory.filter((item) => item.isCritical).sort((left, right) => left.quantity - right.quantity);
     const categoryDistribution = categories.map((category) => {

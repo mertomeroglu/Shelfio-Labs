@@ -15,60 +15,28 @@ import { userRepo } from '../repositories/userRepository.js';
 import { includesSearchText, normalizeSearchText } from '../utils/validators.js';
 import { notificationService } from './notificationService.js';
 import { logisticsTariffService } from './logisticsTariffService.js';
+import { warehouseService } from './warehouseService.js';
 import { config } from '../config/config.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
 import { decodeCursor, encodeCursor, parseBooleanQuery, parseLimit, parsePagePagination, resolvePaginationMode, resolveWhitelistedSort } from '../utils/pagination.js';
 import { assertValidSupplierProductOrderUnit, normalizeProcurementUnit, resolveSupplierProductOrderableUnits } from '../utils/procurementUnits.js';
+import {
+  PURCHASE_ORDER_STATUSES,
+  PURCHASE_ORDER_AUTO_SEQUENCE,
+  PURCHASE_ORDER_AUTO_STATUSES,
+  PURCHASE_ORDER_TERMINAL_STATUSES,
+  normalizePurchaseOrderStatus,
+  getPurchaseOrderStatusLabel,
+  buildPurchaseOrderStatusMirrors,
+  canTransitionPurchaseOrderStatus,
+} from '../domain/purchaseOrderLifecycle.js';
 
-const ORDER_STATUSES = [
-  'submitted_for_approval',
-  'approved',
-  'supplier_notified',
-  'preparing',
-  'ready_to_ship',
-  'in_transit',
-  'goods_receipt_pending',
-  'goods_receipt_completed',
-  'stock_entry_pending',
-  'completed',
-  'archived',
-  // Legacy statuses kept for backwards compatibility.
-  'sourcing',
-  'delivery_planned',
-  'partially_delivered',
-  'closed',
-  'return_in_progress',
-  'delivered',
-  'cancelled',
-];
-
-const ORDER_STATUS_LABELS = {
-  submitted_for_approval: 'Onaya Gönderildi',
-  approved: 'Onaylandı',
-  supplier_notified: 'Tedarikçiye İletildi',
-  preparing: 'Hazırlanıyor',
-  ready_to_ship: 'Sevke Hazır',
-  in_transit: 'Yola Çıktı',
-  delivered: 'Depoya Ulaştı',
-  goods_receipt_pending: 'Mal Kabul Bekliyor',
-  goods_receipt_completed: 'Mal Kabul Yapıldı',
-  stock_entry_pending: 'Stok Girişi Bekleniyor',
-  completed: 'Tamamlandı',
-  archived: 'Arşivlendi',
-  cancelled: 'İptal Edildi',
-  // Legacy mappings
-  sourcing: 'Hazırlanıyor',
-  delivery_planned: 'Sevke Hazır',
-  partially_delivered: 'Depoya Ulaştı',
-  closed: 'Depoya Ulaştı',
-  return_in_progress: 'İptal Edildi',
-};
-
-const AUTO_MANAGED_SEQUENCE = ['approved', 'supplier_notified', 'preparing', 'ready_to_ship', 'in_transit', 'delivered'];
-const AUTO_MANAGED_STATUSES = new Set(AUTO_MANAGED_SEQUENCE);
+const ORDER_STATUSES = PURCHASE_ORDER_STATUSES;
+const AUTO_MANAGED_SEQUENCE = PURCHASE_ORDER_AUTO_SEQUENCE;
+const AUTO_MANAGED_STATUSES = PURCHASE_ORDER_AUTO_STATUSES;
 const MANUAL_ALLOWED_STATUSES = new Set(['submitted_for_approval', 'approved', 'cancelled']);
-const TERMINAL_STATUSES = new Set(['cancelled', 'archived']);
+const TERMINAL_STATUSES = PURCHASE_ORDER_TERMINAL_STATUSES;
 const PRE_APPROVAL_MANUAL_STATUSES = new Set(['submitted_for_approval']);
 const GOODS_RECEIPT_ALREADY_FINALIZED_STATUSES = new Set(['goods_receipt_completed', 'stock_entry_pending', 'completed', 'archived']);
 const orderUpdateLocks = new Map();
@@ -86,11 +54,59 @@ const AUTO_TIMELINE_VERSION = 1;
 const SYSTEM_AUTO_USER_ID = 'system-auto';
 const MANUAL_STOCK_ENTRY_MODE = 'manual';
 const AUTO_STOCK_ENTRY_MODE = 'auto';
+const PROCUREMENT_NOTIFICATION_ROUTE = '/siparis-takibi';
+
+const PROCUREMENT_STATUS_NOTIFICATION_POLICY = Object.freeze({
+  submitted_for_approval: {
+    title: 'Sipariş onaya gönderildi',
+    message: 'satın alma siparişi onaya gönderildi.',
+    severity: 'medium',
+    audience: 'approvers',
+  },
+  supplier_notified: {
+    title: 'Sipariş tedarikçiye iletildi',
+    message: 'siparişi tedarikçiye iletildi.',
+    severity: 'low',
+    audience: 'watchers',
+  },
+  goods_receipt_pending: {
+    title: 'Mal kabul bekliyor',
+    message: 'siparişi depoya ulaştı ve mal kabul bekliyor.',
+    severity: 'high',
+    audience: 'receiving',
+  },
+  goods_receipt_completed: {
+    title: 'Mal kabul yapıldı',
+    message: 'siparişi için mal kabul yapıldı.',
+    severity: 'medium',
+    audience: 'watchers',
+  },
+  stock_entry_pending: {
+    title: 'Stok girişi bekleniyor',
+    message: 'siparişi manuel stok girişi bekliyor.',
+    severity: 'high',
+    audience: 'stock',
+    route: '/stok-islemleri',
+  },
+  completed: {
+    title: 'Sipariş tamamlandı',
+    message: 'satın alma siparişi tamamlandı.',
+    severity: 'low',
+    audience: 'watchers',
+  },
+  cancelled: {
+    title: 'Sipariş iptal edildi',
+    message: 'satın alma siparişi iptal edildi.',
+    severity: 'high',
+    audience: 'watchers',
+  },
+});
 
 const SUGGESTION_STATUS_LABELS = {
   pending: 'Bekliyor',
   approved: 'Onaylandı',
   rejected: 'Reddedildi',
+  stale: 'Yeniden hesap gerekli',
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -359,17 +375,20 @@ const resolveCampaignContext = ({ product, signals, overStockRatio, campaigns, o
       campaign: null,
       demandMultiplier: 1,
       discountSignal: 0,
+      isWeakCampaignSignal: false,
     };
   }
 
   const selected = matched[0];
   const demandMultiplier = Number((1 + Math.min(0.45, Number(selected.discountRate || 0) / 140)).toFixed(3));
   const discountSignal = Number(selected.discountRate || 0);
+  const isWeakCampaignSignal = signals.weighted <= 0.25 && selected.type === 'general';
 
   return {
     campaign: selected,
     demandMultiplier,
     discountSignal,
+    isWeakCampaignSignal,
   };
 };
 
@@ -418,6 +437,46 @@ const resolveRounding = ({ quantity, minimumOrderQty, unitsPerCase, unitsPerPall
   };
 };
 
+const getSupplierSelectionScore = ({ supplierProduct = {}, product = {}, needQty = 0 }) => {
+  const unitsPerCase = Math.max(1, Number(product.unitsPerCase || supplierProduct.unitsPerCase || 1));
+  const casesPerPallet = Math.max(1, Number(product.casesPerPallet || supplierProduct.casesPerPallet || 1));
+  const unitsPerPallet = Math.max(1, Number(product.unitsPerPallet || supplierProduct.unitsPerPallet || unitsPerCase * casesPerPallet));
+  const unitsPerPack = Math.max(1, Number(product.unitsPerPack || supplierProduct.unitsPerPack || 1));
+  const unitsPerBox = Math.max(1, Number(product.unitsPerBox || supplierProduct.unitsPerBox || unitsPerCase));
+  const minimumOrder = resolveMinimumOrderBaseQty({
+    supplierProduct,
+    unitInfo: { unitsPerPack, unitsPerBox, unitsPerCase, unitsPerPallet },
+  });
+  const leadTimeDays = getLeadDays(supplierProduct);
+  const purchasePrice = Math.max(0, Number(supplierProduct.purchasePrice || 0));
+  const moqOvershoot = needQty > 0 ? Math.max(0, minimumOrder.minimumOrderBaseQty - needQty) : minimumOrder.minimumOrderBaseQty;
+  const defaultScore = supplierProduct.isDefault === true ? -60 : 0;
+  const leadTimeScore = leadTimeDays * 14;
+  const moqScore = moqOvershoot * 0.8;
+  const priceScore = purchasePrice * 0.03;
+
+  return {
+    score: Number((defaultScore + leadTimeScore + moqScore + priceScore).toFixed(3)),
+    leadTimeDays,
+    minimumOrder,
+    unitsPerCase,
+    unitsPerPallet,
+    supplierSelectionReason: [
+      supplierProduct.isDefault === true ? 'primary_supplier' : 'alternate_supplier',
+      `lead_time:${leadTimeDays}`,
+      `moq_base:${minimumOrder.minimumOrderBaseQty}`,
+      `price:${purchasePrice}`,
+    ],
+  };
+};
+
+const selectSupplierProductForSuggestion = ({ productOptions = [], product = {}, needQty = 0 }) => {
+  const scored = productOptions
+    .map((row) => ({ row, ...getSupplierSelectionScore({ supplierProduct: row, product, needQty }) }))
+    .sort((a, b) => a.score - b.score || Number(a.row.purchasePrice || 0) - Number(b.row.purchasePrice || 0));
+  return scored[0] || null;
+};
+
 const getRiskLevel = ({ currentStock, criticalStock, daysToStockout, leadTimeDays }) => {
   if (currentStock <= criticalStock) return 'critical';
   if (daysToStockout !== null && daysToStockout <= Math.max(1, leadTimeDays + 1)) return 'critical';
@@ -426,7 +485,95 @@ const getRiskLevel = ({ currentStock, criticalStock, daysToStockout, leadTimeDay
   return 'low';
 };
 
-const getSuggestionReasonModel = ({ currentStock, criticalStock, signals, daysToStockout, leadTimeDays, campaign, roundingUnit, moqApplied }) => {
+const PROCUREMENT_PIPELINE_STATUS_WEIGHTS = Object.freeze({
+  submitted_for_approval: 0.25,
+  approved: 0.5,
+  supplier_notified: 0.65,
+  preparing: 0.75,
+  ready_to_ship: 0.85,
+  in_transit: 0.95,
+  delivered: 1,
+  goods_receipt_pending: 1,
+  goods_receipt_completed: 1,
+  stock_entry_pending: 1,
+  completed_unbooked: 1,
+});
+
+const PROCUREMENT_PIPELINE_STATUSES = new Set(Object.keys(PROCUREMENT_PIPELINE_STATUS_WEIGHTS));
+
+const getProcurementPipelineStatusKey = (order = {}) => {
+  const status = normalizeLegacyOrderStatus(order.status);
+  if (status === 'completed') {
+    return isOrderStockEntryBooked(order) ? '' : 'completed_unbooked';
+  }
+  return PROCUREMENT_PIPELINE_STATUSES.has(status) ? status : '';
+};
+
+const buildInboundSupplyMap = ({ orders = [], orderItems = [] } = {}) => {
+  const orderMap = new Map((Array.isArray(orders) ? orders : []).map((order) => {
+    const prepared = prepareOrderForRead(order);
+    return [prepared.id, prepared];
+  }));
+  const result = new Map();
+
+  for (const item of Array.isArray(orderItems) ? orderItems : []) {
+    const order = orderMap.get(item.orderId);
+    if (!order || order.archived === true) continue;
+    const statusKey = getProcurementPipelineStatusKey(order);
+    if (!statusKey) continue;
+    const productId = normalizeString(item.productId);
+    if (!productId) continue;
+    const qty = Math.max(0, Number(item.quantity || 0));
+    if (!qty) continue;
+
+    const weight = PROCUREMENT_PIPELINE_STATUS_WEIGHTS[statusKey] || 0;
+    const existing = result.get(productId) || {
+      productId,
+      confirmedQty: 0,
+      effectiveQty: 0,
+      nearTermQty: 0,
+      lines: [],
+      statusTotals: {},
+    };
+    existing.confirmedQty += qty;
+    existing.effectiveQty += qty * weight;
+    if (weight >= 0.9) existing.nearTermQty += qty;
+    existing.statusTotals[statusKey] = (existing.statusTotals[statusKey] || 0) + qty;
+    existing.lines.push({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      status: statusKey,
+      qty,
+      effectiveQty: Number((qty * weight).toFixed(3)),
+      supplierId: order.supplierId || '',
+      estimatedDeliveryDate: order.estimatedDeliveryDate || null,
+    });
+    result.set(productId, existing);
+  }
+
+  for (const value of result.values()) {
+    value.confirmedQty = Number(value.confirmedQty.toFixed(3));
+    value.effectiveQty = Number(value.effectiveQty.toFixed(3));
+    value.nearTermQty = Number(value.nearTermQty.toFixed(3));
+  }
+
+  return result;
+};
+
+const getSuggestionReasonModel = ({
+  currentStock,
+  criticalStock,
+  signals,
+  daysToStockout,
+  leadTimeDays,
+  campaign,
+  campaignContext = {},
+  roundingUnit,
+  moqApplied,
+  inbound = {},
+  netNeedQty = 0,
+  selectedSupplierMeta = {},
+}) => {
   const reasonTags = [];
   const reasonDetails = [];
 
@@ -453,6 +600,25 @@ const getSuggestionReasonModel = ({ currentStock, criticalStock, signals, daysTo
   if (campaign) {
     reasonTags.push('campaign_boost');
     reasonDetails.push(`Aktif kampanya etkisi: ${campaign.name}`);
+    if (campaignContext.isWeakCampaignSignal) {
+      reasonTags.push('weak_campaign_signal');
+      reasonDetails.push('Kampanya etkisi düşük güvenle uygulandı.');
+    }
+  }
+
+  if (Number(inbound.effectiveQty || 0) > 0) {
+    reasonTags.push('inbound_considered');
+    reasonDetails.push(`Açık siparişlerden ${Number(inbound.effectiveQty || 0).toFixed(1)} adet efektif inbound düşüldü.`);
+  }
+
+  if (signals.salesSpeed === 'slow' && moqApplied && netNeedQty > 0) {
+    reasonTags.push('slow_sales_but_moq_forced');
+    reasonDetails.push('Satış yavaş; miktar minimum sipariş şartı nedeniyle yükseldi.');
+  }
+
+  if (selectedSupplierMeta?.supplierSelectionReason?.length) {
+    reasonTags.push('supplier_ranked');
+    reasonDetails.push('Tedarikçi seçimi primary, lead time, MOQ ve fiyat dengesiyle yapıldı.');
   }
 
   if (moqApplied) {
@@ -477,29 +643,118 @@ const getSuggestionReasonModel = ({ currentStock, criticalStock, signals, daysTo
   };
 };
 
-const shouldCreateSuggestionByMode = ({ options, product, campaignContext, signals, riskLevel, needQty, currentStock, criticalStock }) => {
+const shouldCreateSuggestionByMode = ({ options, product, campaignContext, signals, riskLevel, needQty, currentStock, criticalStock, inbound = {}, targetStock = 0 }) => {
+  const hasNetNeed = needQty > 0;
+  const inboundEffectiveQty = Number(inbound.effectiveQty || 0);
+  const inboundCoversTarget = targetStock > 0 && (currentStock + inboundEffectiveQty) >= targetStock;
+  if (inboundCoversTarget) return false;
+  if (signals.sold30 <= 0 && currentStock > Math.max(criticalStock, targetStock)) return false;
+
   if (options.mode === 'all') {
-    return needQty > 0;
+    return hasNetNeed;
   }
 
   if (options.mode === 'campaign') {
-    return Boolean(campaignContext.campaign) && needQty > 0;
+    return Boolean(campaignContext.campaign) && hasNetNeed && !campaignContext.isWeakCampaignSignal;
   }
 
   if (options.mode === 'category') {
-    return Boolean(options.categoryId) && product.categoryId === options.categoryId && needQty > 0;
+    return Boolean(options.categoryId) && product.categoryId === options.categoryId && hasNetNeed;
   }
 
   if (options.mode === 'fast') {
-    return signals.salesSpeed === 'fast' && needQty > 0;
+    return signals.salesSpeed === 'fast' && hasNetNeed;
   }
 
-  return currentStock <= criticalStock || riskLevel === 'critical' || riskLevel === 'high';
+  return hasNetNeed && (currentStock <= criticalStock || riskLevel === 'critical' || riskLevel === 'high');
 };
 
 const getAdmins = async () => {
   const users = await userRepo.getAll();
   return (users || []).filter((item) => item.role === 'admin' && item.isActive !== false);
+};
+
+const normalizeUserRoleText = (value) => String(value || '').trim().toLocaleLowerCase('tr-TR');
+
+const canReceiveProcurementNotification = (user = {}, audience = 'watchers') => {
+  if (!user || user.isActive === false) return false;
+  if (user.role === 'admin') return true;
+  const permissionSet = new Set(Array.isArray(user.permissions) ? user.permissions : []);
+  if (permissionSet.has('*') || permissionSet.has('purchase:view') || permissionSet.has('purchase:approve')) return true;
+
+  const department = normalizeUserRoleText(user.department);
+  const role = normalizeUserRoleText(user.role);
+  if (audience === 'receiving' || audience === 'stock') {
+    return permissionSet.has('stock:update') || role.includes('depo') || department.includes('operasyon') || department.includes('depo');
+  }
+  if (audience === 'approvers') {
+    return permissionSet.has('purchase:approve') || role.includes('yonet') || department.includes('yönetim');
+  }
+  return role.includes('sat') || department.includes('operasyon') || department.includes('tedarik');
+};
+
+const getProcurementNotificationRecipients = async ({ order = {}, actorUserId = null, audience = 'watchers' } = {}) => {
+  const users = await userRepo.getAll();
+  const recipientIds = new Set(
+    (users || [])
+      .filter((user) => canReceiveProcurementNotification(user, audience))
+      .map((user) => user.id)
+  );
+
+  [order.createdBy, order.approvedBy, actorUserId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .forEach((id) => recipientIds.add(id));
+
+  return Array.from(recipientIds);
+};
+
+const notifyPurchaseOrderLifecycle = async ({ order = {}, status, actorUserId = null } = {}) => {
+  const normalizedStatus = normalizeLegacyOrderStatus(status || order.status);
+  const policy = PROCUREMENT_STATUS_NOTIFICATION_POLICY[normalizedStatus];
+  if (!policy || !order?.id) return;
+
+  const recipients = await getProcurementNotificationRecipients({ order, actorUserId, audience: policy.audience });
+  if (!recipients.length) return;
+
+  const orderNumber = normalizeOrderNumber(order.orderNumber, order.id);
+  await Promise.all(recipients.map((userId) => notificationService.notifyUser({
+    userId,
+    type: normalizedStatus === 'goods_receipt_pending' || normalizedStatus === 'goods_receipt_completed' ? 'goods_receipt' : 'purchase_order',
+    title: policy.title,
+    message: `${orderNumber} ${policy.message}`,
+    severity: policy.severity,
+    dedupeKey: `purchase-order:${order.id}:${normalizedStatus}`,
+    actionUrl: policy.route || PROCUREMENT_NOTIFICATION_ROUTE,
+    actionType: normalizedStatus === 'stock_entry_pending' ? 'stock' : 'order',
+    createdBy: actorUserId,
+    payload: {
+      entityType: 'order',
+      module: 'Tedarik & Satın Alma',
+      pageName: normalizedStatus === 'stock_entry_pending' ? 'Stok İşlemleri' : 'Sipariş Takibi',
+      orderId: order.id,
+      orderNumber,
+      status: normalizedStatus,
+      route: policy.route || PROCUREMENT_NOTIFICATION_ROUTE,
+    },
+  })));
+};
+
+const getNewLifecycleNotificationStatuses = (beforeOrder = {}, afterOrder = {}) => {
+  const beforeCount = Array.isArray(beforeOrder.statusHistory) ? beforeOrder.statusHistory.length : 0;
+  const afterHistory = Array.isArray(afterOrder.statusHistory) ? afterOrder.statusHistory : [];
+  const addedStatuses = afterHistory
+    .slice(beforeCount)
+    .map((entry) => normalizeLegacyOrderStatus(entry?.status))
+    .filter((status) => PROCUREMENT_STATUS_NOTIFICATION_POLICY[status]);
+
+  if (addedStatuses.length) {
+    return Array.from(new Set(addedStatuses));
+  }
+
+  const beforeStatus = normalizeLegacyOrderStatus(beforeOrder.status);
+  const afterStatus = normalizeLegacyOrderStatus(afterOrder.status);
+  return beforeStatus !== afterStatus && PROCUREMENT_STATUS_NOTIFICATION_POLICY[afterStatus] ? [afterStatus] : [];
 };
 
 const getAutomationSettings = (settings = {}) => {
@@ -572,7 +827,7 @@ const createCriticalNotificationsIfNeeded = async ({ suggestion, product, automa
       severity: suggestion.riskLevel === 'critical' ? 'high' : 'medium',
       dedupeKey,
       actionUrl: '/siparis-onerileri',
-      actionType: 'order',
+      actionType: 'purchase_suggestion',
     }))
   );
 };
@@ -625,6 +880,65 @@ const getTotalStock = (stock) => (stock?.warehouseQuantity || 0) + (stock?.shelf
 const getLeadDays = (supplierProduct) => {
   const lead = Number(supplierProduct?.leadTimeDays);
   return Number.isFinite(lead) && lead > 0 ? lead : 3;
+};
+
+const PURCHASE_SUGGESTION_CALCULATION_VERSION = 2;
+const PURCHASE_SUGGESTION_STALE_HOURS = 24;
+
+const toFiniteNumberOrNull = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getSuggestionCalculatedAt = (suggestion = {}) => (
+  suggestion.calculatedAt
+  || suggestion.payload?.calculation?.calculatedAt
+  || suggestion.updatedAt
+  || suggestion.createdAt
+  || null
+);
+
+const buildSuggestionFreshness = ({ suggestion = {}, product = null, stock = null, supplier = null }) => {
+  const calculatedAt = getSuggestionCalculatedAt(suggestion);
+  const calculatedDate = calculatedAt ? new Date(calculatedAt) : null;
+  const calculatedTime = calculatedDate && Number.isFinite(calculatedDate.getTime()) ? calculatedDate.getTime() : null;
+  const liveCurrentStock = stock ? getTotalStock(stock) : null;
+  const liveCriticalStock = product ? Number(product.criticalStock || 0) : null;
+  const snapshotCurrentStock = toFiniteNumberOrNull(suggestion.currentStock);
+  const snapshotCriticalStock = toFiniteNumberOrNull(suggestion.criticalStock);
+  const reasons = [];
+
+  if (product?.isActive === false) reasons.push('product_inactive');
+  if (supplier?.isActive === false) reasons.push('supplier_inactive');
+  if (!product) reasons.push('product_missing');
+  if (!supplier) reasons.push('supplier_missing');
+  if (snapshotCurrentStock !== null && liveCurrentStock !== null && snapshotCurrentStock !== liveCurrentStock) {
+    reasons.push('stock_changed');
+  }
+  if (snapshotCriticalStock !== null && liveCriticalStock !== null && snapshotCriticalStock !== liveCriticalStock) {
+    reasons.push('critical_stock_changed');
+  }
+  if (!calculatedTime) {
+    reasons.push('calculation_time_missing');
+  } else if (Date.now() - calculatedTime > PURCHASE_SUGGESTION_STALE_HOURS * 60 * 60 * 1000) {
+    reasons.push('calculation_expired');
+  }
+  if (suggestion.payloadColumnDrift && Object.keys(suggestion.payloadColumnDrift).length) {
+    reasons.push('legacy_payload_drift');
+  }
+
+  return {
+    isStale: reasons.length > 0,
+    reasons,
+    calculatedAt,
+    staleAfterHours: PURCHASE_SUGGESTION_STALE_HOURS,
+    liveCurrentStock,
+    liveCriticalStock,
+    snapshotCurrentStock,
+    snapshotCriticalStock,
+    stockDelta: liveCurrentStock !== null && snapshotCurrentStock !== null ? liveCurrentStock - snapshotCurrentStock : null,
+    criticalStockDelta: liveCriticalStock !== null && snapshotCriticalStock !== null ? liveCriticalStock - snapshotCriticalStock : null,
+  };
 };
 
 const STORE_CITY = 'İzmir';
@@ -951,7 +1265,7 @@ const buildDeterministicTimeline = ({ orderId, approvedAt, timelineAnchorAt = ap
 };
 
 const ensureOrderAutoTimeline = (order = {}) => {
-  const currentStatus = String(order.status || '').trim();
+  const currentStatus = normalizeLegacyOrderStatus(order.status);
   if (PRE_APPROVAL_MANUAL_STATUSES.has(currentStatus) && !hasApprovedInHistory(order) && currentStatus !== 'approved') {
     return { order, changed: false };
   }
@@ -980,7 +1294,7 @@ const ensureOrderAutoTimeline = (order = {}) => {
 };
 
 export const getOrderCurrentStatus = (order, now = new Date()) => {
-  const current = String(order?.status || '').trim();
+  const current = normalizeLegacyOrderStatus(order?.status);
   if (!current) return 'submitted_for_approval';
   if (TERMINAL_STATUSES.has(current) || PRE_APPROVAL_MANUAL_STATUSES.has(current)) {
     return current;
@@ -1107,6 +1421,8 @@ const enrichSuggestion = (suggestion, { productMap, supplierMap, stockMap }) => 
   const reasonTags = Array.isArray(suggestion.reasonTags) ? suggestion.reasonTags : [];
   const reasonDetails = Array.isArray(suggestion.reasonDetails) ? suggestion.reasonDetails : [];
 
+  const freshness = buildSuggestionFreshness({ suggestion, product, stock, supplier });
+
   return {
     ...suggestion,
     productName: product?.name || '-',
@@ -1145,6 +1461,10 @@ const enrichSuggestion = (suggestion, { productMap, supplierMap, stockMap }) => 
     unitsPerCase: Number(suggestion.unitsPerCase || product?.unitsPerCase || 1),
     unitsPerPallet: Number(suggestion.unitsPerPallet || product?.unitsPerPallet || 1),
     statusLabel: SUGGESTION_STATUS_LABELS[suggestion.status] || suggestion.status,
+    calculatedAt: freshness.calculatedAt,
+    dataFreshness: freshness,
+    isStale: freshness.isStale,
+    staleReasons: freshness.reasons,
   };
 };
 
@@ -1158,8 +1478,8 @@ const enrichOrder = (order, { supplierMap, itemsByOrderId, userMap }) => {
     supplierName: supplier?.name || '-',
     itemCount: orderItems.length,
     totalItemQty: orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
-    statusLabel: ORDER_STATUS_LABELS[order.status] || order.status,
-    deliveryStatus: ORDER_STATUS_LABELS[order.status] || order.status,
+    statusLabel: getPurchaseOrderStatusLabel(order.status),
+    deliveryStatus: getPurchaseOrderStatusLabel(order.status),
     createdByName: createdByUser?.name || null,
   };
 };
@@ -1217,33 +1537,154 @@ const buildProductSupplierStockMaps = async () => {
   };
 };
 
-const createStockInMovement = async ({ product, qty, userName, userId, referenceNo }) => {
-  const stock = await stockRepo.findByProductId(product.id);
-  const prevWarehouse = stock?.warehouseQuantity || 0;
-  const prevShelf = stock?.shelfQuantity || 0;
-  const nextWarehouse = prevWarehouse + qty;
-  await stockRepo.upsert(product.id, { warehouseQuantity: nextWarehouse, shelfQuantity: prevShelf });
+const getObjectPayload = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
-  await movementRepo.create({
+const buildStockEntryOperationKey = (order = {}) => `purchase-stock-entry:${order.id || order.orderNumber || 'unknown'}`;
+
+const buildStockEntryLineKey = ({ operationKey, item, product, qty }) =>
+  `${operationKey}:${item?.id || 'line'}:${product?.id || item?.productId || 'product'}:${Number(qty || 0)}`;
+
+const getStockEntryPayload = (order = {}) => getObjectPayload(getObjectPayload(order.payload).stockEntry);
+
+const isOrderStockEntryBooked = (order = {}) => Boolean(
+  order.stockBookedAt
+    || order.stockEntryCompleted === true
+    || order.stockEntryCompletedAt
+    || getStockEntryPayload(order).bookedAt,
+);
+
+const findExistingPurchaseStockMovement = async ({ referenceNo, operationLineKey, orderId, productId }) => {
+  const rows = await movementRepo.getAll();
+  return rows.find((row) => {
+    const payload = getObjectPayload(row.payload);
+    if (operationLineKey && payload.operationLineKey === operationLineKey) return true;
+    if (operationLineKey && payload.operationKey) return false;
+    if (orderId && payload.orderId === orderId && productId && row.productId === productId && row.reasonCode === 'product_purchase') {
+      return true;
+    }
+    return referenceNo
+      && row.referenceNo === referenceNo
+      && productId
+      && row.productId === productId
+      && row.reasonCode === 'product_purchase';
+  }) || null;
+};
+
+const findExistingWarehouseReceiptMovement = async ({ operationLineKey, orderId, productId }) => {
+  const rows = await warehouseService.listMovements({ type: 'MAL_KABUL', productId });
+  return rows.find((row) => {
+    const payload = getObjectPayload(row.payload);
+    if (operationLineKey && payload.operationLineKey === operationLineKey) return true;
+    if (operationLineKey && payload.operationKey) return false;
+    return orderId && payload.orderId === orderId && productId && row.productId === productId;
+  }) || null;
+};
+
+const resolveReceiptLocationCode = async ({ order, item, product }) => {
+  const itemPayload = getObjectPayload(item?.payload);
+  const explicit = [
+    itemPayload.locationCode,
+    itemPayload.warehouseLocationCode,
+    itemPayload.receiptLocationCode,
+    getObjectPayload(order?.payload).receiptLocationCode,
+    product?.defaultWarehouseLocationCode,
+    product?.warehouseLocationCode,
+  ].map((value) => String(value || '').trim()).find(Boolean);
+  if (explicit) return explicit;
+
+  const locations = await warehouseService.listLocations({
+    productId: product.id,
+    suggestMode: 'nearest',
+    includeShelfDetails: false,
+  });
+  return locations?.suggestedLocation?.locationCode || '';
+};
+
+const getReceiptBatchFields = (item = {}) => {
+  const payload = getObjectPayload(item.payload);
+  return {
+    batchNo: String(item.batchNo || payload.batchNo || payload.lotNo || payload.batch?.batchNo || '').trim(),
+    skt: String(item.skt || item.expiryDate || payload.skt || payload.expiryDate || payload.batch?.skt || '').trim(),
+  };
+};
+
+const createStockInMovement = async ({
+  product,
+  qty,
+  userName,
+  userId,
+  referenceNo,
+  supplierId = null,
+  orderId = null,
+  orderItemId = null,
+  batchNo = '',
+  skt = '',
+  locationCode = 'depo',
+  operationKey = '',
+  operationLineKey = '',
+  stockEntryMode = AUTO_STOCK_ENTRY_MODE,
+  applyStockDelta = true,
+  warehouseMovement = null,
+  fallbackReason = '',
+}) => {
+  const quantity = Math.max(0, Number(qty || 0));
+  if (!product || !quantity) return null;
+
+  const existing = await findExistingPurchaseStockMovement({
+    referenceNo,
+    operationLineKey,
+    orderId,
+    productId: product.id,
+  });
+  if (existing) return existing;
+
+  const stock = await stockRepo.findByProductId(product.id);
+  const observedWarehouse = stock?.warehouseQuantity || 0;
+  const prevWarehouse = applyStockDelta ? observedWarehouse : Math.max(0, observedWarehouse - quantity);
+  const prevShelf = stock?.shelfQuantity || 0;
+  const nextWarehouse = applyStockDelta ? prevWarehouse + quantity : observedWarehouse;
+  if (applyStockDelta) {
+    await stockRepo.upsert(product.id, { warehouseQuantity: nextWarehouse, shelfQuantity: prevShelf });
+  }
+
+  const movement = {
     id: uuidv4(),
     productId: product.id,
+    supplierId,
     productName: product.name,
     sku: product.sku,
     type: 'IN',
-    qty,
+    qty: quantity,
     previousQuantity: prevWarehouse,
     nextQuantity: nextWarehouse,
     previousTotalQuantity: prevWarehouse + prevShelf,
     nextTotalQuantity: nextWarehouse + prevShelf,
-    location: 'depo',
+    location: locationCode || 'depo',
     reasonCode: 'product_purchase',
     reasonLabel: 'Ürün Satın Alımı',
     note: `Satın alma teslimatı - ${referenceNo}`,
     referenceNo,
     userId,
     userName,
+    batchNo: batchNo || null,
+    skt: skt || null,
+    payload: {
+      operationKey,
+      operationLineKey,
+      orderId,
+      orderItemId,
+      stockEntryMode,
+      warehouseMovementId: warehouseMovement?.id || null,
+      warehouseLocationCode: warehouseMovement?.locationCode || null,
+      stockDeltaAppliedBy: applyStockDelta ? 'stock_movement' : 'warehouse_movement',
+      fallbackReason: fallbackReason || null,
+    },
     createdAt: new Date().toISOString(),
-  });
+    updatedAt: new Date().toISOString(),
+  };
+
+  await movementRepo.create(movement);
+  return movement;
 };
 
 const getOrderItemsWithProducts = async (orderId) => {
@@ -1262,6 +1703,142 @@ const getOrderItemsWithProducts = async (orderId) => {
     }));
 
   return { orderItems, productMap };
+};
+
+const bookPurchaseOrderStockEntry = async ({
+  order,
+  actorUserId,
+  timestampIso,
+  stockEntryMode = AUTO_STOCK_ENTRY_MODE,
+}) => {
+  if (isOrderStockEntryBooked(order)) {
+    return {
+      order,
+      skipped: true,
+      reason: 'already_booked',
+      stockMovements: [],
+      warehouseMovements: [],
+      fallbackLines: [],
+    };
+  }
+
+  const operationKey = buildStockEntryOperationKey(order);
+  const [{ orderItems, productMap }, actorName] = await Promise.all([
+    getOrderItemsWithProducts(order.id),
+    resolveActorName(actorUserId),
+  ]);
+
+  const stockMovements = [];
+  const warehouseMovements = [];
+  const fallbackLines = [];
+  const skippedLines = [];
+
+  for (const item of orderItems) {
+    const product = productMap.get(item.productId);
+    const qty = Math.max(0, Number(item.quantity || 0));
+    if (!product || !qty) continue;
+
+    const operationLineKey = buildStockEntryLineKey({ operationKey, item, product, qty });
+    const { batchNo, skt } = getReceiptBatchFields(item);
+    let warehouseMovement = await findExistingWarehouseReceiptMovement({
+      operationLineKey,
+      orderId: order.id,
+      productId: product.id,
+    });
+    let fallbackReason = '';
+    let locationCode = warehouseMovement?.locationCode || '';
+
+    if (!warehouseMovement) {
+      try {
+        locationCode = await resolveReceiptLocationCode({ order, item, product });
+        if (!locationCode) throw new AppError(409, 'Uygun boş depo lokasyonu bulunamadı');
+        const result = await warehouseService.createMovement({
+          movementType: 'MAL_KABUL',
+          productId: product.id,
+          supplierId: order.supplierId,
+          locationCode,
+          batchNo,
+          skt,
+          qty,
+          description: `Satın alma mal kabul - ${order.orderNumber}`,
+          payload: {
+            operationKey,
+            operationLineKey,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            orderItemId: item.id,
+            source: 'procurement_goods_receipt',
+            stockEntryMode,
+          },
+        }, { id: actorUserId, name: actorName });
+        warehouseMovement = result.movement;
+        warehouseMovements.push(warehouseMovement);
+      } catch (error) {
+        fallbackReason = error?.message || 'warehouse_receipt_failed';
+        fallbackLines.push({
+          operationLineKey,
+          productId: product.id,
+          qty,
+          reason: fallbackReason,
+        });
+      }
+    } else {
+      skippedLines.push({ operationLineKey, productId: product.id, reason: 'warehouse_movement_exists' });
+    }
+
+    const stockMovement = await createStockInMovement({
+      product,
+      qty,
+      userName: actorName,
+      userId: actorUserId,
+      referenceNo: order.orderNumber,
+      supplierId: order.supplierId,
+      orderId: order.id,
+      orderItemId: item.id,
+      batchNo,
+      skt,
+      locationCode: locationCode || 'depo',
+      operationKey,
+      operationLineKey,
+      stockEntryMode,
+      applyStockDelta: !warehouseMovement,
+      warehouseMovement,
+      fallbackReason,
+    });
+    if (stockMovement) stockMovements.push(stockMovement);
+  }
+
+  const payload = getObjectPayload(order.payload);
+  const stockEntry = {
+    ...getStockEntryPayload(order),
+    operationKey,
+    mode: stockEntryMode,
+    bookedAt: timestampIso,
+    bookedBy: actorUserId || null,
+    stockMovementIds: stockMovements.map((row) => row.id).filter(Boolean),
+    warehouseMovementIds: warehouseMovements.map((row) => row.id).filter(Boolean),
+    fallbackLines,
+    skippedLines,
+  };
+
+  return {
+    order: {
+      ...order,
+      stockBookedAt: order.stockBookedAt || timestampIso,
+      stockEntryCompleted: true,
+      stockEntryCompletedAt: order.stockEntryCompletedAt || timestampIso,
+      payload: {
+        ...payload,
+        stockEntry,
+      },
+      updatedAt: timestampIso,
+    },
+    skipped: false,
+    stockMovements,
+    warehouseMovements,
+    fallbackLines,
+    skippedLines,
+  };
 };
 
 const mapOrderStatusRow = (row) => ({
@@ -1334,8 +1911,8 @@ const mapPurchaseOrderRow = (row) => {
     supplierName: row.supplier?.name || '-',
     itemCount: row._count?.items ?? items.length,
     totalItemQty: items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
-    statusLabel: ORDER_STATUS_LABELS[order.status] || order.status,
-    deliveryStatus: ORDER_STATUS_LABELS[order.status] || order.status,
+    statusLabel: getPurchaseOrderStatusLabel(order.status),
+    deliveryStatus: getPurchaseOrderStatusLabel(order.status),
     createdByName: row.creator?.name || null,
   };
 };
@@ -1560,6 +2137,21 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
   if (!row.product || row.product.isActive === false) throw new AppError(400, 'Pasif veya eksik ürün için sipariş oluşturulamaz');
 
   const supplierProduct = mapSupplierProductRow(row);
+  const linkedSuggestionId = String(payload.purchaseSuggestionId || payload.procurementContext?.purchaseSuggestionId || '').trim();
+  const linkedSuggestion = linkedSuggestionId ? await purchaseSuggestionRepo.findById(linkedSuggestionId) : null;
+  if (linkedSuggestionId && !linkedSuggestion) {
+    throw createNotFoundError('Bağlanacak sipariş önerisi bulunamadı');
+  }
+  if (linkedSuggestion && linkedSuggestion.status !== 'pending') {
+    throw new AppError(400, 'Bu öneri artık sipariş oluşturma akışına bağlanamaz');
+  }
+  if (linkedSuggestion && String(linkedSuggestion.productId || '') !== String(row.productId || '')) {
+    throw new AppError(400, 'Öneri ürünü ile sipariş ürünü eşleşmiyor');
+  }
+  if (linkedSuggestion && linkedSuggestion.supplierId && String(linkedSuggestion.supplierId) !== String(row.supplierId || '')) {
+    throw new AppError(400, 'Öneri tedarikçisi ile sipariş tedarikçisi eşleşmiyor');
+  }
+
   const product = {
     ...row.product,
     unitsPerCase: Number(row.product.unitsPerCase || 1),
@@ -1620,6 +2212,11 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
   const orderNumber = await buildOrderNumber(existingOrderNumbers);
   const procurementContext = {
     ...(payload.procurementContext || {}),
+    ...(linkedSuggestion ? {
+      source: 'purchase_suggestion_compose',
+      purchaseSuggestionId: linkedSuggestion.id,
+      purchaseSuggestionMode: payload.procurementContext?.purchaseSuggestionMode || payload.purchaseSuggestionMode || 'compose',
+    } : {}),
     orderingSnapshot: {
       orderedQuantity: requestedQty,
       orderedUnit: requestedUnit,
@@ -1644,7 +2241,7 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
         id: orderId,
         orderNumber,
         supplierId: row.supplierId,
-        source: 'manual_supplier_product',
+        source: linkedSuggestion ? 'purchase_suggestion_compose' : 'manual_supplier_product',
         status,
         currentStatus: status,
         currency: row.currency || 'TRY',
@@ -1653,7 +2250,7 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
         shippingFee,
         grandTotal,
         totalAmount: grandTotal,
-        deliveryStatus: ORDER_STATUS_LABELS[status],
+        deliveryStatus: getPurchaseOrderStatusLabel(status),
         goodsReceiptCompleted: false,
         stockEntryCompleted: false,
         archived: false,
@@ -1665,6 +2262,10 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
         estimatedDeliveryDate: getEstimatedDeliveryDate(Number(supplierProduct.leadTimeDays || 3)),
         payload: {
           procurementContext,
+          ...(linkedSuggestion ? {
+            source: 'purchase_suggestion_compose',
+            purchaseSuggestionId: linkedSuggestion.id,
+          } : {}),
           note: payload.note || '',
           deliveryDateMode: payload.deliveryDateMode || 'estimated',
           requestedDeliveryDate: payload.deliveryDate || null,
@@ -1688,6 +2289,10 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
         taxAmount,
         payload: {
           supplierProductId,
+          ...(linkedSuggestion ? {
+            source: 'purchase_suggestion_compose',
+            purchaseSuggestionId: linkedSuggestion.id,
+          } : {}),
           orderedQuantity: requestedQty,
           orderedUnit: requestedUnit,
           baseQuantity: requestedInBase,
@@ -1715,7 +2320,24 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
       activityLogs: { select: { id: true, type: true, status: true, at: true, by: true, note: true, payload: true } },
     },
   });
-  return mapPurchaseOrderRow(created);
+  const mappedCreated = mapPurchaseOrderRow(created);
+  if (linkedSuggestion) {
+    await purchaseSuggestionRepo.updateById(linkedSuggestion.id, {
+      ...linkedSuggestion,
+      status: 'approved',
+      approvedBy: userId,
+      approvedAt: now,
+      linkedOrderId: mappedCreated.id || orderId,
+      reasonTags: Array.from(new Set([...(linkedSuggestion.reasonTags || []), 'compose_order_created'])),
+      reasonDetails: [
+        ...(linkedSuggestion.reasonDetails || []),
+        `Sipariş oluşturma ekranından ${mappedCreated.orderNumber || orderId} numaralı siparişe bağlandı.`,
+      ],
+      updatedAt: now,
+    });
+  }
+  await notifyPurchaseOrderLifecycle({ order: mappedCreated, status, actorUserId: userId });
+  return mappedCreated;
 };
 
 const buildSupplierProductWhere = (query = {}) => {
@@ -1880,10 +2502,16 @@ const isTechnicalActivityEntry = (entry = {}) => {
 const buildActivityDedupKey = (entry = {}) => [
   normalizeActivityType(entry.type),
   normalizeAuditKeyPart(normalizeLegacyOrderStatus(entry.status)),
+  normalizeIsoTimestamp(entry.at),
+  normalizeAuditKeyPart(entry.by),
+  normalizeAuditKeyPart(entry.note),
 ].join('|');
 
 const buildStatusHistoryDedupKey = (entry = {}) => [
   normalizeAuditKeyPart(normalizeLegacyOrderStatus(entry.status)),
+  normalizeIsoTimestamp(entry.at),
+  normalizeAuditKeyPart(entry.by),
+  normalizeAuditKeyPart(entry.note),
 ].join('|');
 
 const dedupeRowsByKey = (rows = [], keyBuilder) => {
@@ -1903,9 +2531,7 @@ const dedupeRowsByKey = (rows = [], keyBuilder) => {
 
 const ensureOrderStatusMirrorFields = (order = {}, status) => ({
   ...order,
-  status,
-  currentStatus: status,
-  current_status: status,
+  ...buildPurchaseOrderStatusMirrors(status),
 });
 
 const appendOrderActivityIfMissing = (order = {}, entry = {}) => {
@@ -1970,7 +2596,7 @@ const appendStatusHistoryIfMissing = (order = {}, entry = {}) => {
 const syncOrderFlowFlags = (order = {}, nextStatus, transitionIso) => {
   const base = {
     ...order,
-    deliveryStatus: ORDER_STATUS_LABELS[nextStatus] || nextStatus,
+    deliveryStatus: getPurchaseOrderStatusLabel(nextStatus),
     archived: nextStatus === 'archived',
     archivedAt: nextStatus === 'archived' ? (order.archivedAt || transitionIso) : null,
   };
@@ -2018,12 +2644,7 @@ const syncOrderFlowFlags = (order = {}, nextStatus, transitionIso) => {
 
 const normalizeStockEntryMode = (value) => (String(value || '').trim().toLowerCase() === MANUAL_STOCK_ENTRY_MODE ? MANUAL_STOCK_ENTRY_MODE : AUTO_STOCK_ENTRY_MODE);
 
-const normalizeLegacyOrderStatus = (value) => {
-  const status = String(value || '').trim();
-  if (!status) return 'submitted_for_approval';
-  if (status === 'draft') return 'submitted_for_approval';
-  return status;
-};
+const normalizeLegacyOrderStatus = (value) => normalizePurchaseOrderStatus(value);
 
 const isManualStockEntryPendingOrder = (order = {}) => {
   const status = String(order.status || '').trim();
@@ -2157,12 +2778,16 @@ const applyOrderStatusTransition = async ({
   timestampIso,
   eventType = 'status_change',
 }) => {
-  const currentStatus = String(order?.status || '').trim();
+  const currentStatus = normalizeLegacyOrderStatus(order?.status);
+  nextStatus = normalizeLegacyOrderStatus(nextStatus);
   if (!order || !nextStatus || currentStatus === nextStatus) {
     return order;
   }
 
   validateOrderStatus(nextStatus);
+  if (!canTransitionPurchaseOrderStatus(currentStatus, nextStatus)) {
+    throw new AppError(400, `Geçersiz sipariş durum geçişi: ${currentStatus} -> ${nextStatus}`);
+  }
 
   const transitionAt = parseSafeDate(timestampIso) || new Date();
   const transitionIso = transitionAt.toISOString();
@@ -2234,7 +2859,7 @@ const applyOrderStatusTransition = async ({
 };
 
 const applyOrderAutoProgression = async (order, { persist = true } = {}) => {
-  const initialStatus = String(order?.status || '').trim();
+  const initialStatus = normalizeLegacyOrderStatus(order?.status);
   if (!order || TERMINAL_STATUSES.has(initialStatus) || PRE_APPROVAL_MANUAL_STATUSES.has(initialStatus)) {
     return order;
   }
@@ -2255,7 +2880,7 @@ const applyOrderAutoProgression = async (order, { persist = true } = {}) => {
   }
 
   const targetStatus = getOrderCurrentStatus(workingOrder, new Date());
-  const currentStatus = String(workingOrder.status || '').trim();
+  const currentStatus = normalizeLegacyOrderStatus(workingOrder.status);
 
   if (targetStatus !== currentStatus) {
     if (targetStatus === 'cancelled') {
@@ -2288,7 +2913,7 @@ const applyOrderAutoProgression = async (order, { persist = true } = {}) => {
           changed = true;
         }
 
-        if (targetStatus === 'delivered' && String(workingOrder.status || '') === 'delivered') {
+        if (targetStatus === 'delivered' && normalizeLegacyOrderStatus(workingOrder.status) === 'delivered') {
           const at = new Date().toISOString();
           workingOrder = await applyOrderStatusTransition({
             order: workingOrder,
@@ -2306,12 +2931,49 @@ const applyOrderAutoProgression = async (order, { persist = true } = {}) => {
 
   if (changed && persist) {
     await purchaseOrderRepo.updateById(workingOrder.id, workingOrder);
+    const notificationStatuses = getNewLifecycleNotificationStatuses(order, workingOrder);
+    for (const notificationStatus of notificationStatuses) {
+      await notifyPurchaseOrderLifecycle({ order: workingOrder, status: notificationStatus, actorUserId: SYSTEM_AUTO_USER_ID });
+    }
   }
 
   return workingOrder;
 };
 
+const progressDuePurchaseOrders = async ({ limit = 250 } = {}) => {
+  const rows = await purchaseOrderRepo.getAll();
+  const candidates = (Array.isArray(rows) ? rows : [])
+    .map((row) => prepareOrderForRead(row))
+    .filter((row) => AUTO_MANAGED_STATUSES.has(normalizeLegacyOrderStatus(row.status)))
+    .slice(0, Math.max(1, Number(limit) || 250));
+
+  let progressedCount = 0;
+  const changedOrderIds = [];
+
+  for (const order of candidates) {
+    const beforeStatus = normalizeLegacyOrderStatus(order.status);
+    const beforeHistoryCount = Array.isArray(order.statusHistory) ? order.statusHistory.length : 0;
+    const updated = await applyOrderAutoProgression(order, { persist: true });
+    const afterStatus = normalizeLegacyOrderStatus(updated?.status);
+    const afterHistoryCount = Array.isArray(updated?.statusHistory) ? updated.statusHistory.length : 0;
+    if (beforeStatus !== afterStatus || beforeHistoryCount !== afterHistoryCount) {
+      progressedCount += 1;
+      changedOrderIds.push(order.id);
+    }
+  }
+
+  return {
+    checkedCount: candidates.length,
+    progressedCount,
+    changedOrderIds,
+  };
+};
+
 export const procurementService = {
+  async progressDuePurchaseOrders(options = {}) {
+    return progressDuePurchaseOrders(options);
+  },
+
   async listLogisticsTariffs(query = {}) {
     const settings = await settingsRepo.getSettings();
     const rows = logisticsTariffService.normalizeTariffs(settings.logisticsTariffs || []);
@@ -2653,6 +3315,8 @@ export const procurementService = {
       sales,
       settings,
       adminUsers,
+      purchaseOrders,
+      purchaseOrderItems,
     ] = await Promise.all([
       buildProductSupplierStockMaps(),
       supplierProductRepo.getAll(),
@@ -2660,6 +3324,8 @@ export const procurementService = {
       salesRepo.getAll(),
       settingsRepo.getSettings(),
       getAdmins(),
+      purchaseOrderRepo.getAll(),
+      purchaseOrderItemRepo.getAll(),
     ]);
 
     const supplierMap = new Map(suppliers.map((s) => [s.id, s]));
@@ -2669,8 +3335,11 @@ export const procurementService = {
     const salesSignalsMap = buildSalesSignalsMap(sales, now);
     const activeCampaigns = resolveActiveCampaigns(settings);
     const automation = getAutomationSettings(settings);
+    const inboundSupplyMap = buildInboundSupplyMap({ orders: purchaseOrders, orderItems: purchaseOrderItems });
+    const dryRun = options.dryRun === true;
 
     const generated = [];
+    const skipped = [];
 
     for (const product of products) {
       if (product.isActive === false) continue;
@@ -2684,18 +3353,13 @@ export const procurementService = {
       const criticalStock = Number(product.criticalStock || 0);
 
       const productOptions = activeSupplierProducts
-        .filter((row) => row.productId === product.id)
-        .sort((a, b) => {
-          if (Boolean(b.isDefault) !== Boolean(a.isDefault)) {
-            return Number(Boolean(b.isDefault)) - Number(Boolean(a.isDefault));
-          }
-          return Number(a.purchasePrice || 0) - Number(b.purchasePrice || 0);
-        });
+        .filter((row) => row.productId === product.id);
 
       if (!productOptions.length) continue;
 
-      const selected = productOptions[0];
-      const leadTimeDays = getLeadDays(selected);
+      let selectedMeta = selectSupplierProductForSuggestion({ productOptions, product, needQty: 0 });
+      let selected = selectedMeta.row;
+      let leadTimeDays = selectedMeta.leadTimeDays;
 
       const signals = salesSignalsMap.get(product.id) || getDemandSignals({
         sold7: 0,
@@ -2722,7 +3386,8 @@ export const procurementService = {
           ? 0.88
           : 1;
 
-      const demandDaily = Math.max(0, Number((signals.weighted * trendMultiplier * campaignContext.demandMultiplier).toFixed(3)));
+      const rawDemandDaily = signals.weighted * trendMultiplier * campaignContext.demandMultiplier;
+      const demandDaily = Math.max(0, Number((rawDemandDaily * (campaignContext.isWeakCampaignSignal ? 0.55 : 1)).toFixed(3)));
 
       const baselineCoverageDays = normalizedOptions.coverageDays > 0
         ? normalizedOptions.coverageDays
@@ -2742,9 +3407,22 @@ export const procurementService = {
         Math.ceil(demandDaily * coverageDays)
       );
 
-      const needQty = Math.max(0, targetStock - currentStock);
-      const daysToStockout = demandDaily > 0 ? Number((currentStock / demandDaily).toFixed(1)) : null;
+      const inbound = inboundSupplyMap.get(product.id) || {
+        productId: product.id,
+        confirmedQty: 0,
+        effectiveQty: 0,
+        nearTermQty: 0,
+        lines: [],
+        statusTotals: {},
+      };
+      const grossNeedQty = Math.max(0, targetStock - currentStock);
+      const needQty = Math.max(0, Math.ceil(targetStock - (currentStock + Number(inbound.effectiveQty || 0))));
+      selectedMeta = selectSupplierProductForSuggestion({ productOptions, product, needQty });
+      selected = selectedMeta.row;
+      leadTimeDays = selectedMeta.leadTimeDays;
+      const daysToStockout = demandDaily > 0 ? Number(((currentStock + Number(inbound.nearTermQty || 0)) / demandDaily).toFixed(1)) : null;
       const riskLevel = getRiskLevel({ currentStock, criticalStock, daysToStockout, leadTimeDays });
+      const existingPending = suggestions.find((row) => row.productId === product.id && row.status === 'pending');
 
       if (!shouldCreateSuggestionByMode({
         options: normalizedOptions,
@@ -2755,7 +3433,41 @@ export const procurementService = {
         needQty,
         currentStock,
         criticalStock,
+        inbound,
+        targetStock,
       })) {
+        if (existingPending && !dryRun) {
+          await purchaseSuggestionRepo.updateById(existingPending.id, {
+            ...existingPending,
+            status: 'stale',
+            reason: Number(inbound.effectiveQty || 0) > 0
+              ? 'Açık/yoldaki siparişler ihtiyacı karşıladığı için öneri pasifleştirildi.'
+              : 'Yeni hesapta net sipariş ihtiyacı kalmadı.',
+            reasonText: 'Yeni procurement-aware hesapta net sipariş ihtiyacı kalmadı.',
+            reasonTags: Number(inbound.effectiveQty || 0) > 0 ? ['inbound_covered'] : ['net_need_cleared'],
+            reasonDetails: Number(inbound.effectiveQty || 0) > 0
+              ? [`Efektif inbound miktar: ${Number(inbound.effectiveQty || 0).toFixed(1)} adet.`]
+              : ['Mevcut stok ve talep sinyalleri yeni sipariş gerektirmiyor.'],
+            calculatedAt: nowIso,
+            calculationVersion: PURCHASE_SUGGESTION_CALCULATION_VERSION,
+            inboundConfirmedQty: inbound.confirmedQty,
+            inboundEffectiveQty: inbound.effectiveQty,
+            inboundNearTermQty: inbound.nearTermQty,
+            inboundStatusTotals: inbound.statusTotals,
+            updatedAt: nowIso,
+          });
+        }
+        skipped.push({
+          productId: product.id,
+          productName: product.name,
+          currentStock,
+          criticalStock,
+          targetStock,
+          grossNeedQty,
+          netNeedQty: needQty,
+          inboundEffectiveQty: inbound.effectiveQty,
+          reason: Number(inbound.effectiveQty || 0) > 0 ? 'inbound_covered' : 'no_net_need',
+        });
         continue;
       }
 
@@ -2778,6 +3490,8 @@ export const procurementService = {
       });
 
       const suggestedQty = Math.max(1, rounding.suggestedQty);
+      const suggestedCases = unitsPerCase > 1 ? Math.ceil(suggestedQty / unitsPerCase) : null;
+      const palletQty = unitsPerPallet > 1 ? Number((suggestedQty / unitsPerPallet).toFixed(3)) : null;
       const unitPrice = resolvePricePerBaseUnit({ supplierProduct: selected, unitInfo });
       const totalPrice = Number((suggestedQty * unitPrice).toFixed(2));
       const reasonModel = getSuggestionReasonModel({
@@ -2787,8 +3501,12 @@ export const procurementService = {
         daysToStockout,
         leadTimeDays,
         campaign: campaignContext.campaign,
+        campaignContext,
         roundingUnit: rounding.roundingUnit,
         moqApplied: suggestedQty === minimumOrder.minimumOrderBaseQty,
+        inbound,
+        netNeedQty: needQty,
+        selectedSupplierMeta: selectedMeta,
       });
 
       const payload = {
@@ -2799,6 +3517,13 @@ export const procurementService = {
         criticalStock,
         reorderPoint,
         targetStock,
+        grossNeedQty,
+        netNeedQty: needQty,
+        inboundConfirmedQty: inbound.confirmedQty,
+        inboundEffectiveQty: inbound.effectiveQty,
+        inboundNearTermQty: inbound.nearTermQty,
+        inboundStatusTotals: inbound.statusTotals,
+        inboundLines: inbound.lines.slice(0, 20),
         suggestedQty,
         roundedFromQty: rounding.roundedFromQty,
         roundingUnit: rounding.roundingUnit,
@@ -2812,6 +3537,8 @@ export const procurementService = {
         riskLevel,
         daysToStockout,
         leadTimeDays,
+        calculatedAt: nowIso,
+        calculationVersion: PURCHASE_SUGGESTION_CALCULATION_VERSION,
         sold7: signals.sold7,
         sold14: signals.sold14,
         sold30: signals.sold30,
@@ -2833,17 +3560,22 @@ export const procurementService = {
         orderUnit: normalizeUnitName(selected.defaultOrderUnit || selected.minOrderUnit || selected.priceUnit || product.unit || 'adet'),
         unitsPerCase,
         unitsPerPallet,
+        suggestedCases,
+        palletQty,
         demandCoverageDays: coverageDays,
+        generatedBy: actorUser?.id || 'system',
+        generationOptions: normalizedOptions,
+        supplierSelectionScore: selectedMeta.score,
+        supplierSelectionReason: selectedMeta.supplierSelectionReason,
       };
 
-      const existingPending = suggestions.find((row) => row.productId === product.id && row.status === 'pending');
       if (existingPending) {
         const updated = {
           ...existingPending,
           ...payload,
           updatedAt: nowIso,
         };
-        await purchaseSuggestionRepo.updateById(existingPending.id, updated);
+        if (!dryRun) await purchaseSuggestionRepo.updateById(existingPending.id, updated);
         generated.push(updated);
       } else {
         const created = {
@@ -2852,28 +3584,43 @@ export const procurementService = {
           createdAt: nowIso,
           updatedAt: nowIso,
         };
-        await purchaseSuggestionRepo.create(created);
+        if (!dryRun) await purchaseSuggestionRepo.create(created);
         generated.push(created);
       }
 
       const latestSuggestion = generated[generated.length - 1];
-      await createAutomationTaskIfNeeded({
-        suggestion: latestSuggestion,
-        product,
-        actorUserId: actorUser?.id,
-        automation,
-        adminUsers,
-      });
-      await createCriticalNotificationsIfNeeded({
-        suggestion: latestSuggestion,
-        product,
-        automation,
-        adminUsers,
-      });
+      if (!dryRun) {
+        await createAutomationTaskIfNeeded({
+          suggestion: latestSuggestion,
+          product,
+          actorUserId: actorUser?.id,
+          automation,
+          adminUsers,
+        });
+        await createCriticalNotificationsIfNeeded({
+          suggestion: latestSuggestion,
+          product,
+          automation,
+          adminUsers,
+        });
+      }
     }
 
     const maps = await buildProductSupplierStockMaps();
-    return generated.map((row) => enrichSuggestion(row, maps));
+    const items = generated.map((row) => enrichSuggestion(row, maps));
+    if (dryRun) {
+      return {
+        dryRun: true,
+        items,
+        skipped,
+        summary: {
+          generatedCount: items.length,
+          skippedCount: skipped.length,
+          inboundCoveredCount: skipped.filter((row) => row.reason === 'inbound_covered').length,
+        },
+      };
+    }
+    return items;
   },
 
   async listSuggestions(query = {}) {
@@ -3016,7 +3763,7 @@ export const procurementService = {
       warehouseCity: logistics.warehouseCity,
       estimatedDeliveryDays: leadTimeDays,
       estimatedDeliveryDate: getEstimatedDeliveryDate(leadTimeDays),
-      deliveryStatus: ORDER_STATUS_LABELS['submitted_for_approval'],
+      deliveryStatus: getPurchaseOrderStatusLabel('submitted_for_approval'),
       createdAt: now,
       updatedAt: now,
       approvedAt: now,
@@ -3030,6 +3777,14 @@ export const procurementService = {
       archived: false,
       archivedAt: null,
       priority: edited.priority || 'normal',
+      source: 'purchase_suggestion',
+      purchaseSuggestionId: edited.id,
+      payload: {
+        source: 'purchase_suggestion',
+        purchaseSuggestionId: edited.id,
+        suggestionReason: edited.reason,
+        suggestionRiskLevel: edited.riskLevel,
+      },
       activityLog: [
         {
           type: 'created',
@@ -3048,6 +3803,10 @@ export const procurementService = {
       quantity: edited.suggestedQty,
       unitPrice: edited.unitPrice,
       totalPrice: edited.totalPrice,
+      payload: {
+        source: 'purchase_suggestion',
+        purchaseSuggestionId: edited.id,
+      },
       createdAt: now,
       updatedAt: now,
     };
@@ -3076,7 +3835,9 @@ export const procurementService = {
       itemsByOrderId.get(row.orderId).push(row);
     }
 
-    return enrichOrder(order, { supplierMap: maps.supplierMap, itemsByOrderId, userMap: maps.userMap });
+    const enrichedOrder = enrichOrder(order, { supplierMap: maps.supplierMap, itemsByOrderId, userMap: maps.userMap });
+    await notifyPurchaseOrderLifecycle({ order: enrichedOrder, status: 'submitted_for_approval', actorUserId: userId });
+    return enrichedOrder;
   },
 
   async rejectSuggestion(id, userId) {
@@ -3103,18 +3864,20 @@ export const procurementService = {
       return createOrderFromSupplierProductPostgres(payload, userId);
     }
 
-    const supplierProductId = String(payload.supplierProductId || '').trim();
-    if (!supplierProductId) {
-      throw new AppError(400, 'supplierProductId zorunludur');
-    }
+  const supplierProductId = String(payload.supplierProductId || '').trim();
+  if (!supplierProductId) {
+    throw new AppError(400, 'supplierProductId zorunludur');
+  }
+  const linkedSuggestionId = String(payload.purchaseSuggestionId || payload.procurementContext?.purchaseSuggestionId || '').trim();
 
-    const requestedQty = ensurePositiveNumber(payload.quantity, 'quantity');
-    const requestedUnitRaw = normalizeUnitName(payload.orderUnit || payload.unit || '');
+  const requestedQty = ensurePositiveNumber(payload.quantity, 'quantity');
+  const requestedUnitRaw = normalizeUnitName(payload.orderUnit || payload.unit || '');
 
-    const [supplierProduct, maps, user] = await Promise.all([
+    const [supplierProduct, maps, user, linkedSuggestion] = await Promise.all([
       supplierProductRepo.findById(supplierProductId),
       buildMaps(),
       userRepo.findById(userId),
+      linkedSuggestionId ? purchaseSuggestionRepo.findById(linkedSuggestionId) : Promise.resolve(null),
     ]);
 
     if (!supplierProduct) {
@@ -3126,6 +3889,16 @@ export const procurementService = {
 
     if (!product) throw createNotFoundError('Ürün bulunamadı');
     if (!supplier) throw createNotFoundError('Tedarikçi bulunamadı');
+    if (linkedSuggestionId && !linkedSuggestion) throw createNotFoundError('Bağlanacak sipariş önerisi bulunamadı');
+    if (linkedSuggestion && linkedSuggestion.status !== 'pending') {
+      throw new AppError(400, 'Bu öneri artık sipariş oluşturma akışına bağlanamaz');
+    }
+    if (linkedSuggestion && String(linkedSuggestion.productId || '') !== String(supplierProduct.productId || '')) {
+      throw new AppError(400, 'Öneri ürünü ile sipariş ürünü eşleşmiyor');
+    }
+    if (linkedSuggestion && linkedSuggestion.supplierId && String(linkedSuggestion.supplierId) !== String(supplierProduct.supplierId || '')) {
+      throw new AppError(400, 'Öneri tedarikçisi ile sipariş tedarikçisi eşleşmiyor');
+    }
 
     if (supplierProduct.isActive === false || supplier.isActive === false) {
       throw new AppError(400, 'Pasif tedarikçi veya eşleşme için sipariş oluşturulamaz');
@@ -3237,6 +4010,11 @@ export const procurementService = {
   });
 
   const procurementContext = {
+    ...(linkedSuggestion ? {
+      source: 'purchase_suggestion_compose',
+      purchaseSuggestionId: linkedSuggestion.id,
+      purchaseSuggestionMode: payload.procurementContext?.purchaseSuggestionMode || payload.purchaseSuggestionMode || 'compose',
+    } : {}),
     orderReason: payload.procurementContext?.orderReason || payload.orderReason || 'regular_replenishment',
     demandSource: payload.procurementContext?.demandSource || payload.demandSource || 'warehouse',
     demandLevel: payload.procurementContext?.demandLevel || payload.demandLevel || 'medium',
@@ -3322,7 +4100,7 @@ export const procurementService = {
       warehouseCity: logistics.warehouseCity,
       estimatedDeliveryDays: leadTimeDays,
       estimatedDeliveryDate,
-      deliveryStatus: ORDER_STATUS_LABELS[initialStatus],
+      deliveryStatus: getPurchaseOrderStatusLabel(initialStatus),
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -3356,7 +4134,7 @@ export const procurementService = {
       cargoTypeCode: selectedCargoTypeCode || null,
       cargoTypeName: logisticsQuote?.cargoTypeName || null,
       priority: payload.priority || 'normal',
-      source: 'manual_supplier_product',
+      source: linkedSuggestion ? 'purchase_suggestion_compose' : 'manual_supplier_product',
       procurementContext,
       operationalNote: payload.operationalNote || '',
       supplierNote: payload.supplierNote || '',
@@ -3405,6 +4183,10 @@ export const procurementService = {
       unitPrice: Number(pricePerBaseUnit.toFixed(4)),
       totalPrice,
       payload: {
+        ...(linkedSuggestion ? {
+          source: 'purchase_suggestion_compose',
+          purchaseSuggestionId: linkedSuggestion.id,
+        } : {}),
         orderedQuantity: requestedQty,
         orderedUnit: requestedUnit,
         baseQuantity: requestedInBase,
@@ -3420,6 +4202,21 @@ export const procurementService = {
       purchaseOrderRepo.create(order),
       purchaseOrderItemRepo.create(item),
     ]);
+    if (linkedSuggestion) {
+      await purchaseSuggestionRepo.updateById(linkedSuggestion.id, {
+        ...linkedSuggestion,
+        status: 'approved',
+        approvedBy: userId,
+        approvedAt: now,
+        linkedOrderId: order.id,
+        reasonTags: Array.from(new Set([...(linkedSuggestion.reasonTags || []), 'compose_order_created'])),
+        reasonDetails: [
+          ...(linkedSuggestion.reasonDetails || []),
+          `Sipariş oluşturma ekranından ${order.orderNumber || order.id} numaralı siparişe bağlandı.`,
+        ],
+        updatedAt: now,
+      });
+    }
 
     const allItems = await purchaseOrderItemRepo.getAll();
     const itemsByOrderId = new Map();
@@ -3428,7 +4225,9 @@ export const procurementService = {
       itemsByOrderId.get(row.orderId).push(row);
     }
 
-    return enrichOrder(order, { supplierMap: maps.supplierMap, itemsByOrderId });
+    const enrichedOrder = enrichOrder(order, { supplierMap: maps.supplierMap, itemsByOrderId });
+    await notifyPurchaseOrderLifecycle({ order: enrichedOrder, status: 'submitted_for_approval', actorUserId: userId });
+    return enrichedOrder;
   },
 
   async listOrders(query = {}) {
@@ -3483,8 +4282,11 @@ export const procurementService = {
       if (!order) throw createNotFoundError('Satın alma siparişi bulunamadı');
 
       const normalizedOrder = prepareOrderForRead(order);
-      const currentStatus = String(normalizedOrder.status || '').trim();
-      const nextStatus = String(payload.status || '').trim();
+      const currentStatus = normalizeLegacyOrderStatus(normalizedOrder.status);
+      if (!String(payload.status || '').trim()) {
+        throw new AppError(400, 'Sipariş durumu zorunludur');
+      }
+      const nextStatus = normalizeLegacyOrderStatus(payload.status);
       validateOrderStatus(nextStatus);
 
       if (nextStatus === 'goods_receipt_completed') {
@@ -3521,24 +4323,13 @@ export const procurementService = {
         updated = goodsReceiptResult.order;
 
         if (goodsReceiptResult.stockEntryMode === AUTO_STOCK_ENTRY_MODE) {
-          if (!updated.stockBookedAt) {
-            const [{ orderItems, productMap }, actorName] = await Promise.all([
-              getOrderItemsWithProducts(updated.id),
-              resolveActorName(userId),
-            ]);
-
-            for (const item of orderItems) {
-              const product = productMap.get(item.productId);
-              if (!product) continue;
-              await createStockInMovement({
-                product,
-                qty: Number(item.quantity || 0),
-                userName: actorName,
-                userId,
-                referenceNo: updated.orderNumber,
-              });
-            }
-          }
+          const stockEntryResult = await bookPurchaseOrderStockEntry({
+            order: updated,
+            actorUserId: userId,
+            timestampIso: nowIso,
+            stockEntryMode: AUTO_STOCK_ENTRY_MODE,
+          });
+          updated = stockEntryResult.order;
 
           updated = applyAutoStockEntryCompletedState(updated, nowIso);
 
@@ -3561,6 +4352,16 @@ export const procurementService = {
           });
         }
       } else if (nextStatus === 'completed') {
+        if (isManualStockEntryPendingOrder(updated) && !isOrderStockEntryBooked(updated)) {
+          const stockEntryResult = await bookPurchaseOrderStockEntry({
+            order: updated,
+            actorUserId: userId,
+            timestampIso: nowIso,
+            stockEntryMode: MANUAL_STOCK_ENTRY_MODE,
+          });
+          updated = stockEntryResult.order;
+        }
+
         updated = await finalizeManualStockEntryFlow({
           order: updated,
           actorUserId: userId,
@@ -3588,10 +4389,14 @@ export const procurementService = {
           };
         }
 
-        updated = await applyOrderAutoProgression(updated, { persist: false });
+        // Progression after approval is handled by the lifecycle scheduler.
       }
 
       await purchaseOrderRepo.updateById(orderId, updated);
+      const notificationStatuses = getNewLifecycleNotificationStatuses(normalizedOrder, updated);
+      for (const notificationStatus of notificationStatuses) {
+        await notifyPurchaseOrderLifecycle({ order: updated, status: notificationStatus, actorUserId: userId });
+      }
 
       const [maps, allItems] = await Promise.all([buildMaps(), purchaseOrderItemRepo.getAll()]);
       const itemsByOrderId = new Map();
@@ -3615,6 +4420,8 @@ export const __procurementInternals = {
   isManualStockEntryPendingOrder,
   applyManualStockEntryPendingState,
   applyAutoStockEntryCompletedState,
+  bookPurchaseOrderStockEntry,
+  buildStockEntryOperationKey,
   completeGoodsReceiptFlow,
   finalizeManualStockEntryFlow,
 };

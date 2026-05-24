@@ -5,6 +5,8 @@ import { authenticateCustomer } from '../middlewares/customerAuthMiddleware.js';
 const router = Router();
 router.post('/login', customerAuthController.login);
 router.post('/register', customerAuthController.register);
+router.post('/forgot-password', customerAuthController.forgotPassword);
+router.post('/reset-password', customerAuthController.resetPassword);
 router.post('/refresh', customerAuthController.refresh);
 router.get('/catalog', customerAuthController.catalog);
 router.get('/catalog/:id', customerAuthController.catalogDetail);

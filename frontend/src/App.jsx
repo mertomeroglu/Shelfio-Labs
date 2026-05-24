@@ -1,6 +1,7 @@
 ﻿import React, { Component, useEffect } from 'react';
 import { RouterProvider } from 'react-router-dom';
 import { DialogProvider } from './components/ConfirmModal.jsx';
+import CookieConsentProvider from './components/CookieConsent.jsx';
 import { AuthProvider } from './hooks/useAuth.js';
 import { ErrorFallbackView } from './pages/_shared/route-error/RouteError.jsx';
 import { router } from './router/router.jsx';
@@ -8,11 +9,12 @@ import { getStoredUser, isRequestCancellation } from './services/api.js';
 import { settingsService } from './services/settingsService.js';
 import { supportService } from './services/supportService.js';
 
-function buildRuntimeErrorReport(error, source) {
+function buildRuntimeErrorReport(error, source, errorInfo = null) {
 	const storedUser = getStoredUser();
 	return {
 		message: error?.message || 'Component crash',
 		stack: error?.stack || '',
+		componentStack: errorInfo?.componentStack || '',
 		url: typeof window !== 'undefined' ? window.location.href : '',
 		browser: typeof navigator !== 'undefined' ? navigator.userAgent : '',
 		occurredAt: new Date().toISOString(),
@@ -25,6 +27,22 @@ function buildRuntimeErrorReport(error, source) {
 			email: storedUser.email,
 		} : null,
 	};
+}
+
+function sendFrontendDeveloperLog(error, action, extra = {}) {
+	if (isRequestCancellation(error)) return;
+	settingsService.sendDeveloperLog({
+		level: 'error',
+		source: 'frontend',
+		message: error?.message || String(error || 'Runtime error'),
+		action,
+		endpoint: window.location.pathname,
+		requestUrl: window.location.href,
+		stack: error?.stack || '',
+		errorType: extra.errorType || 'runtime_error',
+		browserInfo: navigator.userAgent,
+		...extra,
+	});
 }
 
 class AppErrorBoundary extends Component {
@@ -43,7 +61,7 @@ class AppErrorBoundary extends Component {
 		};
 	}
 
-	componentDidCatch(error) {
+	componentDidCatch(error, errorInfo) {
 		if (isRequestCancellation(error)) {
 			if (import.meta.env.DEV) {
 				console.debug('[error-boundary] cancelled request ignored', error);
@@ -51,19 +69,12 @@ class AppErrorBoundary extends Component {
 			return;
 		}
 		console.error('Global runtime error:', error);
-		supportService.reportSystemError(buildRuntimeErrorReport(error, 'React ErrorBoundary')).catch(() => {
+		supportService.reportSystemError(buildRuntimeErrorReport(error, 'React ErrorBoundary', errorInfo)).catch(() => {
 			// Destek bildirimi uygulamanın toparlanmasını engellememeli.
 		});
-		settingsService.sendDeveloperLog({
-			level: 'error',
-			source: 'frontend',
-			message: error?.message || 'Component crash',
-			action: 'React ErrorBoundary',
-			endpoint: window.location.pathname,
-			requestUrl: window.location.href,
-			stack: error?.stack || '',
+		sendFrontendDeveloperLog(error, 'React ErrorBoundary', {
 			errorType: 'component_crash',
-			browserInfo: navigator.userAgent,
+			componentStack: errorInfo?.componentStack || '',
 		});
 	}
 
@@ -81,16 +92,10 @@ export default function App() {
 			if (isRequestCancellation(event?.error) || isRequestCancellation(event)) {
 				return;
 			}
-			settingsService.sendDeveloperLog({
-				level: 'error',
-				source: 'frontend',
-				message: event?.message || 'Runtime error',
-				action: 'window.error',
-				endpoint: window.location.pathname,
-				requestUrl: window.location.href,
+			sendFrontendDeveloperLog(event?.error || event?.message || event, 'window.error', {
+				message: event?.message || event?.error?.message || 'Runtime error',
 				stack: event?.error?.stack || '',
 				errorType: 'runtime_error',
-				browserInfo: navigator.userAgent,
 			});
 		};
 
@@ -103,16 +108,25 @@ export default function App() {
 				}
 				return;
 			}
-			settingsService.sendDeveloperLog({
-				level: 'error',
-				source: 'frontend',
+			sendFrontendDeveloperLog(reason, 'window.unhandledrejection', {
 				message: reason?.message || String(reason || 'Unhandled promise rejection'),
-				action: 'window.unhandledrejection',
-				endpoint: window.location.pathname,
-				requestUrl: window.location.href,
 				stack: reason?.stack || '',
-				errorType: 'runtime_error',
-				browserInfo: navigator.userAgent,
+				errorType: 'unhandled_rejection',
+			});
+		};
+
+		const originalConsoleError = console.error;
+		console.error = (...args) => {
+			originalConsoleError(...args);
+			const firstError = args.find((item) => item instanceof Error);
+			const message = firstError?.message || args.map((item) => (
+				typeof item === 'string' ? item : item?.message || ''
+			)).filter(Boolean).join(' ');
+			if (!message || /developer log|settings\/developer-logs/i.test(message)) return;
+			sendFrontendDeveloperLog(firstError || new Error(message), 'console.error', {
+				message,
+				stack: firstError?.stack || '',
+				errorType: 'console_error',
 			});
 		};
 
@@ -120,6 +134,7 @@ export default function App() {
 		window.addEventListener('unhandledrejection', onUnhandledRejection);
 
 		return () => {
+			console.error = originalConsoleError;
 			window.removeEventListener('error', onWindowError);
 			window.removeEventListener('unhandledrejection', onUnhandledRejection);
 		};
@@ -130,6 +145,7 @@ export default function App() {
 			<DialogProvider>
 				<AppErrorBoundary>
 					<RouterProvider router={router} />
+					<CookieConsentProvider />
 				</AppErrorBoundary>
 			</DialogProvider>
 		</AuthProvider>

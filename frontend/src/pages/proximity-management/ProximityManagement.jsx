@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   BellRing,
@@ -15,6 +15,7 @@ import PageHeader from '../../components/PageHeader.jsx';
 import { proximityAdminService } from '../../services/proximityAdminService.js';
 import { eslService } from '../../services/eslService.js';
 import { sectionService } from '../../services/sectionService.js';
+import { isRequestCancellation } from '../../services/api.js';
 import './ProximityManagement.css';
 
 const TABS = [
@@ -35,6 +36,36 @@ const EVENT_TYPES = ['ZONE_ENTER', 'DWELL', 'ZONE_EXIT'];
 const SOURCES = ['WEBVIEW_BRIDGE', 'ANDROID_NATIVE', 'ANDROID_BLE'];
 const DELIVERY_STATUSES = ['SHOWN', 'SKIPPED', 'CLICKED', 'DISMISSED', 'FAILED'];
 const PM_PAGE_SIZE = 10;
+const BEACON_STATUS_OPTIONS = [
+  { value: 'ACTIVE', label: 'Aktif' },
+  { value: 'PASSIVE', label: 'Pasif' },
+  { value: 'MAINTENANCE', label: 'Bakımda' },
+];
+const ZONE_TYPE_OPTIONS = [
+  { value: 'AISLE', label: 'Reyon Alanı' },
+  { value: 'ENTRANCE', label: 'Giriş Alanı' },
+  { value: 'SHELF', label: 'Kampanya Alanı' },
+  { value: 'CHECKOUT', label: 'Kasa Yakını' },
+  { value: 'SECTION', label: 'Genel Alan' },
+  { value: 'WAREHOUSE', label: 'Depo Alanı' },
+];
+const TARGET_TYPE_OPTIONS = [
+  { value: 'customer', label: 'Müşteri' },
+];
+const TRIGGER_OPTIONS = [
+  { value: 'ZONE_ENTER', label: 'Alana girişte' },
+  { value: 'DWELL', label: 'Alanda belirli süre kalınca' },
+];
+const ACTION_TYPE_OPTIONS = [
+  { value: 'route', label: 'Uygulama sayfası' },
+  { value: 'campaign', label: 'Kampanya' },
+  { value: 'none', label: 'Butonsuz bildirim' },
+];
+const MODAL_DESCRIPTIONS = {
+  beacon: 'Mağaza içinde müşteri yaklaştığında algılanacak beacon cihazını tanımlayın.',
+  zone: 'Müşterinin yakınında bulunduğu alanı tanımlayın.',
+  rule: 'Müşteri belirli bir alana geldiğinde gösterilecek bildirimi ayarlayın.',
+};
 const REASON_LABELS = {
   PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H: 'Bu ürün için yakın zamanda bildirim gönderildi',
   NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT: 'Etiketteki üründe aktif indirim yok',
@@ -92,50 +123,111 @@ const formatRuleCooldown = (rule = {}) => {
   return `${rule.cooldownMinutes ?? 30} dk`;
 };
 
-function SelectField({ label, value, onChange, options, placeholder = 'Seçiniz', required = false }) {
+const nextFrame = () => new Promise((resolve) => {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    setTimeout(resolve, 0);
+    return;
+  }
+  window.requestAnimationFrame(() => resolve());
+});
+
+const blurActiveElement = () => {
+  if (typeof document === 'undefined') return;
+  const activeElement = document.activeElement;
+  if (activeElement && typeof activeElement.blur === 'function') {
+    activeElement.blur();
+  }
+};
+
+const friendlyRequestMessage = (error, fallback) => {
+  if (isRequestCancellation(error)) return '';
+  if (error?.status === 401) return 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.';
+  if (error?.status === 403) return 'Bu işlem için yetkiniz bulunmuyor.';
+  return error?.message || fallback;
+};
+
+function SelectField({ label, value, onChange, options, placeholder = 'Seçiniz', required = false, help = '', error = '', wide = false }) {
+  const selectName = String(label || 'select')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'select';
+  const normalizedOptions = Array.isArray(options) ? options : [];
+  const optionValues = new Set(normalizedOptions.map((option) => String(typeof option === 'string' ? option : option.value ?? '')));
+  const rawValue = value ?? '';
+  const safeValue = rawValue === '' || optionValues.has(String(rawValue)) ? rawValue : '';
   return (
-    <label className="pm-field">
+    <label className={`pm-field ${wide ? 'pm-field-wide' : ''} ${error ? 'pm-field-invalid' : ''}`}>
       <span>{label}{required ? ' *' : ''}</span>
-      <select value={value ?? ''} onChange={(event) => onChange(event.target.value)}>
-        <option value="">{placeholder}</option>
-        {options.map((option) => {
+      <select name={selectName} value={safeValue} onChange={(event) => onChange(event.target.value)}>
+        <option key={`${selectName}-placeholder`} value="">{placeholder}</option>
+        {normalizedOptions.map((option, index) => {
           const optionValue = typeof option === 'string' ? option : option.value;
           const optionLabel = typeof option === 'string' ? option : option.label;
           return (
-            <option key={optionValue || 'empty'} value={optionValue}>
+            <option key={`${selectName}-${optionValue || 'empty'}-${index}`} value={optionValue || ''}>
               {optionLabel}
             </option>
           );
         })}
       </select>
+      {help ? <small>{help}</small> : null}
+      {error ? <strong className="pm-inline-error">{error}</strong> : null}
     </label>
   );
 }
 
-function TextField({ label, value, onChange, type = 'text', required = false, placeholder = '' }) {
+function TextField({ label, value, onChange, type = 'text', required = false, placeholder = '', help = '', error = '', wide = false, suffix = '' }) {
   return (
-    <label className="pm-field">
+    <label className={`pm-field ${wide ? 'pm-field-wide' : ''} ${error ? 'pm-field-invalid' : ''}`}>
       <span>{label}{required ? ' *' : ''}</span>
-      <input type={type} value={value ?? ''} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      <span className={suffix ? 'pm-input-with-suffix' : ''}>
+        <input type={type} value={value ?? ''} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+        {suffix ? <em>{suffix}</em> : null}
+      </span>
+      {help ? <small>{help}</small> : null}
+      {error ? <strong className="pm-inline-error">{error}</strong> : null}
     </label>
   );
 }
 
-function TextAreaField({ label, value, onChange, rows = 3, placeholder = '' }) {
+function TextAreaField({ label, value, onChange, rows = 3, placeholder = '', help = '', error = '', wide = true }) {
   return (
-    <label className="pm-field pm-field-wide">
+    <label className={`pm-field ${wide ? 'pm-field-wide' : ''} ${error ? 'pm-field-invalid' : ''}`}>
       <span>{label}</span>
       <textarea rows={rows} value={value ?? ''} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+      {help ? <small>{help}</small> : null}
+      {error ? <strong className="pm-inline-error">{error}</strong> : null}
     </label>
   );
 }
 
-function ToggleField({ label, checked, onChange }) {
+function ToggleField({ label, checked, onChange, help = '', wide = false }) {
   return (
-    <label className="pm-toggle-field">
+    <label className={`pm-toggle-field ${wide ? 'pm-field-wide' : ''}`}>
       <input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} />
-      <span>{label}</span>
+      <span>
+        {label}
+        {help ? <small>{help}</small> : null}
+      </span>
     </label>
+  );
+}
+
+function FormSection({ title, children }) {
+  return (
+    <section className="pm-form-section">
+      <h4>{title}</h4>
+      <div className="pm-form-grid">{children}</div>
+    </section>
+  );
+}
+
+function AdvancedSection({ children }) {
+  return (
+    <details className="pm-advanced-section">
+      <summary>Gelişmiş Ayarlar</summary>
+      <div className="pm-form-grid">{children}</div>
+    </details>
   );
 }
 
@@ -167,6 +259,7 @@ function usePagedRows(rows) {
 }
 
 export default function ProximityManagement() {
+  const mountedRef = useRef(false);
   const [activeTab, setActiveTab] = useState('summary');
   const [beacons, setBeacons] = useState([]);
   const [zones, setZones] = useState([]);
@@ -183,6 +276,7 @@ export default function ProximityManagement() {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [formError, setFormError] = useState('');
+  const [formErrors, setFormErrors] = useState({});
   const [saving, setSaving] = useState(false);
 
   const sectionOptions = useMemo(
@@ -190,7 +284,11 @@ export default function ProximityManagement() {
     [sections]
   );
   const zoneOptions = useMemo(
-    () => zones.map((zone) => ({ value: zone.id, label: `${zone.name || zone.code || zone.id}${zone.code ? ` (${zone.code})` : ''}` })),
+    () => zones.map((zone) => ({
+      value: zone.id,
+      label: `${zone.name || zone.code || zone.id}${zone.code ? ` (${zone.code})` : ''}`,
+      sectionId: zone.sectionId || '',
+    })),
     [zones]
   );
   const beaconOptions = useMemo(
@@ -202,48 +300,60 @@ export default function ProximityManagement() {
     [eslDevices]
   );
 
-  const loadBaseData = async () => {
+  const loadBaseData = useCallback(async () => {
+    if (!mountedRef.current) return;
     setLoading(true);
     setError('');
-    try {
-      const [beaconRows, zoneRows, ruleRows, sectionRows, eslDeviceRows] = await Promise.all([
-        proximityAdminService.getBeacons({ limit: 100 }),
-        proximityAdminService.getZones({ limit: 100 }),
-        proximityAdminService.getRules({ limit: 100 }),
-        sectionService.list({ forceRefresh: true }),
-        eslService.listDevices(),
-      ]);
-      setBeacons(toRows(beaconRows));
-      setZones(toRows(zoneRows));
-      setRules(toRows(ruleRows));
-      setSections(toRows(sectionRows));
-      setEslDevices(toRows(eslDeviceRows));
-    } catch (err) {
-      setError(err?.message || 'Proximity yönetimi verileri alınamadı.');
-    } finally {
-      setLoading(false);
-    }
-  };
+    const results = await Promise.allSettled([
+      proximityAdminService.getBeacons({ limit: 100 }),
+      proximityAdminService.getZones({ limit: 100 }),
+      proximityAdminService.getRules({ limit: 100 }),
+      sectionService.list({ forceRefresh: true }),
+      eslService.listDevices(),
+    ]);
 
-  const loadLogs = async () => {
-    setLogLoading(true);
-    try {
-      const [eventRows, deliveryRows] = await Promise.all([
-        proximityAdminService.getEvents(eventFilters),
-        proximityAdminService.getDeliveries(deliveryFilters),
-      ]);
-      setEvents(toRows(eventRows));
-      setDeliveries(toRows(deliveryRows));
-    } catch (err) {
-      setError(err?.message || 'Loglar alınamadı.');
-    } finally {
-      setLogLoading(false);
+    if (!mountedRef.current) return;
+    const [beaconResult, zoneResult, ruleResult, sectionResult, eslDeviceResult] = results;
+    if (beaconResult.status === 'fulfilled') setBeacons(toRows(beaconResult.value));
+    if (zoneResult.status === 'fulfilled') setZones(toRows(zoneResult.value));
+    if (ruleResult.status === 'fulfilled') setRules(toRows(ruleResult.value));
+    if (sectionResult.status === 'fulfilled') setSections(toRows(sectionResult.value));
+    if (eslDeviceResult.status === 'fulfilled') setEslDevices(toRows(eslDeviceResult.value));
+
+    const firstError = results.find((result) => result.status === 'rejected' && !isRequestCancellation(result.reason));
+    if (firstError) {
+      setError(friendlyRequestMessage(firstError.reason, 'Proximity yönetimi verileri alınamadı.'));
     }
-  };
+    setLoading(false);
+  }, []);
+
+  const loadLogs = useCallback(async () => {
+    if (!mountedRef.current) return;
+    setLogLoading(true);
+    const results = await Promise.allSettled([
+      proximityAdminService.getEvents(eventFilters),
+      proximityAdminService.getDeliveries(deliveryFilters),
+    ]);
+
+    if (!mountedRef.current) return;
+    const [eventResult, deliveryResult] = results;
+    if (eventResult.status === 'fulfilled') setEvents(toRows(eventResult.value));
+    if (deliveryResult.status === 'fulfilled') setDeliveries(toRows(deliveryResult.value));
+
+    const firstError = results.find((result) => result.status === 'rejected' && !isRequestCancellation(result.reason));
+    if (firstError) {
+      setError(friendlyRequestMessage(firstError.reason, 'Loglar alınamadı.'));
+    }
+    setLogLoading(false);
+  }, [deliveryFilters, eventFilters]);
 
   useEffect(() => {
+    mountedRef.current = true;
     loadBaseData();
-  }, []);
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadBaseData]);
 
   useEffect(() => {
     if (activeTab === 'events' || activeTab === 'deliveries' || activeTab === 'summary') {
@@ -251,12 +361,26 @@ export default function ProximityManagement() {
     }
   }, [activeTab]);
 
+  const closeModal = useCallback(() => {
+    blurActiveElement();
+    setFormError('');
+    setFormErrors({});
+    setModal(null);
+  }, []);
+
   const updateForm = (key, value) => {
+    setFormErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
     setForm((current) => ({ ...current, [key]: value }));
   };
 
   const openBeaconModal = (beacon = null) => {
     setFormError('');
+    setFormErrors({});
     setModal({ type: 'beacon', id: beacon?.id || null });
     setForm({
       name: beacon?.name || '',
@@ -275,6 +399,7 @@ export default function ProximityManagement() {
 
   const openZoneModal = (zone = null) => {
     setFormError('');
+    setFormErrors({});
     setModal({ type: 'zone', id: zone?.id || null });
     setForm({
       name: zone?.name || '',
@@ -289,6 +414,7 @@ export default function ProximityManagement() {
 
   const openRuleModal = (rule = null) => {
     setFormError('');
+    setFormErrors({});
     setModal({ type: 'rule', id: rule?.id || null });
     setForm({
       name: rule?.name || '',
@@ -309,15 +435,47 @@ export default function ProximityManagement() {
     });
   };
 
+  const validateModalForm = () => {
+    const nextErrors = {};
+    if (modal.type === 'beacon') {
+      if (!String(form.name || '').trim()) nextErrors.name = 'Lütfen cihaz adını girin.';
+      if (!String(form.deviceCode || '').trim()) nextErrors.deviceCode = 'Lütfen cihaz kodunu girin.';
+      if (!form.status) nextErrors.status = 'Lütfen cihaz durumunu seçin.';
+    }
+    if (modal.type === 'zone') {
+      if (!String(form.name || '').trim()) nextErrors.name = 'Lütfen alan adını girin.';
+      if (!String(form.code || '').trim()) nextErrors.code = 'Lütfen alan kodunu girin.';
+      if (!form.type) nextErrors.type = 'Lütfen alan tipini seçin.';
+    }
+    if (modal.type === 'rule') {
+      if (!String(form.name || '').trim()) nextErrors.name = 'Lütfen kural adını girin.';
+      if (!form.targetType) nextErrors.targetType = 'Lütfen bildirimin kime gösterileceğini seçin.';
+      if (!form.trigger) nextErrors.trigger = 'Lütfen bildirimin ne zaman çıkacağını seçin.';
+      if (!String(form.title || '').trim()) nextErrors.title = 'Lütfen bildirim başlığını girin.';
+      if (!String(form.message || '').trim()) nextErrors.message = 'Lütfen bildirim mesajını girin.';
+      if (Number(form.cooldownMinutes) <= 0) nextErrors.cooldownMinutes = 'Lütfen tekrar süresini 1 dakikadan büyük girin.';
+      if (form.actionUrl && !String(form.actionUrl).startsWith('/musteri')) {
+        nextErrors.actionUrl = 'Müşteri sayfası linki /musteri ile başlamalıdır.';
+      }
+    }
+    setFormErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
   const submitModal = async (event) => {
     event.preventDefault();
     if (!modal) return;
 
     setSaving(true);
     setFormError('');
+    setFormErrors({});
     try {
+      if (!validateModalForm()) {
+        setFormError('Lütfen işaretli alanları kontrol edin.');
+        return;
+      }
       if (modal.type === 'beacon') {
-        if (!String(form.deviceCode || '').trim()) throw new Error('Device ID / Code boş olamaz.');
+        if (!String(form.deviceCode || '').trim()) throw new Error('Lütfen cihaz kodunu girin.');
         const payload = {
           ...form,
           major: form.major === '' ? null : Number(form.major),
@@ -337,8 +495,8 @@ export default function ProximityManagement() {
       }
 
       if (modal.type === 'zone') {
-        if (!String(form.name || '').trim()) throw new Error('Zone adı boş olamaz.');
-        if (!String(form.code || '').trim()) throw new Error('Zone kodu boş olamaz.');
+        if (!String(form.name || '').trim()) throw new Error('Lütfen alan adını girin.');
+        if (!String(form.code || '').trim()) throw new Error('Lütfen alan kodunu girin.');
         const payload = {
           ...form,
           sectionId: form.sectionId || null,
@@ -349,17 +507,17 @@ export default function ProximityManagement() {
       }
 
       if (modal.type === 'rule') {
-        if (!form.targetType) throw new Error('Hedef seçilmelidir.');
-        if (!form.trigger) throw new Error('Tetikleyici seçilmelidir.');
+        if (!form.targetType) throw new Error('Lütfen bildirimin kime gösterileceğini seçin.');
+        if (!form.trigger) throw new Error('Lütfen bildirimin ne zaman çıkacağını seçin.');
         if (!String(form.title || '').trim() || !String(form.message || '').trim()) {
-          throw new Error('Başlık ve mesaj boş olamaz.');
+          throw new Error('Lütfen bildirim başlığı ve mesajını girin.');
         }
-        if (Number(form.cooldownMinutes) <= 0) throw new Error('Cooldown dakikası pozitif olmalıdır.');
+        if (Number(form.cooldownMinutes) <= 0) throw new Error('Lütfen tekrar bekleme süresini 1 dakikadan büyük girin.');
         if (form.actionUrl && form.targetType === 'customer' && !String(form.actionUrl).startsWith('/musteri')) {
-          throw new Error('Müşteri kuralı için actionUrl /musteri ile başlamalıdır.');
+          throw new Error('Müşteri sayfası linki /musteri ile başlamalıdır.');
         }
         if (form.actionUrl && !String(form.actionUrl).startsWith('/musteri')) {
-          throw new Error('Proximity actionUrl /musteri ile başlamalıdır.');
+          throw new Error('Müşteri sayfası linki /musteri ile başlamalıdır.');
         }
         const payloadJson = parseJsonField(form.payload, {});
         const payload = {
@@ -376,13 +534,18 @@ export default function ProximityManagement() {
         else await proximityAdminService.createRule(payload);
       }
 
-      setModal(null);
+      closeModal();
+      await nextFrame();
       await loadBaseData();
       if (activeTab === 'events' || activeTab === 'deliveries' || activeTab === 'summary') {
         await loadLogs();
       }
     } catch (err) {
-      setFormError(err?.message || 'Kayıt işlemi tamamlanamadı.');
+      if (err instanceof SyntaxError) {
+        setFormError('JSON alanını kontrol edin. Örnek: {"not": "kısa açıklama"}');
+      } else {
+        setFormError(err?.message || 'Kayıt işlemi tamamlanamadı.');
+      }
     } finally {
       setSaving(false);
     }
@@ -401,13 +564,13 @@ export default function ProximityManagement() {
 
   const renderToolbarAction = () => {
     if (activeTab === 'beacons') {
-      return <button className="pm-primary-button" type="button" onClick={() => openBeaconModal()}><Plus size={16} /> Yeni cihaz</button>;
+      return <button className="pm-primary-button" type="button" onClick={() => openBeaconModal()}><Plus size={16} /> Yeni Beacon</button>;
     }
     if (activeTab === 'zones') {
-      return <button className="pm-primary-button" type="button" onClick={() => openZoneModal()}><Plus size={16} /> Yeni zone</button>;
+      return <button className="pm-primary-button" type="button" onClick={() => openZoneModal()}><Plus size={16} /> Yeni Yakınlık Alanı</button>;
     }
     if (activeTab === 'rules') {
-      return <button className="pm-primary-button" type="button" onClick={() => openRuleModal()}><Plus size={16} /> Yeni kural</button>;
+      return <button className="pm-primary-button" type="button" onClick={() => openRuleModal()}><Plus size={16} /> Yeni Bildirim Kuralı</button>;
     }
     return <button className="pm-secondary-button" type="button" onClick={() => { loadBaseData(); loadLogs(); }}><RefreshCw size={16} /> Yenile</button>;
   };
@@ -487,15 +650,15 @@ export default function ProximityManagement() {
       ) : null}
 
       {modal ? (
-        <Modal title={modalTitle(modal)} type={modal.type} onClose={() => setModal(null)} onSubmit={submitModal} saving={saving} error={formError}>
+        <Modal key={`${modal.type}-${modal.id || 'new'}`} title={modalTitle(modal)} description={MODAL_DESCRIPTIONS[modal.type]} type={modal.type} onClose={closeModal} onSubmit={submitModal} saving={saving} error={formError}>
           {modal.type === 'beacon' ? (
-            <BeaconForm form={form} updateForm={updateForm} zoneOptions={zoneOptions} sectionOptions={sectionOptions} eslDeviceOptions={eslDeviceOptions} />
+            <BeaconForm form={form} errors={formErrors} updateForm={updateForm} zoneOptions={zoneOptions} sectionOptions={sectionOptions} eslDeviceOptions={eslDeviceOptions} />
           ) : null}
           {modal.type === 'zone' ? (
-            <ZoneForm form={form} updateForm={updateForm} sectionOptions={sectionOptions} />
+            <ZoneForm form={form} errors={formErrors} updateForm={updateForm} sectionOptions={sectionOptions} />
           ) : null}
           {modal.type === 'rule' ? (
-            <RuleForm form={form} updateForm={updateForm} zoneOptions={zoneOptions} beaconOptions={beaconOptions} />
+            <RuleForm form={form} errors={formErrors} updateForm={updateForm} zoneOptions={zoneOptions} beaconOptions={beaconOptions} />
           ) : null}
         </Modal>
       ) : null}
@@ -780,7 +943,9 @@ function LogFilters({ children, filters, setFilters, onRefresh, loading }) {
 
 function TableShell({ children, emptyText, pagination = null }) {
   const body = children?.[1];
-  const hasRows = body?.props?.children?.length > 0 || Boolean(body?.props?.children?.key);
+  const hasRows = pagination
+    ? pagination.total > 0
+    : body?.props?.children?.length > 0 || Boolean(body?.props?.children?.key);
   return (
     <div className="pm-table-card">
       <div className="pm-table-scroll">
@@ -816,15 +981,18 @@ function StatusPill({ value }) {
   return <span className={`pm-status pm-status-${normalized.toLowerCase()}`}>{normalized}</span>;
 }
 
-function Modal({ title, type, children, onClose, onSubmit, saving, error }) {
+function Modal({ title, description, type, children, onClose, onSubmit, saving, error }) {
   const ModalIcon = type === 'beacon' ? RadioTower : type === 'zone' ? MapPinned : BellRing;
   return (
     <div className="pm-modal-backdrop" role="presentation">
-      <form className="pm-modal" onSubmit={onSubmit}>
+      <form className="pm-modal" onSubmit={onSubmit} noValidate>
         <div className="pm-modal-header">
           <div className="pm-modal-title">
             <span className="pm-modal-icon" aria-hidden="true"><ModalIcon size={18} /></span>
-            <h3>{title}</h3>
+            <span>
+              <h3>{title}</h3>
+              {description ? <p>{description}</p> : null}
+            </span>
           </div>
           <button type="button" onClick={onClose} aria-label="Kapat"><X size={18} /></button>
         </div>
@@ -842,66 +1010,84 @@ function Modal({ title, type, children, onClose, onSubmit, saving, error }) {
 }
 
 function modalTitle(modal) {
-  if (modal.type === 'beacon') return modal.id ? 'Beacon cihazını düzenle' : 'Yeni beacon cihazı';
-  if (modal.type === 'zone') return modal.id ? 'Zone eşleştirmesini düzenle' : 'Yeni proximity zone';
-  return modal.id ? 'Bildirim kuralını düzenle' : 'Yeni bildirim kuralı';
+  if (modal.type === 'beacon') return modal.id ? 'Beacon Cihazını Düzenle' : 'Yeni Beacon Ekle';
+  if (modal.type === 'zone') return modal.id ? 'Yakınlık Alanını Düzenle' : 'Yeni Yakınlık Alanı Ekle';
+  return modal.id ? 'Bildirim Kuralını Düzenle' : 'Yeni Bildirim Kuralı Ekle';
 }
 
-function BeaconForm({ form, updateForm, zoneOptions, sectionOptions, eslDeviceOptions }) {
+function BeaconForm({ form, errors = {}, updateForm, zoneOptions, sectionOptions, eslDeviceOptions }) {
+  const filteredZoneOptions = form.sectionId
+    ? zoneOptions.filter((zone) => !zone.sectionId || zone.sectionId === form.sectionId || zone.value === form.locationZoneId)
+    : zoneOptions;
   return (
-    <div className="pm-form-grid">
-      <TextField label="Cihaz adı" value={form.name} onChange={(value) => updateForm('name', value)} />
-      <TextField label="Device ID / Code" value={form.deviceCode} onChange={(value) => updateForm('deviceCode', value)} required />
-      <TextField label="UUID" value={form.uuid} onChange={(value) => updateForm('uuid', value)} />
-      <TextField label="Major" type="number" value={form.major} onChange={(value) => updateForm('major', value)} />
-      <TextField label="Minor" type="number" value={form.minor} onChange={(value) => updateForm('minor', value)} />
-      <SelectField label="Bağlı ESL / Etiket Cihazı" value={form.eslDeviceId} onChange={(value) => updateForm('eslDeviceId', value)} options={eslDeviceOptions} placeholder="ESL seçilmedi" />
-      <SelectField label="Eşleşen Zone" value={form.locationZoneId} onChange={(value) => updateForm('locationZoneId', value)} options={zoneOptions} placeholder="Zone seçilmedi" />
-      <SelectField label="Eşleşen Reyon" value={form.sectionId} onChange={(value) => updateForm('sectionId', value)} options={sectionOptions} placeholder="Reyon seçilmedi" />
-      <SelectField label="Durum" value={form.status} onChange={(value) => updateForm('status', value)} options={BEACON_STATUSES} required />
-      <TextField label="Firmware" value={form.firmwareVersion} onChange={(value) => updateForm('firmwareVersion', value)} />
-      <TextAreaField label="Metadata JSON" value={form.metadata} onChange={(value) => updateForm('metadata', value)} rows={4} placeholder='{"mount": "süt reyonu"}' />
-    </div>
+    <>
+      <FormSection title="Temel Bilgiler">
+        <TextField label="Cihaz Adı" value={form.name} onChange={(value) => updateForm('name', value)} required placeholder="Örn: Süt Reyonu Beacon 1" help="Bu cihazı panelde hangi adla görmek istiyorsunuz?" error={errors.name} />
+        <TextField label="Cihaz Kodu" value={form.deviceCode} onChange={(value) => updateForm('deviceCode', value)} required placeholder="Örn: esp_sut_01" help="Cihazı sistem içinde tanımlayan kısa benzersiz kod." error={errors.deviceCode} />
+        <SelectField label="Bağlı Etiket / ESL Cihazı" value={form.eslDeviceId} onChange={(value) => updateForm('eslDeviceId', value)} options={eslDeviceOptions} placeholder="Etiket seçin" help="Bu beacon hangi elektronik etiket cihazı ile ilişkilendirilecek?" />
+        <SelectField label="Eşleşen Reyon" value={form.sectionId} onChange={(value) => updateForm('sectionId', value)} options={sectionOptions} placeholder="Reyon seçin" help="Beacon'ın bağlı olduğu reyonu seçin." />
+        <SelectField label="Eşleşen Yakınlık Alanı" value={form.locationZoneId} onChange={(value) => updateForm('locationZoneId', value)} options={filteredZoneOptions} placeholder="Yakınlık alanı seçin" help="Beacon'ın bulunduğu yakınlık alanını seçin." />
+        <SelectField label="Durum" value={form.status} onChange={(value) => updateForm('status', value)} options={BEACON_STATUS_OPTIONS} required placeholder="Durum seçin" help="Cihaz aktifse müşteri algılama için kullanılabilir." error={errors.status} />
+      </FormSection>
+      <AdvancedSection>
+        <TextField label="UUID" value={form.uuid} onChange={(value) => updateForm('uuid', value)} placeholder="Örn: FDA50693-A4E2-4FB1-AFCF-C6EB07647825" help="Beacon cihazının benzersiz kimliği." />
+        <TextField label="Major" type="number" value={form.major} onChange={(value) => updateForm('major', value)} placeholder="Örn: 100" help="Beacon sinyal grubu numarası." />
+        <TextField label="Minor" type="number" value={form.minor} onChange={(value) => updateForm('minor', value)} placeholder="Örn: 1" help="Beacon alt cihaz numarası." />
+        <TextField label="Firmware" value={form.firmwareVersion} onChange={(value) => updateForm('firmwareVersion', value)} placeholder="Örn: 1.0.3" help="İsteğe bağlı cihaz sürüm bilgisi." />
+        <TextAreaField label="Metadata JSON" value={form.metadata} onChange={(value) => updateForm('metadata', value)} rows={3} placeholder='{"mount": "süt reyonu"}' help="Sadece teknik kullanım içindir." />
+      </AdvancedSection>
+    </>
   );
 }
 
-function ZoneForm({ form, updateForm, sectionOptions }) {
+function ZoneForm({ form, errors = {}, updateForm, sectionOptions }) {
   return (
-    <div className="pm-form-grid">
-      <TextField label="Zone adı" value={form.name} onChange={(value) => updateForm('name', value)} required />
-      <TextField label="Zone kodu" value={form.code} onChange={(value) => updateForm('code', value)} required />
-      <SelectField label="Zone tipi" value={form.type} onChange={(value) => updateForm('type', value)} options={ZONE_TYPES} required />
-      <SelectField label="Bağlı reyon/section" value={form.sectionId} onChange={(value) => updateForm('sectionId', value)} options={sectionOptions} placeholder="Reyon seçilmedi" />
-      <ToggleField label="Aktif" checked={form.isActive} onChange={(value) => updateForm('isActive', value)} />
-      <TextAreaField label="Açıklama" value={form.description} onChange={(value) => updateForm('description', value)} />
-      <TextAreaField label="Metadata JSON" value={form.metadata} onChange={(value) => updateForm('metadata', value)} rows={4} />
-    </div>
+    <>
+      <FormSection title="Temel Bilgiler">
+        <TextField label="Alan Adı" value={form.name} onChange={(value) => updateForm('name', value)} required placeholder="Örn: Süt Reyonu Giriş Alanı" help="Panelde görünecek alan adı." error={errors.name} />
+        <TextField label="Alan Kodu" value={form.code} onChange={(value) => updateForm('code', value)} required placeholder="Örn: zone_sut_giris" help="Sistem içinde kullanılacak kısa kod." error={errors.code} />
+        <SelectField label="Alan Tipi" value={form.type} onChange={(value) => updateForm('type', value)} options={ZONE_TYPE_OPTIONS} required placeholder="Alan tipi seçin" help="Bu alanın mağaza içindeki türünü seçin." error={errors.type} />
+        <SelectField label="Bağlı Reyon / Bölüm" value={form.sectionId} onChange={(value) => updateForm('sectionId', value)} options={sectionOptions} placeholder="Reyon seçin" help="Bu alan hangi reyon veya bölüme ait?" />
+        <ToggleField label="Aktif" checked={form.isActive} onChange={(value) => updateForm('isActive', value)} help="Aktif alanlar bildirim senaryolarında kullanılabilir." />
+        <TextAreaField label="Açıklama" value={form.description} onChange={(value) => updateForm('description', value)} rows={3} placeholder="Örn: Süt dolaplarının ön kısmı" help="İsteğe bağlı kısa not." />
+      </FormSection>
+      <AdvancedSection>
+        <TextAreaField label="Metadata JSON" value={form.metadata} onChange={(value) => updateForm('metadata', value)} rows={3} placeholder='{"not": "teknik bilgi"}' help="Sadece teknik kullanım içindir." />
+      </AdvancedSection>
+    </>
   );
 }
 
-function RuleForm({ form, updateForm, zoneOptions, beaconOptions }) {
+function RuleForm({ form, errors = {}, updateForm, zoneOptions, beaconOptions }) {
+  const isGlobalRule = !form.locationZoneId && !form.beaconDeviceId;
   return (
-    <div className="pm-form-grid">
-      <TextField label="Kural adı" value={form.name} onChange={(value) => updateForm('name', value)} required />
-      <SelectField label="Hedef" value={form.targetType} onChange={() => updateForm('targetType', 'customer')} options={[
-        { value: 'customer', label: 'Müşteri' },
-      ]} required />
-      <SelectField label="Tetikleyici" value={form.trigger} onChange={(value) => updateForm('trigger', value)} options={TRIGGERS} required />
-      <SelectField label="Zone" value={form.locationZoneId} onChange={(value) => updateForm('locationZoneId', value)} options={zoneOptions} placeholder="Global rule" />
-      <SelectField label="Beacon" value={form.beaconDeviceId} onChange={(value) => updateForm('beaconDeviceId', value)} options={beaconOptions} placeholder="Beacon seçilmedi" />
-      <TextField label="Başlık" value={form.title} onChange={(value) => updateForm('title', value)} required />
-      <TextAreaField label="Mesaj" value={form.message} onChange={(value) => updateForm('message', value)} />
-      <SelectField label="Action type" value={form.actionType} onChange={(value) => updateForm('actionType', value)} options={ACTION_TYPES} />
-      <TextField label="Action URL" value={form.actionUrl} onChange={(value) => updateForm('actionUrl', value)} placeholder="/musteri/kampanyalar veya /musteri/kategori/sut" />
-      <TextField label="Action label" value={form.actionLabel} onChange={(value) => updateForm('actionLabel', value)} placeholder="Kampanyayı Gör" />
-      <TextField label="Cooldown dakika" type="number" value={form.cooldownMinutes} onChange={(value) => updateForm('cooldownMinutes', value)} required />
-      <TextField label="Ziyaret başı limit" type="number" value={form.maxPerVisit} onChange={(value) => updateForm('maxPerVisit', value)} />
-      <TextField label="Öncelik" type="number" value={form.priority} onChange={(value) => updateForm('priority', value)} />
-      <ToggleField label="Aktif" checked={form.isActive} onChange={(value) => updateForm('isActive', value)} />
-      {!form.locationZoneId && !form.beaconDeviceId ? (
-        <div className="pm-rule-note">Zone ve beacon seçilmezse bu kural global fallback olarak çalışır.</div>
-      ) : null}
-      <TextAreaField label="Payload JSON" value={form.payload} onChange={(value) => updateForm('payload', value)} rows={4} />
-    </div>
+    <>
+      <FormSection title="Kural Bilgileri">
+        <TextField label="Kural Adı" value={form.name} onChange={(value) => updateForm('name', value)} required placeholder="Örn: Süt Reyonu Kampanya Bildirimi" help="Bu kuralı panelde hangi adla görmek istiyorsunuz?" error={errors.name} />
+        <SelectField label="Bildirim Kime Gösterilsin?" value={form.targetType} onChange={() => updateForm('targetType', 'customer')} options={TARGET_TYPE_OPTIONS} required help="Şu anda müşteri bildirimleri desteklenir." error={errors.targetType} />
+        <SelectField label="Bildirim Ne Zaman Çıksın?" value={form.trigger} onChange={(value) => updateForm('trigger', value)} options={TRIGGER_OPTIONS} required placeholder="Zaman seçin" help="Bildirim senaryosunu başlatacak müşteri hareketi." error={errors.trigger} />
+        <SelectField label="Hangi Yakınlık Alanında?" value={form.locationZoneId} onChange={(value) => updateForm('locationZoneId', value)} options={zoneOptions} placeholder="Tüm alanlarda" help="Belirli bir alan seçmezseniz kural tüm alanlarda kullanılabilir." />
+        <SelectField label="Hangi Beacon?" value={form.beaconDeviceId} onChange={(value) => updateForm('beaconDeviceId', value)} options={beaconOptions} placeholder="Tüm beaconlar" help="İsteğe bağlı. Sadece belirli bir beacon için sınırlandırmak isterseniz seçin." />
+        <ToggleField label="Aktif" checked={form.isActive} onChange={(value) => updateForm('isActive', value)} help="Aktif kurallar müşteri bildirimlerinde değerlendirilir." />
+        <div className={`pm-rule-note ${isGlobalRule ? '' : 'pm-rule-note-hidden'}`} aria-hidden={!isGlobalRule}>
+          {isGlobalRule ? 'Alan ve beacon seçilmezse bu kural tüm alanlarda yedek kural olarak çalışır.' : '\u00a0'}
+        </div>
+      </FormSection>
+      <FormSection title="Bildirim İçeriği">
+        <TextField label="Bildirim Başlığı" value={form.title} onChange={(value) => updateForm('title', value)} required placeholder="Örn: Bu reyonda indirimli ürünler var" error={errors.title} />
+        <TextAreaField label="Bildirim Mesajı" value={form.message} onChange={(value) => updateForm('message', value)} rows={3} placeholder="Örn: İlgini çekebilecek fırsatları görmek için dokun." error={errors.message} />
+        <TextField label="Buton Yazısı" value={form.actionLabel} onChange={(value) => updateForm('actionLabel', value)} placeholder="Örn: Ürünleri Gör" />
+        <TextField label="Gidilecek Sayfa / Link" value={form.actionUrl} onChange={(value) => updateForm('actionUrl', value)} placeholder="/musteri/kampanyalar" help="Müşteri butona bastığında açılacak sayfa." error={errors.actionUrl} />
+      </FormSection>
+      <FormSection title="Tekrar Ayarları">
+        <TextField label="Aynı müşteriye tekrar gösterme süresi" type="number" value={form.cooldownMinutes} onChange={(value) => updateForm('cooldownMinutes', value)} required placeholder="30" suffix="dakika" help="Aynı bildirim seçilen süre boyunca tekrar gösterilmez." error={errors.cooldownMinutes} />
+        <TextField label="Ziyaret Başına Limit" type="number" value={form.maxPerVisit} onChange={(value) => updateForm('maxPerVisit', value)} placeholder="Boş bırakılırsa sınırsız" help="Bir müşteri bu ziyarette en fazla kaç kez görsün?" />
+      </FormSection>
+      <AdvancedSection>
+        <TextField label="Öncelik" type="number" value={form.priority} onChange={(value) => updateForm('priority', value)} placeholder="0" help="Birden fazla kural varsa hangisinin öne çıkacağını belirler." />
+        <SelectField label="Aksiyon Tipi" value={form.actionType} onChange={(value) => updateForm('actionType', value)} options={ACTION_TYPE_OPTIONS} placeholder="Aksiyon tipi seçin" help="Teknik aksiyon tipi. Varsayılan olarak uygulama sayfası kullanılır." />
+        <TextAreaField label="Payload JSON" value={form.payload} onChange={(value) => updateForm('payload', value)} rows={3} placeholder='{"actionLabel": "Ürünleri Gör"}' help="Sadece teknik kullanım içindir." />
+      </AdvancedSection>
+    </>
   );
 }

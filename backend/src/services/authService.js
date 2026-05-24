@@ -2,7 +2,7 @@
 import { userRepo } from '../repositories/userRepository.js';
 import { AppError, createNotFoundError } from '../utils/appError.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
-import { signToken } from '../utils/jwt.js';
+import { signStaffRefreshToken, signToken, verifyStaffRefreshToken } from '../utils/jwt.js';
 import { sanitizeRegisterInput, validateLoginPayload, validateRegisterPayload } from '../utils/validators.js';
 import { settingsService } from './settingsService.js';
 
@@ -53,6 +53,24 @@ const mapUser = (user) => {
   };
 };
 
+const issueSessionTokens = (user) => {
+  const unlimitedAccess = isUnlimitedAccessUser(user);
+  const role = unlimitedAccess ? 'admin' : user.role;
+  const token = signToken({
+    sub: user.id,
+    role,
+    username: user.username,
+  });
+  const refreshToken = signStaffRefreshToken({
+    sub: user.id,
+    role,
+    username: user.username,
+    type: 'staff_refresh',
+  });
+
+  return { token, refreshToken };
+};
+
 export const authService = {
   async login(payload, context = {}) {
     validateLoginPayload(payload);
@@ -99,16 +117,46 @@ export const authService = {
       // Login başarısını etkilememesi için aktivite log hatasını yutuyoruz.
     }
 
-    const unlimitedAccess = isUnlimitedAccessUser(loggedInUser);
-    const token = signToken({
-      sub: loggedInUser.id,
-      role: unlimitedAccess ? 'admin' : loggedInUser.role,
-      username: loggedInUser.username,
-    });
+    const { token, refreshToken } = issueSessionTokens(loggedInUser);
 
     return {
       token,
+      refreshToken,
       user: mapUser(loggedInUser),
+    };
+  },
+
+  async refreshSession(payload = {}) {
+    const refreshToken = String(payload.refreshToken || '').trim();
+    if (!refreshToken) {
+      throw new AppError(401, 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+    }
+
+    let tokenPayload;
+    try {
+      tokenPayload = verifyStaffRefreshToken(refreshToken);
+    } catch {
+      throw new AppError(401, 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+    }
+
+    if (tokenPayload?.type !== 'staff_refresh') {
+      throw new AppError(401, 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+    }
+
+    const user = await userRepo.findById(tokenPayload.sub);
+    if (!user) {
+      throw new AppError(401, 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.');
+    }
+
+    if (!user.isActive) {
+      throw new AppError(403, 'Bu işlem için yetkiniz bulunmuyor.');
+    }
+
+    const { token, refreshToken: nextRefreshToken } = issueSessionTokens(user);
+    return {
+      token,
+      refreshToken: nextRefreshToken,
+      user: mapUser(user),
     };
   },
 

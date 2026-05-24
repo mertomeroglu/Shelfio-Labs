@@ -1,35 +1,27 @@
 import nodemailer from 'nodemailer';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from '../config/config.js';
 import { AppError } from '../utils/appError.js';
+import {
+  renderPasswordResetMail,
+  renderSupportTicketMail,
+  renderSystemErrorMail,
+  renderTestMail,
+} from './mailTemplates.js';
 
-const SMTP_MISSING_MESSAGE = 'SMTP ayarlari eksik';
+const SMTP_MISSING_MESSAGE = 'SMTP ayarları eksik';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const backendRootDir = path.resolve(__dirname, '..', '..');
+const MAIL_LOGO_CID = 'shelfio-logo';
+const MAIL_LOGO_PATH = path.resolve(backendRootDir, 'public', 'mail', 'shelfio-logo.png');
 
 const toList = (value) => String(value || '')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
-
-const escapeHtml = (value) => String(value || '')
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
-
-const normalizeLineBreaks = (value) => String(value || '').replace(/\r\n/g, '\n');
-
-const formatDisplayDate = (value) => {
-  const date = value ? new Date(value) : new Date();
-  if (Number.isNaN(date.getTime())) {
-    return String(value || '');
-  }
-
-  return new Intl.DateTimeFormat('tr-TR', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: 'Europe/Istanbul',
-  }).format(date);
-};
 
 const getMissingConfigFields = () => {
   const missing = [];
@@ -78,20 +70,20 @@ const classifyTransportError = (error) => {
   if (code === 'EAUTH' || responseCode === 535) {
     return {
       code: 'smtp_auth_error',
-      userMessage: 'SMTP kimlik dogrulamasi basarisiz oldu.',
+      userMessage: 'SMTP kimlik doğrulaması başarısız oldu.',
     };
   }
 
   if (['ETIMEDOUT', 'ECONNECTION', 'ECONNRESET', 'ECONNREFUSED', 'ESOCKET', 'EPROTO'].includes(code)) {
     return {
       code: 'smtp_connection_error',
-      userMessage: 'SMTP sunucusuna baglanilamadi.',
+      userMessage: 'SMTP sunucusuna bağlanılamadı.',
     };
   }
 
   return {
     code: 'smtp_send_failed',
-    userMessage: 'E-posta gonderimi su anda tamamlanamadi.',
+    userMessage: 'E-posta gönderimi şu anda tamamlanamadı.',
   };
 };
 
@@ -167,6 +159,49 @@ const buildAuthUserFromMessage = (message = {}) => ({
   from: buildFromValue(config.smtpUser),
 });
 
+const buildInlineLogoAttachment = () => {
+  if (!fs.existsSync(MAIL_LOGO_PATH)) {
+    return null;
+  }
+
+  return {
+    filename: 'shelfio-logo.png',
+    path: MAIL_LOGO_PATH,
+    cid: MAIL_LOGO_CID,
+    contentType: 'image/png',
+    contentDisposition: 'inline',
+  };
+};
+
+const withInlineLogoAttachment = (message = {}) => {
+  const html = String(message.html || '');
+  if (!html.includes(`cid:${MAIL_LOGO_CID}`)) {
+    return message;
+  }
+
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  if (attachments.some((item) => item?.cid === MAIL_LOGO_CID)) {
+    return message;
+  }
+
+  const logoAttachment = buildInlineLogoAttachment();
+  if (!logoAttachment) {
+    return {
+      ...message,
+      html: html.replace(
+        /<img[^>]+src="cid:shelfio-logo"[^>]*>/,
+        '<div style="font-size:24px;font-weight:800;color:#0f3d75;text-align:center;">Shelfio</div>'
+      ),
+      attachments,
+    };
+  }
+
+  return {
+    ...message,
+    attachments: [...attachments, logoAttachment],
+  };
+};
+
 const summarizeAttachments = (attachments = [], attachmentNote = '') => {
   if (attachmentNote) {
     return attachmentNote;
@@ -185,129 +220,6 @@ const summarizeAttachments = (attachments = [], attachmentNote = '') => {
   }
 
   return 'Ek yok';
-};
-
-const createMessage = ({
-  title,
-  ticketId,
-  subject,
-  user,
-  requesterEmail,
-  requesterPhone,
-  role,
-  page,
-  description,
-  attachments = [],
-  attachmentNote = '',
-  createdAt,
-  replyTo,
-}) => {
-  const createdAtLabel = formatDisplayDate(createdAt);
-  const safeDescription = escapeHtml(normalizeLineBreaks(description)).replace(/\n/g, '<br/>');
-  const attachmentSummary = summarizeAttachments(attachments, attachmentNote);
-  const safeAttachmentSummary = escapeHtml(attachmentSummary);
-
-  return {
-    from: buildFromValue(),
-    to: toList(config.supportMailTo),
-    subject: title,
-    replyTo: replyTo || config.supportMailReplyTo || undefined,
-    attachments,
-    text: [
-      title,
-      '',
-      `Talep eden kisi: ${user || '-'}`,
-      `E-posta: ${requesterEmail || '-'}`,
-      `Telefon: ${requesterPhone || '-'}`,
-      `Konu: ${subject || '-'}`,
-      `Rol: ${role || '-'}`,
-      `Sayfa: ${page || '-'}`,
-      `Olusturulma tarihi: ${createdAtLabel || '-'}`,
-      `Talep ID: ${ticketId || '-'}`,
-      '',
-      'Mesaj:',
-      normalizeLineBreaks(description) || '-',
-      '',
-      `Ek bilgisi: ${attachmentSummary}`,
-    ].join('\n'),
-    html: [
-      '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">',
-      `<h2 style="margin:0 0 16px;">${escapeHtml(title)}</h2>`,
-      '<table style="border-collapse:collapse;width:100%;max-width:720px;">',
-      `<tr><td style="padding:6px 0;font-weight:700;width:180px;">Talep eden kisi</td><td style="padding:6px 0;">${escapeHtml(user || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">E-posta</td><td style="padding:6px 0;">${escapeHtml(requesterEmail || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Telefon</td><td style="padding:6px 0;">${escapeHtml(requesterPhone || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Konu</td><td style="padding:6px 0;">${escapeHtml(subject || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Rol</td><td style="padding:6px 0;">${escapeHtml(role || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Sayfa</td><td style="padding:6px 0;">${escapeHtml(page || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Olusturulma tarihi</td><td style="padding:6px 0;">${escapeHtml(createdAtLabel || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Talep ID</td><td style="padding:6px 0;">${escapeHtml(ticketId || '-')}</td></tr>`,
-      '</table>',
-      '<div style="margin-top:18px;">',
-      '<div style="font-weight:700;margin-bottom:8px;">Mesaj</div>',
-      `<div style="padding:12px;border:1px solid #dbe5f0;border-radius:10px;background:#f8fafc;">${safeDescription || '-'}</div>`,
-      '</div>',
-      `<div style="margin-top:18px;"><strong>Ek bilgisi:</strong> ${safeAttachmentSummary}</div>`,
-      '</div>',
-    ].join(''),
-  };
-};
-
-const createSystemErrorMessage = ({
-  errorMessage,
-  stack,
-  url,
-  user,
-  occurredAt,
-  browser,
-  duplicateKey,
-}) => {
-  const title = 'Shelfio Sistem Hatası';
-  const userLabel = [
-    user?.name || user?.username || '',
-    user?.id ? `ID: ${user.id}` : '',
-    user?.role ? `Rol: ${user.role}` : '',
-  ].filter(Boolean).join(' | ') || '-';
-  const lines = [
-    title,
-    '',
-    `Hata mesajı: ${errorMessage || '-'}`,
-    `URL: ${url || '-'}`,
-    `Kullanıcı: ${userLabel}`,
-    `Tarih/saat: ${formatDisplayDate(occurredAt)}`,
-    `Browser: ${browser || '-'}`,
-    `Tekil anahtar: ${duplicateKey || '-'}`,
-    '',
-    'Stack trace:',
-    normalizeLineBreaks(stack) || '-',
-    '',
-    'Bu e-posta Shelfio hata izleme sistemi tarafından otomatik gönderildi.',
-  ];
-
-  const safeStack = escapeHtml(normalizeLineBreaks(stack)).replace(/\n/g, '<br/>');
-  return {
-    from: buildFromValue(),
-    to: toList(config.supportMailTo),
-    subject: title,
-    replyTo: config.supportMailReplyTo || undefined,
-    text: lines.join('\n'),
-    html: [
-      '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">',
-      `<h2 style="margin:0 0 16px;">${escapeHtml(title)}</h2>`,
-      '<table style="border-collapse:collapse;width:100%;max-width:760px;">',
-      `<tr><td style="padding:6px 0;font-weight:700;width:160px;">Hata mesajı</td><td style="padding:6px 0;">${escapeHtml(errorMessage || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">URL</td><td style="padding:6px 0;">${escapeHtml(url || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Kullanıcı</td><td style="padding:6px 0;">${escapeHtml(userLabel)}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Tarih/saat</td><td style="padding:6px 0;">${escapeHtml(formatDisplayDate(occurredAt))}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Browser</td><td style="padding:6px 0;">${escapeHtml(browser || '-')}</td></tr>`,
-      `<tr><td style="padding:6px 0;font-weight:700;">Tekil anahtar</td><td style="padding:6px 0;">${escapeHtml(duplicateKey || '-')}</td></tr>`,
-      '</table>',
-      '<div style="margin-top:18px;font-weight:700;">Stack trace</div>',
-      `<div style="margin-top:8px;padding:12px;border:1px solid #dbe5f0;border-radius:10px;background:#f8fafc;font-family:Consolas,monospace;font-size:12px;">${safeStack || '-'}</div>`,
-      '<p style="margin-top:18px;color:#64748b;">Bu e-posta Shelfio hata izleme sistemi tarafından otomatik gönderildi.</p>',
-      '</div>',
-    ].join(''),
-  };
 };
 
 export class MailServiceError extends AppError {
@@ -342,6 +254,7 @@ const mapSendResult = (result, expectedRecipients, fallbackUsed) => {
 };
 
 const sendMail = async (message, { context = 'mail' } = {}) => {
+  const preparedMessage = withInlineLogoAttachment(message);
   const missingFields = getMissingConfigFields();
   if (missingFields.length > 0) {
     throw new MailServiceError('smtp_config_missing', SMTP_MISSING_MESSAGE, {
@@ -351,27 +264,27 @@ const sendMail = async (message, { context = 'mail' } = {}) => {
     });
   }
 
-  if (!message.from || !Array.isArray(message.to) || message.to.length === 0) {
-    throw new MailServiceError('mail_recipient_missing', 'Mail alici veya gonderici bilgisi eksik.', {
+  if (!preparedMessage.from || !Array.isArray(preparedMessage.to) || preparedMessage.to.length === 0) {
+    throw new MailServiceError('mail_recipient_missing', 'Mail alıcı veya gönderici bilgisi eksik.', {
       statusCode: 500,
-      userMessage: 'Mail alici veya gonderici bilgisi eksik.',
+      userMessage: 'Mail alıcı veya gönderici bilgisi eksik.',
     });
   }
 
-  const expectedRecipients = normalizeRecipientList(message.to);
+  const expectedRecipients = normalizeRecipientList(preparedMessage.to);
   const primaryOptions = buildTransportOptions({
     port: config.smtpPort,
     secure: config.smtpSecure,
   });
 
   try {
-    const result = await sendWithTransport(message, primaryOptions);
+    const result = await sendWithTransport(preparedMessage, primaryOptions);
     return mapSendResult(result, expectedRecipients, false);
   } catch (error) {
     console.error(`[mail:${context}:primary-failed]`, redactErrorForLog(error, primaryOptions));
 
-    if (shouldTryFromAddressFallback(error, message)) {
-      const fromFallbackMessage = buildAuthUserFromMessage(message);
+    if (shouldTryFromAddressFallback(error, preparedMessage)) {
+      const fromFallbackMessage = buildAuthUserFromMessage(preparedMessage);
       try {
         const result = await sendWithTransport(fromFallbackMessage, primaryOptions);
         return mapSendResult(result, expectedRecipients, true);
@@ -393,7 +306,7 @@ const sendMail = async (message, { context = 'mail' } = {}) => {
       });
 
       try {
-        const result = await sendWithTransport(message, fallbackOptions);
+        const result = await sendWithTransport(preparedMessage, fallbackOptions);
         return mapSendResult(result, expectedRecipients, true);
       } catch (fallbackError) {
         console.error(`[mail:${context}:fallback-failed]`, redactErrorForLog(fallbackError, fallbackOptions));
@@ -426,7 +339,59 @@ export const mailService = {
       smtpSecure: config.smtpSecure,
       supportMailTo: toList(config.supportMailTo),
       supportMailFrom: buildFromValue(),
+      publicAppBaseUrl: config.publicAppBaseUrl,
+      mailLogoCid: MAIL_LOGO_CID,
+      mailLogoPath: MAIL_LOGO_PATH,
+      mailLogoExists: fs.existsSync(MAIL_LOGO_PATH),
     };
+  },
+
+  previewTemplate(type = 'test', payload = {}) {
+    const withPreviewAttachmentInfo = (content) => ({
+      ...content,
+      attachments: [{
+        filename: 'shelfio-logo.png',
+        cid: MAIL_LOGO_CID,
+        path: MAIL_LOGO_PATH,
+        inline: true,
+        exists: fs.existsSync(MAIL_LOGO_PATH),
+      }],
+    });
+    const normalizedType = String(type || 'test').trim().toLowerCase();
+    if (normalizedType === 'support-ticket') {
+      return withPreviewAttachmentInfo(renderSupportTicketMail({
+        ticketId: payload.ticketId || 'SUPPORT-PREVIEW',
+        subject: payload.subject || 'Örnek destek talebi',
+        user: payload.user || 'Shelfio Kullanıcısı',
+        requesterEmail: payload.requesterEmail || config.mailContactEmail,
+        requesterPhone: payload.requesterPhone || '-',
+        role: payload.role || 'admin',
+        page: payload.page || '/destek',
+        description: payload.description || 'Bu alan destek talebi mesajının önizlemesini gösterir.',
+        attachmentSummary: payload.attachmentSummary || 'Ek yok',
+        createdAt: payload.createdAt || new Date().toISOString(),
+      }));
+    }
+
+    if (normalizedType === 'password-reset') {
+      return withPreviewAttachmentInfo(renderPasswordResetMail({
+        resetLink: payload.resetLink || `${config.publicAppBaseUrl}/musteri/sifre-sifirla?token=preview`,
+      }));
+    }
+
+    if (normalizedType === 'system-error') {
+      return withPreviewAttachmentInfo(renderSystemErrorMail({
+        errorMessage: payload.errorMessage || 'Örnek hata mesajı',
+        stack: payload.stack || 'Error: Preview stack',
+        url: payload.url || `${config.publicAppBaseUrl}/preview`,
+        user: payload.user || { name: 'Shelfio Admin', role: 'admin' },
+        occurredAt: payload.occurredAt || new Date().toISOString(),
+        browser: payload.browser || 'Preview Browser',
+        duplicateKey: payload.duplicateKey || 'preview',
+      }));
+    }
+
+    return withPreviewAttachmentInfo(renderTestMail({ requestedBy: payload.requestedBy || payload.user }));
   },
 
   async sendSupportTicketEmail({
@@ -442,8 +407,8 @@ export const mailService = {
     attachmentNote = '',
     createdAt,
   }) {
-    const message = createMessage({
-      title: 'Shelfio Destek Talebi',
+    const attachmentSummary = summarizeAttachments(attachments, attachmentNote);
+    const content = renderSupportTicketMail({
       ticketId,
       subject,
       user,
@@ -452,31 +417,43 @@ export const mailService = {
       role,
       page,
       description,
-      attachments,
-      attachmentNote,
+      attachmentSummary,
       createdAt,
-      replyTo: requesterEmail || undefined,
     });
+    const message = {
+      from: buildFromValue(),
+      to: toList(config.supportMailTo),
+      subject: 'Yeni Destek Talebi',
+      replyTo: requesterEmail || config.supportMailReplyTo || undefined,
+      attachments,
+      ...content,
+    };
 
     return sendMail(message, { context: 'support-ticket' });
   },
 
+  async sendCustomerPasswordResetEmail({ to, resetLink }) {
+    const safeResetLink = String(resetLink || '').trim();
+    const content = renderPasswordResetMail({ resetLink: safeResetLink });
+    const message = {
+      from: buildFromValue(),
+      to: [String(to || '').trim()].filter(Boolean),
+      subject: 'Shelfio Şifre Sıfırlama',
+      ...content,
+    };
+
+    return sendMail(message, { context: 'customer-password-reset' });
+  },
+
   async sendTestEmail({ requestedBy } = {}) {
-    const message = createMessage({
-      title: 'Shelfio SMTP Test',
-      ticketId: 'TEST-MAIL',
-      subject: 'Shelfio SMTP Test',
-      user: requestedBy?.name || requestedBy?.username || 'Shelfio Backend',
-      requesterEmail: requestedBy?.email || config.supportMailFromEmail || config.smtpUser,
-      requesterPhone: requestedBy?.phone || '',
-      role: requestedBy?.role || 'admin',
-      page: '/api/support/test-mail',
-      description: 'Bu mail Shelfio backend SMTP testi icin gonderildi.',
-      attachments: [],
-      attachmentNote: '',
-      createdAt: new Date().toISOString(),
-      replyTo: undefined,
-    });
+    const content = renderTestMail({ requestedBy });
+    const message = {
+      from: buildFromValue(),
+      to: toList(config.supportMailTo),
+      subject: 'SMTP Test Maili',
+      replyTo: config.supportMailReplyTo || undefined,
+      ...content,
+    };
 
     return sendMail(message, { context: 'test-mail' });
   },
@@ -488,7 +465,14 @@ export const mailService = {
       return { emailSent: false, skipped: true, reason: 'smtp_config_missing', missingFields: state.missingFields };
     }
 
-    const message = createSystemErrorMessage(payload);
+    const content = renderSystemErrorMail(payload);
+    const message = {
+      from: buildFromValue(),
+      to: toList(config.supportMailTo),
+      subject: 'Sistem Hata Bildirimi',
+      replyTo: config.supportMailReplyTo || undefined,
+      ...content,
+    };
     return sendMail(message, { context: 'system-error' });
   },
 };

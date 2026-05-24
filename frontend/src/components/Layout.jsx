@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, FileText, LifeBuoy, Scale } from 'lucide-react';
+import { ArrowLeft, BookOpen, Cookie, FileText, LifeBuoy, Scale } from 'lucide-react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Header from './Header.jsx';
 import Sidebar from './Sidebar.jsx';
@@ -15,6 +15,7 @@ import { usePageTitle } from '../hooks/usePageTitle.js';
 import { resolvePageAccessRule } from '../config/pageAccessRules.js';
 import { getRolePermissions, hasPermission } from '../config/permissions.js';
 import { SUPPORT_CONTACT } from '../constants/contact.js';
+import { COOKIE_POLICY_TEXT, openCookiePreferences } from './CookieConsent.jsx';
 
 export const LEGAL_DOCUMENTS = {
   aydinlatma_metni: {
@@ -221,6 +222,10 @@ Shelfio Stok Takip ve Elektronik Etiket Sistemleri Teknoloji A.Ş.
 Adres: Kazımdirik, 372. Sk.
 E-posta: ${SUPPORT_CONTACT.email}`,
   },
+  cerez_politikasi: {
+    title: 'Çerez Bilgilendirme Metni',
+    content: COOKIE_POLICY_TEXT,
+  },
 };
 
 export default function Layout() {
@@ -383,7 +388,11 @@ export default function Layout() {
   const isLegalModalOpen = Boolean(activeLegalDoc);
   const legalModalTitle = activeLegalDoc ? LEGAL_DOCUMENTS[activeLegalDoc]?.title : '';
   const legalModalBody = activeLegalDoc ? LEGAL_DOCUMENTS[activeLegalDoc]?.content : '';
-  const legalModalIcon = activeLegalDoc === 'sartlar_ve_kosullar' ? <Scale size={17} /> : <FileText size={17} />;
+  const legalModalIcon = activeLegalDoc === 'sartlar_ve_kosullar' ?
+    <Scale size={17} />
+    : activeLegalDoc === 'cerez_politikasi' ?
+      <Cookie size={17} />
+      : <FileText size={17} />;
 
   const handleCloseLegalModal = () => {
     setActiveLegalDoc(null);
@@ -461,6 +470,14 @@ export default function Layout() {
                 aria-label="Şartlar ve Koşulları aç"
               >
                 <Scale size={13} /> Şartlar ve Koşullar
+              </button>
+              <button
+                type="button"
+                className="app-footer-legal-link"
+                onClick={openCookiePreferences}
+                aria-label="Çerez tercihlerini aç"
+              >
+                <Cookie size={13} /> Çerez Tercihleri
               </button>
               <button
                 type="button"

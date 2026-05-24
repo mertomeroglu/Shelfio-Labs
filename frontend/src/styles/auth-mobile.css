@@ -296,6 +296,18 @@
   padding: 10px 12px;
 }
 
+.shelf-auth-success {
+  margin: 0;
+  border: 1px solid rgba(74, 222, 128, 0.42);
+  border-radius: 12px;
+  background: rgba(20, 83, 45, 0.34);
+  color: #bbf7d0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 10px 12px;
+}
+
 .shelf-auth-help {
   color: #9fb2d1;
   font-size: 0.75rem;
@@ -412,6 +424,14 @@
   padding: 0;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.shelf-auth-forgot-link {
+  grid-column: auto;
+  justify-self: end;
+  align-self: end;
+  margin-top: -4px;
+  font-size: 0.82rem;
 }
 
 .shelf-auth-modal {

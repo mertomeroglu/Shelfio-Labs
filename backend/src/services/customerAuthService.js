@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { AppError } from '../utils/appError.js';
 import { comparePassword, hashPassword } from '../utils/password.js';
 import { signCustomerRefreshToken, signToken, verifyCustomerRefreshToken } from '../utils/jwt.js';
@@ -6,11 +7,66 @@ import { customerRepo } from '../repositories/customerRepository.js';
 import { customerService } from './customerService.js';
 import { storeMapService } from './storeMapService.js';
 import { customerCatalogService } from './customerCatalogService.js';
+import { mailService } from './mailService.js';
+import { getPrisma } from '../providers/postgresProvider.js';
 
 const normalize = (v) => String(v || '').trim();
 const normalizePhone = (v) => normalize(v).replace(/\D/g, '');
 const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=?]).{8,}$/.test(String(value || ''));
+const isResetPasswordStrong = (value) => /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(String(value || ''));
 const mapCustomer = (x) => ({ id: x.id, customerNo: String(x.customerNo || ''), name: x.name, phone: x.phone, email: x.email, totalOrders: Number(x.totalOrders || 0), totalSpent: Number(x.totalSpent || 0), isActive: x.isActive !== false, discounts: Array.isArray(x.discounts) ? x.discounts : [], giftCards: Array.isArray(x.giftCards) ? x.giftCards : [], createdAt: x.createdAt });
+const PASSWORD_RESET_MESSAGE = 'Eğer bu e-posta sistemde kayıtlıysa şifre sıfırlama bağlantısı gönderildi.';
+const PASSWORD_RESET_TTL_MINUTES = 30;
+const PASSWORD_RESET_EMAIL_COOLDOWN_MS = 3 * 60 * 1000;
+const PASSWORD_RESET_IP_WINDOW_MS = 10 * 60 * 1000;
+const PASSWORD_RESET_IP_LIMIT = 12;
+const passwordResetEmailCooldown = new Map();
+const passwordResetIpHits = new Map();
+
+const normalizeEmail = (value) => normalize(value).toLowerCase();
+const isValidEmail = (value) => /^\S+@\S+\.\S+$/.test(String(value || ''));
+const hashResetToken = (token) => crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
+const createResetToken = () => crypto.randomBytes(32).toString('base64url');
+const isProductionRuntime = String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production';
+const isLocalhostBaseUrl = (value = '') => {
+  try {
+    const parsed = new URL(value);
+    return ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+const getResetBaseUrl = () => {
+  const configuredBaseUrl = String(process.env.CUSTOMER_RESET_BASE_URL || process.env.FRONTEND_BASE_URL || '').trim();
+  const normalizedBaseUrl = (configuredBaseUrl || 'https://shelfiolabs.com').replace(/\/+$/, '');
+  if (isProductionRuntime && isLocalhostBaseUrl(normalizedBaseUrl)) {
+    return 'https://shelfiolabs.com';
+  }
+  return normalizedBaseUrl;
+};
+const buildResetLink = (token) => `${getResetBaseUrl()}/musteri/sifre-sifirla?token=${encodeURIComponent(token)}`;
+const pruneRateMap = (map, now = Date.now()) => {
+  for (const [key, value] of map.entries()) {
+    const last = Array.isArray(value) ? Math.max(...value, 0) : Number(value || 0);
+    if (!last || now - last > PASSWORD_RESET_IP_WINDOW_MS) map.delete(key);
+  }
+};
+const isIpRateLimited = (ip) => {
+  const key = normalize(ip) || 'unknown';
+  const now = Date.now();
+  pruneRateMap(passwordResetIpHits, now);
+  const hits = (passwordResetIpHits.get(key) || []).filter((at) => now - at <= PASSWORD_RESET_IP_WINDOW_MS);
+  hits.push(now);
+  passwordResetIpHits.set(key, hits);
+  return hits.length > PASSWORD_RESET_IP_LIMIT;
+};
+const isEmailCoolingDown = (email) => {
+  const now = Date.now();
+  const last = Number(passwordResetEmailCooldown.get(email) || 0);
+  if (last && now - last < PASSWORD_RESET_EMAIL_COOLDOWN_MS) return true;
+  passwordResetEmailCooldown.set(email, now);
+  return false;
+};
 
 export const customerAuthService = {
   async register(payload) {
@@ -44,6 +100,95 @@ export const customerAuthService = {
       refreshToken: signCustomerRefreshToken({ sub: row.id, type: 'customer-refresh', email: row.email }),
       customer: mapCustomer(row),
     };
+  },
+  async forgotPassword(payload, meta = {}) {
+    const email = normalizeEmail(payload?.email);
+    if (!email || !isValidEmail(email)) throw new AppError(400, 'Geçerli bir e-posta adresi girin.');
+
+    if (isIpRateLimited(meta.ip)) {
+      return { message: PASSWORD_RESET_MESSAGE };
+    }
+
+    const coolingDown = isEmailCoolingDown(email);
+    const row = (await customerRepo.getAll()).find((x) => normalizeEmail(x.email) === email && x.isActive !== false);
+    if (!row || coolingDown) {
+      return { message: PASSWORD_RESET_MESSAGE };
+    }
+
+    const prisma = await getPrisma();
+    const token = createResetToken();
+    const tokenHash = hashResetToken(token);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + (PASSWORD_RESET_TTL_MINUTES * 60 * 1000));
+
+    await prisma.customerPasswordResetToken.updateMany({
+      where: { customerId: row.id, usedAt: null, expiresAt: { gt: now } },
+      data: { usedAt: now },
+    });
+    await prisma.customerPasswordResetToken.create({
+      data: {
+        id: uuidv4(),
+        customerId: row.id,
+        tokenHash,
+        expiresAt,
+        requestedIp: meta.ip || null,
+        userAgent: meta.userAgent || null,
+      },
+    });
+
+    try {
+      await mailService.sendCustomerPasswordResetEmail({ to: email, resetLink: buildResetLink(token) });
+    } catch (error) {
+      await prisma.customerPasswordResetToken.updateMany({
+        where: { tokenHash },
+        data: { usedAt: new Date() },
+      });
+      throw new AppError(503, error?.userMessage || 'Şifre sıfırlama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.');
+    }
+
+    return { message: PASSWORD_RESET_MESSAGE };
+  },
+  async resetPassword(payload) {
+    const token = normalize(payload?.token);
+    const password = String(payload?.password || '');
+    const passwordConfirm = String(payload?.passwordConfirm || '');
+
+    if (!token) throw new AppError(400, 'Şifre sıfırlama bağlantısı geçersiz.');
+    if (!password || !passwordConfirm) throw new AppError(400, 'Yeni şifre ve şifre tekrarı zorunludur.');
+    if (password !== passwordConfirm) throw new AppError(400, 'Şifreler eşleşmiyor.');
+    if (!isResetPasswordStrong(password)) throw new AppError(400, 'Şifre en az 8 karakter olmalı ve en az 1 harf ile 1 rakam içermelidir.');
+
+    const prisma = await getPrisma();
+    const tokenHash = hashResetToken(token);
+    const resetRow = await prisma.customerPasswordResetToken.findUnique({
+      where: { tokenHash },
+      include: { customer: true },
+    });
+
+    if (!resetRow || resetRow.usedAt || resetRow.expiresAt.getTime() <= Date.now() || !resetRow.customer || resetRow.customer.isActive === false) {
+      throw new AppError(400, 'Şifre sıfırlama bağlantısı geçersiz veya süresi dolmuş.');
+    }
+
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.customer.update({
+        where: { id: resetRow.customerId },
+        data: {
+          passwordHash: await hashPassword(password),
+          updatedAt: now,
+        },
+      }),
+      prisma.customerPasswordResetToken.update({
+        where: { id: resetRow.id },
+        data: { usedAt: now },
+      }),
+      prisma.customerPasswordResetToken.updateMany({
+        where: { customerId: resetRow.customerId, usedAt: null, id: { not: resetRow.id } },
+        data: { usedAt: now },
+      }),
+    ]);
+
+    return { message: 'Şifreniz güncellendi. Giriş yapabilirsiniz.' };
   },
   async refreshSession(payload) {
     const refreshToken = String(payload?.refreshToken || '').trim();

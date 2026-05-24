@@ -18,20 +18,28 @@ import { customerAdminService } from '../../../services/customerAdminService.js'
 import { pricingAnalysisService } from '../../../services/pricingAnalysisService.js';
 import { campaignAnalysisService } from '../../../services/campaignAnalysisService.js';
 import { procurementService } from '../../../services/procurementService.js';
-import { posService } from '../../../services/posService.js';
 import { userService } from '../../../services/userService.js';
 import { playNotificationTone } from '../../../utils/notificationSound.js';
 import { SUPPORT_CONTACT } from '../../../constants/contact.js';
 import {
   applyBulkCampaignAction,
   buildCampaignEmptyState,
+  buildCampaignSuggestionPresentation,
   buildCampaignSuggestions,
   calculateCampaignImpact,
+  CAMPAIGN_SUGGESTION_MODULES,
   CAMPAIGN_TEMPLATE_LIBRARY,
   mapPricingRowsForCampaigns,
   mergeCrossModuleIntelligence,
   previewDynamicRuleImpact,
 } from './campaignManagementUtils.js';
+import {
+  autoSaleRunner,
+  AUTO_SALE_DENSITY_OPTIONS,
+  AUTO_SALE_DURATION_OPTIONS,
+  DEFAULT_AUTO_SALE_CONFIG,
+  DEFAULT_AUTO_SALE_SUMMARY,
+} from './autoSaleRunner.js';
 
 const DAYS = [
   { key: 'Pazartesi', short: 'Pzt' },
@@ -1486,6 +1494,25 @@ const isCampaignPlanned = (campaign = {}, now = new Date()) => {
   return Boolean(startsAt && Number.isFinite(startsAt.getTime()) && startsAt > now);
 };
 
+const getCampaignEndBoundary = (campaign = {}) => {
+  const endsAtValue = String(campaign?.endsAt || '').trim();
+  const endsAt = endsAtValue ? new Date(endsAtValue) : null;
+  if (!endsAt || !Number.isFinite(endsAt.getTime())) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(endsAtValue)) {
+    endsAt.setHours(23, 59, 59, 999);
+  }
+  return endsAt;
+};
+
+const isPastCampaignClutter = (campaign = {}, now = new Date()) => {
+  if (isCampaignCurrentlyActive(campaign, now) || isCampaignPlanned(campaign, now)) return false;
+  const status = String(campaign?.status || '').trim().toLowerCase();
+  const endedStatuses = new Set(['archived', 'expired', 'cancelled', 'canceled', 'deleted']);
+  if (endedStatuses.has(status)) return true;
+  const endsAt = getCampaignEndBoundary(campaign);
+  return Boolean(endsAt && endsAt < now);
+};
+
 const formatCampaignDate = (value) => {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return '-';
@@ -1586,35 +1613,6 @@ const SYSTEM_DESK_ROWS = [
   { code: 'B8', label: 'Yönetim Kasası PIN' },
 ];
 
-const AUTO_SALE_SOURCE = 'otomatik_satis_paneli';
-const AUTO_SALE_DENSITY_OPTIONS = [
-  { value: 'low', label: 'Düşük', minDelay: 12000, maxDelay: 18000 },
-  { value: 'medium', label: 'Orta', minDelay: 6000, maxDelay: 10000 },
-  { value: 'high', label: 'Yüksek', minDelay: 2500, maxDelay: 5000 },
-];
-const AUTO_SALE_DURATION_OPTIONS = [
-  { value: '5', label: '5 dakika', minutes: 5 },
-  { value: '10', label: '10 dakika', minutes: 10 },
-  { value: '30', label: '30 dakika', minutes: 30 },
-  { value: '60', label: '1 saat', minutes: 60 },
-  { value: 'manual', label: 'Manuel durdurulana kadar', minutes: null },
-];
-const DEFAULT_AUTO_SALE_CONFIG = {
-  density: 'medium',
-  deskCodes: ['B1', 'B2', 'B3'],
-  minAmount: '50',
-  maxAmount: '500',
-  duration: 'manual',
-  returnRate: '3',
-};
-const DEFAULT_AUTO_SALE_SUMMARY = {
-  totalCount: 0,
-  totalAmount: 0,
-  lastSaleAt: '',
-  activeDeskCodes: [],
-  returnedCount: 0,
-  endsAt: '',
-};
 const AUTO_SALE_DESK_OPTIONS = SYSTEM_DESK_ROWS.map((row) => ({
   code: row.code,
   label: row.label.replace(/\s*PIN$/i, ''),
@@ -1917,6 +1915,9 @@ const getDeveloperLogPresentation = (row) => {
   const extraDetails = [
     log.statusCode ? `Durum kodu: ${log.statusCode}` : '',
     log.errorType ? `Hata Sınıfı: ${log.errorType}` : '',
+    log.requestId ? `Request ID: ${log.requestId}` : '',
+    log.correlationId ? `Correlation ID: ${log.correlationId}` : '',
+    log.repeatCount && Number(log.repeatCount) > 1 ? `Tekrar: ${log.repeatCount}` : '',
     log.requestUrl || log.endpoint ? `Endpoint: ${log.requestUrl || log.endpoint}` : '',
     log.browserInfo ? `Tarayıcı: ${log.browserInfo}` : '',
     log.ip ? `IP: ${log.ip}` : '',
@@ -2022,10 +2023,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [autoSaleSummary, setAutoSaleSummary] = useState(DEFAULT_AUTO_SALE_SUMMARY);
   const [autoSaleError, setAutoSaleError] = useState('');
   const [autoSaleRemainingMs, setAutoSaleRemainingMs] = useState(null);
-  const autoSaleTimerRef = useRef(null);
-  const autoSaleCountdownRef = useRef(null);
-  const autoSaleActiveRef = useRef(false);
-  const autoSaleEndsAtRef = useRef(null);
   const [campaignTypeView, setCampaignTypeView] = useState(() => {
     if (typeof window === 'undefined') return 'all';
     try {
@@ -2209,46 +2206,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
   };
 
-  const stopAutoSaleAutomation = () => {
-    autoSaleActiveRef.current = false;
-    setAutoSaleActive(false);
-    autoSaleEndsAtRef.current = null;
-    setAutoSaleRemainingMs(null);
-    if (autoSaleTimerRef.current) {
-      window.clearTimeout(autoSaleTimerRef.current);
-      autoSaleTimerRef.current = null;
-    }
-    if (autoSaleCountdownRef.current) {
-      window.clearInterval(autoSaleCountdownRef.current);
-      autoSaleCountdownRef.current = null;
-    }
-  };
-
-  const validateAutoSaleConfig = (config = autoSaleConfig) => {
-    const minAmount = Number(config.minAmount);
-    const maxAmount = Number(config.maxAmount);
-    if (!Array.isArray(config.deskCodes) || config.deskCodes.length === 0) {
-      return 'En az bir kasa seçilmelidir.';
-    }
-    if (!Number.isFinite(minAmount) || !Number.isFinite(maxAmount)) {
-      return 'Minimum ve maksimum tutar boş bırakılamaz.';
-    }
-    if (minAmount <= 0 || maxAmount <= 0) {
-      return 'Satış tutarları sıfırdan büyük olmalıdır.';
-    }
-    if (minAmount > maxAmount) {
-      return 'Minimum tutar maksimum tutardan büyük olamaz.';
-    }
-    const returnRate = Number(config.returnRate);
-    if (!Number.isFinite(returnRate) || returnRate < 0 || returnRate > 100) {
-      return 'İade oranı 0 ile 100 arasında olmalıdır.';
-    }
-    return '';
-  };
-
   const updateAutoSaleConfig = (field, value) => {
     setAutoSaleError('');
-    setAutoSaleConfig((current) => ({ ...current, [field]: value }));
+    setAutoSaleConfig((current) => {
+      const next = { ...current, [field]: value };
+      autoSaleRunner.updateConfig(next);
+      return next;
+    });
   };
 
   const toggleAutoSaleDesk = (deskCode) => {
@@ -2258,98 +2222,33 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       const nextCodes = currentCodes.includes(deskCode)
         ? currentCodes.filter((code) => code !== deskCode)
         : [...currentCodes, deskCode];
-      return { ...current, deskCodes: nextCodes };
+      const next = { ...current, deskCodes: nextCodes };
+      autoSaleRunner.updateConfig(next);
+      return next;
     });
   };
 
-  const scheduleNextAutoSale = (config) => {
-    if (autoSaleEndsAtRef.current && Date.now() >= autoSaleEndsAtRef.current) {
-      stopAutoSaleAutomation();
-      return;
-    }
-    const density = AUTO_SALE_DENSITY_OPTIONS.find((item) => item.value === config.density) || AUTO_SALE_DENSITY_OPTIONS[1];
-    const delay = density.minDelay + Math.floor(Math.random() * (density.maxDelay - density.minDelay + 1));
-    const safeDelay = autoSaleEndsAtRef.current ? Math.min(delay, Math.max(0, autoSaleEndsAtRef.current - Date.now())) : delay;
-    autoSaleTimerRef.current = window.setTimeout(() => {
-      void createAutoSaleTick(config);
-    }, safeDelay);
-  };
-
-  const createAutoSaleTick = async (config) => {
-    if (!autoSaleActiveRef.current) return;
-    if (autoSaleEndsAtRef.current && Date.now() >= autoSaleEndsAtRef.current) {
-      stopAutoSaleAutomation();
-      return;
-    }
-    const deskCodes = Array.isArray(config.deskCodes) ? config.deskCodes : [];
-    const deskCode = deskCodes[Math.floor(Math.random() * deskCodes.length)];
-    const minAmount = Number(config.minAmount);
-    const maxAmount = Number(config.maxAmount);
-    const amount = Math.round((minAmount + Math.random() * (maxAmount - minAmount)) * 100) / 100;
-    const returnRate = Math.max(0, Math.min(Number(config.returnRate || 0), 100)) / 100;
-
-    try {
-      const response = await posService.createAutomaticSale({ deskCode, amount, returnRate, source: AUTO_SALE_SOURCE });
-      const sale = response?.data || response;
-      const saleAmount = Number(sale?.totalAmount ?? amount);
-      const saleTime = sale?.createdAt || new Date().toISOString();
-      setAutoSaleSummary((current) => ({
-        totalCount: current.totalCount + 1,
-        totalAmount: Math.round((Number(current.totalAmount || 0) + saleAmount) * 100) / 100,
-        lastSaleAt: saleTime,
-        activeDeskCodes: deskCodes,
-        returnedCount: Number(current.returnedCount || 0) + (sale?.automaticReturnCreated ? 1 : 0),
-        endsAt: current.endsAt,
-      }));
-      scheduleNextAutoSale(config);
-    } catch (error) {
-      setAutoSaleError(error?.message || 'Otomatik satış oluşturulamadı.');
-      stopAutoSaleAutomation();
-    }
-  };
-
   const startAutoSaleAutomation = () => {
-    if (autoSaleActiveRef.current) return;
-    const validationError = validateAutoSaleConfig();
+    const validationError = autoSaleRunner.start(autoSaleConfig);
     if (validationError) {
       setAutoSaleError(validationError);
-      return;
     }
-    const nextConfig = {
-      ...autoSaleConfig,
-      deskCodes: [...autoSaleConfig.deskCodes],
-    };
-    const durationOption = AUTO_SALE_DURATION_OPTIONS.find((item) => item.value === nextConfig.duration);
-    const endsAt = durationOption?.minutes ? Date.now() + (durationOption.minutes * 60 * 1000) : null;
-    setAutoSaleError('');
-    autoSaleEndsAtRef.current = endsAt;
-    setAutoSaleRemainingMs(endsAt ? Math.max(0, endsAt - Date.now()) : null);
-    setAutoSaleSummary((current) => ({ ...current, activeDeskCodes: nextConfig.deskCodes, endsAt: endsAt ? new Date(endsAt).toISOString() : '' }));
-    autoSaleActiveRef.current = true;
-    setAutoSaleActive(true);
-    if (autoSaleCountdownRef.current) window.clearInterval(autoSaleCountdownRef.current);
-    autoSaleCountdownRef.current = window.setInterval(() => {
-      if (!autoSaleEndsAtRef.current) {
-        setAutoSaleRemainingMs(null);
-        return;
-      }
-      const remaining = Math.max(0, autoSaleEndsAtRef.current - Date.now());
-      setAutoSaleRemainingMs(remaining);
-      if (remaining <= 0) {
-        stopAutoSaleAutomation();
-      }
-    }, 1000);
-    void createAutoSaleTick(nextConfig);
   };
 
-  useEffect(() => () => {
-    if (autoSaleTimerRef.current) {
-      window.clearTimeout(autoSaleTimerRef.current);
-    }
-    if (autoSaleCountdownRef.current) {
-      window.clearInterval(autoSaleCountdownRef.current);
-    }
-    autoSaleActiveRef.current = false;
+  const stopAutoSaleAutomation = () => {
+    autoSaleRunner.stop();
+  };
+
+  useEffect(() => {
+    const unsubscribe = autoSaleRunner.subscribe((snapshot) => {
+      setAutoSaleActive(Boolean(snapshot.active));
+      setAutoSaleConfig(snapshot.config || DEFAULT_AUTO_SALE_CONFIG);
+      setAutoSaleSummary(snapshot.summary || DEFAULT_AUTO_SALE_SUMMARY);
+      setAutoSaleError(snapshot.error || '');
+      setAutoSaleRemainingMs(snapshot.remainingMs);
+    });
+    autoSaleRunner.resumeIfNeeded();
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -3729,7 +3628,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
   };
 
-  const persistCustomerRelations = async (nextCustomerRelations, successMessage, errorMessage = 'Müşteri ilişkileri güncellenemedi.') => {
+  const persistCustomerRelations = async (nextCustomerRelations, successMessage, errorMessage = 'Müşteri ilişkileri güncellenemedi.', options = {}) => {
     const previousCustomerRelations = form.customerRelations || {};
     setForm((current) => ({
       ...current,
@@ -3744,6 +3643,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           campaigns: normalizeCampaigns(nextCustomerRelations?.campaigns),
           automationCenter: normalizeAutomationCenter(nextCustomerRelations?.automationCenter),
         },
+        skipCampaignPriceHistorySync: options.skipCampaignPriceHistorySync === true,
       });
       const mapped = mapSettingsToForm(next);
       setUpdatedAt(next.updatedAt);
@@ -3961,31 +3861,33 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const campaignSuggestions = useMemo(() => {
     const base = Array.isArray(backendCampaignSuggestions) ? backendCampaignSuggestions : [];
-    const seenCampaignSuggestionKeys = new Set();
-    const finalSuggestions = base
-      .filter((item) => {
-        const key = String(item.id || item.title || '').toLowerCase();
-        if (!key || seenCampaignSuggestionKeys.has(key)) return false;
-        seenCampaignSuggestionKeys.add(key);
-        return true;
-      })
-      .slice(0, Math.max(5, base.length));
     void suggestionRefreshKey;
-    return finalSuggestions;
+    return buildCampaignSuggestionPresentation(base).all;
   }, [backendCampaignSuggestions, suggestionRefreshKey]);
+
+  const campaignSuggestionPresentation = useMemo(
+    () => buildCampaignSuggestionPresentation(campaignSuggestions),
+    [campaignSuggestions]
+  );
+
+  const dashboardCampaignSuggestions = campaignSuggestionPresentation.dashboardHighlights;
+  const moduleCampaignSuggestions = campaignSuggestionPresentation.byModule[campaignTypeView] || [];
+  const visibleCampaignSuggestions = campaignTypeView === 'all'
+    ? dashboardCampaignSuggestions
+    : moduleCampaignSuggestions;
 
   useEffect(() => {
     setCampaignSuggestionPage(1);
-  }, [campaignSuggestions.length, campaignTypeView]);
+  }, [visibleCampaignSuggestions.length, campaignTypeView]);
 
-  const campaignSuggestionTotalPages = Math.max(1, Math.ceil(campaignSuggestions.length / CAMPAIGN_SUGGESTIONS_PAGE_SIZE));
+  const campaignSuggestionTotalPages = Math.max(1, Math.ceil(visibleCampaignSuggestions.length / CAMPAIGN_SUGGESTIONS_PAGE_SIZE));
   const safeCampaignSuggestionPage = Math.min(campaignSuggestionPage, campaignSuggestionTotalPages);
   const pagedCampaignSuggestions = useMemo(
-    () => campaignSuggestions.slice(
+    () => visibleCampaignSuggestions.slice(
       (safeCampaignSuggestionPage - 1) * CAMPAIGN_SUGGESTIONS_PAGE_SIZE,
       safeCampaignSuggestionPage * CAMPAIGN_SUGGESTIONS_PAGE_SIZE,
     ),
-    [campaignSuggestions, safeCampaignSuggestionPage],
+    [visibleCampaignSuggestions, safeCampaignSuggestionPage],
   );
 
   const expirySignalRows = useMemo(
@@ -4021,13 +3923,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   }), []);
 
   const expirySuggestions = useMemo(
-    () => campaignSuggestions.filter((item) => EXPIRY_SUGGESTION_IDS.has(String(item?.id || ''))),
-    [campaignSuggestions]
+    () => campaignSuggestionPresentation.byModule.expiry || [],
+    [campaignSuggestionPresentation]
   );
 
   const salesSuggestions = useMemo(
-    () => campaignSuggestions.filter((item) => SALES_SUGGESTION_IDS.has(String(item?.id || ''))),
-    [campaignSuggestions]
+    () => campaignSuggestionPresentation.byModule.sales || [],
+    [campaignSuggestionPresentation]
   );
 
   const campaignSummary = useMemo(() => {
@@ -4829,17 +4731,20 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const clearPastCampaigns = async () => {
     const currentCampaigns = form.customerRelations?.campaigns || [];
-    const removableCampaigns = currentCampaigns.filter((item) => !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item));
+    const removableCampaigns = currentCampaigns.filter((item) => isPastCampaignClutter(item));
     if (!removableCampaigns.length) {
       setToast({ type: 'info', title: 'Kampanya Yönetimi', message: 'Temizlenecek geçmiş kampanya bulunmuyor.' });
       return;
     }
 
-    const keptCampaigns = currentCampaigns.filter((item) => isCampaignCurrentlyActive(item) || isCampaignPlanned(item));
+    const removableIds = new Set(removableCampaigns.map((item) => String(item.id || '')));
+    const keptCampaigns = currentCampaigns.filter((item) => !removableIds.has(String(item.id || '')));
     const persisted = await persistCustomerRelations({
       ...(form.customerRelations || {}),
       campaigns: keptCampaigns,
-    }, `${removableCampaigns.length} geçmiş kampanya temizlendi.`, 'Geçmiş kampanyalar temizlenemedi.');
+    }, `${removableCampaigns.length} geçmiş kampanya temizlendi.`, 'Geçmiş kampanyalar temizlenemedi.', {
+      skipCampaignPriceHistorySync: true,
+    });
 
     if (persisted) {
       setSelectedCampaignIds([]);
@@ -4869,7 +4774,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           updatedAt: new Date().toISOString(),
         };
       }),
-    }, nextActive ? 'Kampanya aktife alındı.' : 'Kampanya pasife alındı.', 'Kampanya durumu güncellenemedi.');
+    }, nextActive ? 'Kampanya aktife alındı.' : 'Kampanya sonlandırıldı.', 'Kampanya durumu güncellenemedi.');
   };
 
   const archiveCampaign = async (campaignId) => {
@@ -6209,7 +6114,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       {statusMeta.canEdit ? (
                         <>
                           <button className="text-button" type="button" onClick={() => openCampaignEditModal(item)}>Düzenle</button>
-                          <button className="text-button danger" type="button" onClick={() => toggleCampaignStatus(item.id)}>Pasife Al</button>
+                          <button className="text-button danger" type="button" onClick={() => toggleCampaignStatus(item.id)}>Sonlandır</button>
                         </>
                       ) : null}
                     </div>
@@ -6608,6 +6513,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 >
                   <TabIcon size={14} />
                   <span className="campaign-switch-label">{tab.label}</span>
+                  <span className="campaign-switch-count">
+                    {formatNumber(tab.key === 'all' ? dashboardCampaignSuggestions.length : (campaignSuggestionPresentation.counts[tab.key] || 0))}
+                  </span>
                 </button>
               );
             })}
@@ -6615,9 +6523,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         </section>
       ) : null}
 
-      {isCampaignPage && campaignSuggestions.length ? (
+      {isCampaignPage && visibleCampaignSuggestions.length ? (
         <div className="sr-only campaign-sr-actions" aria-label="Kampanya önerisi hızlı aksiyonları">
-          {campaignSuggestions.slice(0, 5).map((suggestion) => (
+          {visibleCampaignSuggestions.slice(0, 5).map((suggestion) => (
             <button key={`sr-${suggestion.id}`} type="button" aria-label="Öneriden kampanya oluştur" onClick={() => createCampaignFromSuggestion(suggestion)}>
               Öneriden kampanya oluştur
             </button>
@@ -6628,32 +6536,27 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       {!isCampaignPage && autoSalePanelOpen ? (
         <section id="automatic-sales-panel" className="s-card s-auto-sale-panel" aria-label="Otomatik Satış Paneli">
           <div className="s-card-header s-auto-sale-panel-header">
-            <div className="s-card-icon s-icon-green"><Coins size={18} /></div>
-            <div>
-              <h3 className="s-card-title">Otomatik Satış Paneli</h3>
-              <p className="s-card-desc">Seçilen kasalar üzerinden gerçek ürünlerle satış hareketi üretir.</p>
-            </div>
-          </div>
-
-          <div className="s-auto-sale-top-row">
-            <div className="s-config-item s-automation-item s-auto-sale-main-toggle">
-              <div className="s-automation-content">
-                <span className="s-config-label s-automation-title">Otomasyon durumu</span>
-                <span className="s-automation-desc">Aktifken seçilen kasalara sistem kaynaklı satış kayıtları üretir.</span>
+            <div className="s-auto-sale-title-group">
+              <div className="s-card-icon s-icon-green"><Coins size={18} /></div>
+              <div>
+                <h3 className="s-card-title">Otomatik Satış Paneli</h3>
+                <p className="s-card-desc">Seçilen kasalarda gerçek ürün, stok ve ödeme akışıyla satış üretir.</p>
               </div>
-              <span className={`s-auto-sale-status-badge ${autoSaleActive ? 'is-active' : 'is-passive'}`}>{autoSaleActive ? 'Aktif' : 'Pasif'}</span>
             </div>
-
-            <div className="s-auto-sale-status-box">
-              <span className="s-auto-sale-status-badge is-passive">
-                Kaynak: Otomatik satış paneli
-              </span>
-              <p>Üretilen satışlar gerçek ürün, stok ve ödeme akışıyla kaydedilir.</p>
+            <div className="s-auto-sale-header-actions">
+              <span className="s-auto-sale-source-note">Kaynak: Otomatik satış paneli</span>
+              <span className={`s-auto-sale-status-badge ${autoSaleActive ? 'is-active' : 'is-passive'}`}>{autoSaleActive ? 'Aktif' : 'Pasif'}</span>
+              <button type="button" className="primary-button" onClick={startAutoSaleAutomation} disabled={autoSaleActive}>
+                Başlat
+              </button>
+              <button type="button" className="ghost-button danger" onClick={stopAutoSaleAutomation} disabled={!autoSaleActive}>
+                Durdur
+              </button>
             </div>
           </div>
 
           <fieldset className="s-auto-sale-fieldset">
-            <div className="s-auto-sale-fieldset-title">Sepet tutarı hedef aralığı</div>
+            <div className="s-auto-sale-fieldset-title">Ayarlar</div>
             <div className="s-auto-sale-grid">
               <label className="s-field">
                 <span className="s-field-label">Yoğunluk</span>
@@ -6675,12 +6578,27 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   {AUTO_SALE_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </label>
+              {autoSaleConfig.duration === 'custom' ? (
+                <label className="s-field">
+                  <span className="s-field-label">Özel süre (dk)</span>
+                  <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.customMinutes} onChange={(event) => updateAutoSaleConfig('customMinutes', event.target.value)} disabled={autoSaleActive} />
+                </label>
+              ) : null}
               <label className="s-field">
                 <span className="s-field-label">İade oranı (%)</span>
                 <input className="s-config-input" type="number" min="0" max="100" step="0.1" value={autoSaleConfig.returnRate} onChange={(event) => updateAutoSaleConfig('returnRate', event.target.value)} disabled={autoSaleActive} />
               </label>
+              <label className="s-field">
+                <span className="s-field-label">Minimum ürün çeşidi</span>
+                <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.minProductCount} onChange={(event) => updateAutoSaleConfig('minProductCount', event.target.value)} disabled={autoSaleActive} />
+              </label>
+              <label className="s-field">
+                <span className="s-field-label">Maksimum ürün çeşidi</span>
+                <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.maxProductCount} onChange={(event) => updateAutoSaleConfig('maxProductCount', event.target.value)} disabled={autoSaleActive} />
+              </label>
             </div>
 
+            <div className="s-auto-sale-fieldset-title">Kasa seçimi</div>
             <div className="s-auto-sale-desk-list" aria-label="Kasa seçimi">
               {AUTO_SALE_DESK_OPTIONS.map((desk) => {
                 const isSelected = autoSaleConfig.deskCodes.includes(desk.code);
@@ -6701,15 +6619,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </div>
 
             {autoSaleError ? <div className="s-auto-sale-error" role="alert">{autoSaleError}</div> : null}
-
-            <div className="s-auto-sale-quick-actions s-auto-sale-actions">
-              <button type="button" className="primary-button" onClick={startAutoSaleAutomation} disabled={autoSaleActive}>
-                Başlat
-              </button>
-              <button type="button" className="ghost-button danger" onClick={stopAutoSaleAutomation} disabled={!autoSaleActive}>
-                Durdur
-              </button>
-            </div>
           </fieldset>
 
           <div className="s-auto-sale-bottom-grid">
@@ -6850,8 +6759,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div className="mod-card-header">
                   <div className="mod-card-icon mod-icon-indigo"><Megaphone size={18} /></div>
                   <div>
-                    <h3>Kampanya Önerileri</h3>
-                    <p>Kampanya ve hediye kartı performansını tek bakışta değerlendirin.</p>
+                    <h3>Öne Çıkan Fırsatlar</h3>
+                    <p>Modül detaylarına taşınan öneriler yerine çapraz ve yönetici seviyesindeki özel fırsatları izleyin.</p>
                   </div>
                   <div
                     className="campaign-refresh-toolbar"
@@ -6887,21 +6796,23 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                 </div>
 
-                <section className="campaign-suggestions-panel" aria-label="Önerilen Kampanyalar">
+                <section className="campaign-suggestions-panel campaign-suggestions-panel--dashboard" aria-label="Öne çıkan kampanya fırsatları">
                   <div className="campaign-suggestion-list">
-                    {pagedCampaignSuggestions.map((suggestion) => (
-                      <article key={suggestion.id} className="campaign-suggestion-row">
+                    {pagedCampaignSuggestions.length ? pagedCampaignSuggestions.map((suggestion) => (
+                      <article key={suggestion.id} className="campaign-suggestion-row campaign-suggestion-row--special">
                         <div className="campaign-suggestion-main">
                           <strong>{suggestion.title}</strong>
                           <p>{suggestion.reason}</p>
                           <div className="campaign-suggestion-meta">
                             <span>{formatNumber(suggestion.affectedProductCount)} Ürün</span>
                             <span>Önerilen indirim %{formatNumber(suggestion.recommendedDiscount)}</span>
+                            <span>{suggestion.recommendationType || 'special_opportunity'}</span>
                             <span>{suggestion.impactSummary || suggestion.expectedImpact || 'Tahmini etki kampanya taslağına yansıtılır.'}</span>
                           </div>
                           <div className="campaign-suggestion-meta campaign-suggestion-meta--secondary">
                             <span>{CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta'} Öncelik</span>
-                            <span>{CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel'} kampanya</span>
+                            <span>{suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel'}</span>
+                            <span>{suggestion.moduleLabel || CAMPAIGN_SUGGESTION_MODULES.general.label}</span>
                             {suggestion.giftCardRewardCode ? <span>Hediye kartı: {suggestion.giftCardRewardCode}</span> : null}
                           </div>
                         </div>
@@ -6914,9 +6825,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           </button>
                         </div>
                       </article>
-                    ))}
+                    )) : (
+                      <div className="campaign-module-empty-state">
+                        <strong>Öne çıkan özel fırsat yok</strong>
+                        <span>Detaylı öneriler ilgili modül sekmelerine ayrıştırıldı. Sayı rozetlerinden modül önerilerini takip edebilirsiniz.</span>
+                      </div>
+                    )}
                   </div>
-                  {campaignSuggestions.length > CAMPAIGN_SUGGESTIONS_PAGE_SIZE ? (
+                  {visibleCampaignSuggestions.length > CAMPAIGN_SUGGESTIONS_PAGE_SIZE ? (
                     <div className="campaign-suggestions-pagination">
                       <span>Sayfa {safeCampaignSuggestionPage} / {campaignSuggestionTotalPages}</span>
                       <div className="campaign-suggestions-pagination-actions">
@@ -7209,6 +7125,73 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <button className="outline-button" type="button" onClick={() => setCampaignDraft(createDefaultCampaignDraft())}>Taslağı Temizle</button>
                   </div>
                 </section>
+                ) : null}
+
+                {isCampaignBuilderView ? (
+                  <section className="campaign-suggestions-panel campaign-suggestions-panel--module campaign-section" aria-label={`${CAMPAIGN_SUGGESTION_MODULES[campaignTypeView]?.label || 'Modül'} önerileri`}>
+                    <div className="campaign-suggestions-panel-head campaign-suggestions-panel-head--module">
+                      <div className="campaign-suggestions-panel-head-main">
+                        <span className={`campaign-table-card-icon campaign-suggestions-panel-icon ${CAMPAIGN_MODULE_HEADER_ICON_CLASSES[campaignTypeView] || 'mod-icon-indigo'}`} aria-hidden="true">
+                          {(() => {
+                            const ModuleSuggestionIcon = CAMPAIGN_TYPE_TAB_ICONS[campaignTypeView] || Sparkles;
+                            return <ModuleSuggestionIcon size={16} />;
+                          })()}
+                        </span>
+                        <div className="campaign-suggestions-panel-title">
+                          <h4>{CAMPAIGN_SUGGESTION_MODULES[campaignTypeView]?.label || 'Modül'} Önerileri</h4>
+                          <p>{formatNumber(moduleCampaignSuggestions.length)} öneri bu modülün primary alanı olarak sınıflandırıldı.</p>
+                        </div>
+                      </div>
+                      <span className="campaign-suggestions-count-pill">{formatNumber(moduleCampaignSuggestions.length)} öneri</span>
+                    </div>
+                    <div className="campaign-suggestion-list">
+                      {pagedCampaignSuggestions.length ? pagedCampaignSuggestions.map((suggestion) => (
+                        <article key={suggestion.id} className="campaign-suggestion-row">
+                          <div className="campaign-suggestion-main">
+                            <strong>{normalizeCampaignInsightText(suggestion.title)}</strong>
+                            <p>{normalizeCampaignInsightText(suggestion.reason)}</p>
+                            <div className="campaign-suggestion-meta">
+                              <span>Tip: {normalizeCampaignInsightText(suggestion.recommendationType || suggestion.id || 'campaign_opportunity')}</span>
+                              <span>Scope: {normalizeCampaignInsightText(suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel')}</span>
+                              <span>Aksiyon: {normalizeCampaignInsightText(suggestion.suggestedAction || 'Kampanya oluştur')}</span>
+                            </div>
+                            <div className="campaign-suggestion-meta campaign-suggestion-meta--secondary">
+                              <span>{formatNumber(suggestion.affectedProductCount)} Ürün</span>
+                              <span>Önerilen indirim %{formatNumber(suggestion.recommendedDiscount)}</span>
+                              <span>{CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta'} Öncelik</span>
+                              {Array.isArray(suggestion.secondaryTags) && suggestion.secondaryTags.length ? <span>{suggestion.secondaryTags.join(' · ')}</span> : null}
+                            </div>
+                          </div>
+                          <div className="campaign-suggestion-actions">
+                            <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>
+                              Detay
+                            </button>
+                            <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>
+                              Kampanya Oluştur
+                            </button>
+                          </div>
+                        </article>
+                      )) : (
+                        <div className="campaign-module-empty-state">
+                          <strong>Bu modülde öneri yok</strong>
+                          <span>Analiz motoru bu modül için öne çıkan öneri üretmedi. Diğer modüllerdeki sayı rozetlerini kontrol edin.</span>
+                        </div>
+                      )}
+                    </div>
+                    {visibleCampaignSuggestions.length > CAMPAIGN_SUGGESTIONS_PAGE_SIZE ? (
+                      <div className="campaign-suggestions-pagination">
+                        <span>Sayfa {safeCampaignSuggestionPage} / {campaignSuggestionTotalPages}</span>
+                        <div className="campaign-suggestions-pagination-actions">
+                          <button type="button" className="ghost-button" disabled={safeCampaignSuggestionPage === 1} onClick={() => setCampaignSuggestionPage((current) => Math.max(1, current - 1))}>
+                            Önceki
+                          </button>
+                          <button type="button" className="primary-button" disabled={safeCampaignSuggestionPage === campaignSuggestionTotalPages} onClick={() => setCampaignSuggestionPage((current) => Math.min(campaignSuggestionTotalPages, current + 1))}>
+                            Sonraki
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </section>
                 ) : null}
 
                 {isCampaignBuilderView ? renderSingleCampaignModuleTable({
@@ -7551,6 +7534,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       columns: [
                         { key: 'action', label: 'Aksiyon', className: 'campaign-insight-title-cell', render: (suggestion) => <strong>{normalizeCampaignInsightText(suggestion.title)}</strong> },
                         { key: 'reason', label: 'Gerekçe', className: 'campaign-insight-note-cell', render: (suggestion) => <span className="campaign-insight-note-text">{normalizeCampaignInsightText(suggestion.reason)}</span> },
+                        { key: 'type', label: 'Tip', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(suggestion.recommendationType || 'near_expiry')}</span> },
+                        { key: 'scope', label: 'Scope', render: (suggestion) => normalizeCampaignInsightText(suggestion.scopeLabel || 'SKT / fire riski') },
                         { key: 'product', label: 'Ürün', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} ürün` },
                         { key: 'discount', label: 'Önerilen İndirim', className: 'campaign-insight-metric-cell', render: (suggestion) => `%${formatNumber(suggestion.recommendedDiscount)}` },
                         { key: 'risk', label: 'Risk Seviyesi', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>{normalizeCampaignInsightText(CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta')}</span> },
@@ -7932,6 +7917,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           ),
                         },
                         { key: 'product', label: 'Ürün', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} ürün` },
+                        { key: 'recommendationType', label: 'Tip', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(suggestion.recommendationType || 'sales_opportunity')}</span> },
+                        { key: 'scope', label: 'Scope', render: (suggestion) => normalizeCampaignInsightText(suggestion.scopeLabel || 'Satış performansı') },
                         { key: 'margin', label: 'Ortalama Marj', className: 'campaign-insight-metric-cell', render: (suggestion) => `%${formatNumber(averageCampaignMetric(getCampaignSuggestionRows(suggestion), (row) => Number(row?.currentMarginPercent || 0)))}` },
                         { key: 'type', label: 'Tür', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel')} kampanya</span> },
                         {
@@ -9708,6 +9695,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <span>Hata Sınıfı</span>
                   <input type="text" value={selectedDeveloperLog?.errorType || '-'} readOnly />
                 </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Tekrar</span>
+                  <input type="text" value={selectedDeveloperLog?.repeatCount || 1} readOnly />
+                </label>
               </FormGrid>
             </FormSection>
 
@@ -9745,6 +9736,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>Endpoint</span>
                   <input type="text" value={selectedDeveloperLog?.endpoint || '-'} readOnly />
+                </label>
+                <label className="field-group col-6 s-log-detail-readonly-field">
+                  <span>Request ID</span>
+                  <input type="text" value={selectedDeveloperLog?.requestId || '-'} readOnly />
+                </label>
+                <label className="field-group col-6 s-log-detail-readonly-field">
+                  <span>Correlation ID</span>
+                  <input type="text" value={selectedDeveloperLog?.correlationId || '-'} readOnly />
                 </label>
               </FormGrid>
             </FormSection>

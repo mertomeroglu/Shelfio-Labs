@@ -57,6 +57,7 @@ export const productController = {
         includeCampaignDetails: req.query?.includeCampaignDetails === 'true' || req.query?.includeCampaignDetails === '1',
         includeGeneralCampaigns: parseIncludeGeneralCampaigns(req.query?.includeGeneralCampaigns),
         includeListDetails: req.query?.includeListDetails === 'true' || req.query?.includeListDetails === '1',
+        view: req.query?.view,
       });
       sendListResponse(res, result);
     } catch (error) {

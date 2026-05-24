@@ -1,4 +1,8 @@
-﻿import { api, buildQueryString } from './api.js';
+import { api, buildQueryString, getOrLoadSessionCache, hasSessionCache, invalidateSessionCache } from './api.js';
+
+const WAREHOUSE_CACHE_PREFIX = 'warehouse:v1';
+const getLocationListCacheKey = (params = {}) => `${WAREHOUSE_CACHE_PREFIX}:locations:${buildQueryString(params) || 'default'}`;
+export const invalidateWarehouseCache = () => invalidateSessionCache((key) => key.startsWith(WAREHOUSE_CACHE_PREFIX));
 
 const normalizeLocationRow = (row = {}) => ({
   ...row,
@@ -11,17 +15,32 @@ const normalizeLocationRow = (row = {}) => ({
 });
 
 export const warehouseService = {
-  listLocations: (params = {}) => api.get(`/warehouse/locations${buildQueryString(params)}`).then((result) => ({
-    ...result,
-    rows: Array.isArray(result?.rows) ? result.rows.map(normalizeLocationRow) : [],
-    depotAssignments: Array.isArray(result?.depotAssignments) ? result.depotAssignments : [],
-    depotZones: Array.isArray(result?.depotZones) ? result.depotZones : [],
-    shelfPlan: Array.isArray(result?.shelfPlan) ? result.shelfPlan : [],
-    shelfZones: Array.isArray(result?.shelfZones) ? result.shelfZones : [],
-  })),
+  listLocations: (params = {}) => {
+    const { forceRefresh = false, ...queryParams } = params || {};
+    return getOrLoadSessionCache(
+      getLocationListCacheKey(queryParams),
+      () => api.get(`/warehouse/locations${buildQueryString(queryParams)}`).then((result) => ({
+        ...result,
+        rows: Array.isArray(result?.rows) ? result.rows.map(normalizeLocationRow) : [],
+        depotAssignments: Array.isArray(result?.depotAssignments) ? result.depotAssignments : [],
+        depotZones: Array.isArray(result?.depotZones) ? result.depotZones : [],
+        shelfPlan: Array.isArray(result?.shelfPlan) ? result.shelfPlan : [],
+        shelfZones: Array.isArray(result?.shelfZones) ? result.shelfZones : [],
+      })),
+      { forceRefresh: Boolean(forceRefresh) }
+    );
+  },
+  hasLocationsCache: (params = {}) => hasSessionCache(getLocationListCacheKey(params)),
   getSummary: () => api.get('/warehouse/summary'),
   listMovements: (params = {}) => api.get(`/warehouse/movements${buildQueryString(params)}`),
-  createMovement: (payload) => api.post('/warehouse/movements', payload),
-  updateLocation: (id, payload) => api.patch(`/warehouse/locations/${id}`, payload),
+  createMovement: async (payload) => {
+    const result = await api.post('/warehouse/movements', payload);
+    invalidateWarehouseCache();
+    return result;
+  },
+  updateLocation: async (id, payload) => {
+    const result = await api.patch(`/warehouse/locations/${id}`, payload);
+    invalidateWarehouseCache();
+    return result;
+  },
 };
-

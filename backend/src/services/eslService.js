@@ -1061,6 +1061,7 @@ export const eslService = {
 
   async listHistory(query = {}) {
     const history = await eslHistoryRepo.getAll();
+    const page = Math.max(1, Number.parseInt(String(query.page || '1'), 10) || 1);
 
     const filtered = history.filter((entry) => {
       const matchesDevice = !query.deviceId || entry.deviceId === query.deviceId;
@@ -1068,7 +1069,25 @@ export const eslService = {
       return matchesDevice && matchesProduct;
     });
 
-    return [...filtered].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const sorted = [...filtered].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const hasLimit = query.limit !== undefined && query.limit !== null && query.limit !== '';
+    const limit = hasLimit
+      ? Math.min(100, Math.max(1, Number.parseInt(String(query.limit), 10) || 100))
+      : Math.max(1, sorted.length || 1);
+    const offset = (page - 1) * limit;
+    const items = sorted.slice(offset, offset + limit);
+
+    return {
+      items,
+      pagination: {
+        mode: 'offset',
+        page,
+        limit,
+        total: sorted.length,
+        totalPages: Math.max(1, Math.ceil(sorted.length / limit)),
+        hasNextPage: offset + items.length < sorted.length,
+      },
+    };
   },
 
   async clearHistory() {

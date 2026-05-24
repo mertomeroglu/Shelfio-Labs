@@ -8,6 +8,7 @@ import { AppError } from '../utils/appError.js';
 import { logisticsTariffService } from './logisticsTariffService.js';
 import { eslService } from './eslService.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
+import { clearPricingAnalysisCache } from './analysis/pricingAnalysisService.js';
 
 const DEFAULT_DESK_PINS = {
   B1: '1234',
@@ -27,6 +28,7 @@ const normalizePin = (value) => String(value || '').trim();
 const MAX_AUDIT_LOGS = 500;
 const MAX_LOGIN_ACTIVITIES = 200;
 const MAX_DEVELOPER_LOGS = 3000;
+const DEVELOPER_LOG_DUPLICATE_WINDOW_MS = 60 * 1000;
 const UTF8_BOM = '\uFEFF';
 
 const safeObject = (value) => (value && typeof value === 'object' ? value : {});
@@ -149,6 +151,42 @@ const appendLoginActivity = (settings, entry) => {
 
 const appendDeveloperLog = (settings, entry) => {
   const current = Array.isArray(settings.developerLogs) ? settings.developerLogs : [];
+  const entrySignature = [
+    entry.level,
+    entry.source,
+    entry.message,
+    entry.endpoint,
+    entry.stack,
+  ].map((value) => String(value || '').trim()).join('|');
+  const nowMs = new Date(entry.timestamp || Date.now()).getTime();
+  const duplicateIndex = current.findIndex((item) => {
+    const itemSignature = [
+      item.level,
+      item.source,
+      item.message,
+      item.endpoint,
+      item.stack,
+    ].map((value) => String(value || '').trim()).join('|');
+    const itemMs = new Date(item.timestamp || 0).getTime();
+    return itemSignature === entrySignature
+      && Number.isFinite(itemMs)
+      && Number.isFinite(nowMs)
+      && nowMs - itemMs <= DEVELOPER_LOG_DUPLICATE_WINDOW_MS;
+  });
+
+  if (duplicateIndex >= 0) {
+    const duplicate = current[duplicateIndex];
+    const merged = {
+      ...duplicate,
+      timestamp: entry.timestamp,
+      lastOccurredAt: entry.timestamp,
+      repeatCount: Number(duplicate.repeatCount || 1) + 1,
+      requestId: entry.requestId || duplicate.requestId,
+      correlationId: entry.correlationId || duplicate.correlationId,
+    };
+    return [merged, ...current.filter((_, index) => index !== duplicateIndex)].slice(0, MAX_DEVELOPER_LOGS);
+  }
+
   return [entry, ...current].slice(0, MAX_DEVELOPER_LOGS);
 };
 
@@ -477,20 +515,23 @@ export const settingsService = {
 
     await settingsRepo.updateSettings(nextSettings);
     if (Object.prototype.hasOwnProperty.call(payload?.customerRelations || {}, 'campaigns')) {
-      try {
-        await syncCampaignPriceHistory({
-          previousSettings: current,
-          nextSettings,
-          actorId,
-          actorName,
-        });
-        await syncCampaignPriceHistoryForCurrentState({
-          settings: nextSettings,
-          actorId,
-          actorName,
-        });
-      } catch (error) {
-        console.error('[campaign-price-history-sync:error]', error);
+      clearPricingAnalysisCache();
+      if (payload?.skipCampaignPriceHistorySync !== true) {
+        try {
+          await syncCampaignPriceHistory({
+            previousSettings: current,
+            nextSettings,
+            actorId,
+            actorName,
+          });
+          await syncCampaignPriceHistoryForCurrentState({
+            settings: nextSettings,
+            actorId,
+            actorName,
+          });
+        } catch (error) {
+          console.error('[campaign-price-history-sync:error]', error);
+        }
       }
       void eslService.syncCampaignLabels({ actorUser: currentUser }).catch((error) => {
         console.error('[campaign-esl-sync:error]', error);
@@ -657,6 +698,9 @@ export const settingsService = {
     const requestUrl = payload.requestUrl || payload.endpoint || requestMeta.requestUrl || '';
     const userId = payload.userId || payload.user_id || currentUser?.id || null;
     const userName = payload.userName || currentUser?.name || currentUser?.username || null;
+    const userRole = payload.userRole || currentUser?.role || null;
+    const requestId = payload.requestId || payload.request_id || requestMeta.requestId || null;
+    const correlationId = payload.correlationId || payload.correlation_id || requestId || null;
 
     const entry = {
       id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -674,10 +718,15 @@ export const settingsService = {
       statusCode: Number(payload.statusCode || payload.status_code || requestMeta.statusCode || 0) || undefined,
       userId,
       userName,
+      userRole,
       user: userName || undefined,
       browserInfo: truncateString(payload.browserInfo || payload.browser || requestMeta.browserInfo || '', 600),
       ip: truncateString(payload.ip || requestMeta.ip || '', 80),
       errorType: truncateString(payload.errorType || '', 120),
+      requestId: requestId ? truncateString(requestId, 120) : undefined,
+      correlationId: correlationId ? truncateString(correlationId, 120) : undefined,
+      description: truncateString(payload.description || payload.summary || payload.action || requestMeta.action || '', 1000),
+      repeatCount: Number(payload.repeatCount || 1) || 1,
     };
 
     const nextSettings = {

@@ -115,6 +115,7 @@ const buildProductListPath = (params = {}) => {
   if (params.includeCampaignDetails) query.set('includeCampaignDetails', 'true');
   if (params.includeGeneralCampaigns) query.set('includeGeneralCampaigns', 'true');
   if (params.includeListDetails) query.set('includeListDetails', 'true');
+  if (params.view) query.set('view', params.view);
   const qs = query.toString();
   return qs ? `/products?${qs}` : '/products';
 };
@@ -356,6 +357,53 @@ export const normalizeProductRecord = (item = {}) => {
   };
 };
 
+const normalizeLocationProductRecord = (item = {}) => ({
+  ...item,
+  id: item.id || item.productId,
+  productId: item.productId || item.id,
+  name: item.name || item.productName || '',
+  productName: item.productName || item.name || '',
+  sku: item.sku || '',
+  barcode: item.barcode || '',
+  categoryName: item.categoryName || '',
+  sectionId: item.sectionId || '',
+  sectionName: item.sectionName || '',
+  sectionNumber: item.sectionNumber || null,
+  shelfSide: item.shelfSide || '',
+  shelfNo: item.shelfNo || '',
+  shelfLevel: item.shelfLevel || '',
+  requiredStorageType: item.requiredStorageType || item.storageType || 'Ortam',
+  storageType: item.storageType || item.requiredStorageType || 'Ortam',
+  warehouseStock: Number(item.warehouseStock || 0),
+  shelfStock: Number(item.shelfStock || 0),
+  totalStock: Number(item.totalStock ?? item.currentStock ?? 0),
+  currentStock: Number(item.currentStock ?? item.totalStock ?? 0),
+  onHand: Number(item.onHand ?? item.totalStock ?? 0),
+  available: Number(item.available ?? item.totalStock ?? 0),
+  criticalStock: Number(item.criticalStock || 0),
+  maxStock: Number(item.maxStock || 0),
+  maxShelfStock: Number(item.maxShelfStock ?? item.shelfCapacity ?? 0),
+  shelfCapacity: Number(item.shelfCapacity ?? item.maxShelfStock ?? 0),
+  warehouseMaxStock: Number(item.warehouseMaxStock ?? item.maxStock ?? 0),
+  averageDesi: toNullableNumber(item.averageDesi),
+  unitsPerCase: toNullableNumber(item.unitsPerCase),
+  casesPerPallet: toNullableNumber(item.casesPerPallet),
+  unitsPerPallet: toNullableNumber(item.unitsPerPallet),
+  depotAssignmentType: normalizeDepotAssignmentType(item.depotAssignmentType || ''),
+  depotLocationCode: item.depotLocationCode || item.defaultWarehouseLocationCode || '',
+  defaultWarehouseLocationCode: item.defaultWarehouseLocationCode || item.depotLocationCode || '',
+  depotZoneCode: item.depotZoneCode || '',
+  isVirtualLocation: item.isVirtualLocation === true,
+  capacityMode: normalizeCapacityMode(item.capacityMode || ''),
+  stockingStrategy: item.stockingStrategy || '',
+  stockWarning: item.stockWarning || '',
+  status: item.status || (item.isActive === false ? 'inactive' : 'active'),
+  isActive: item.isActive !== false,
+  isListed: item.isListed !== false,
+  createdAt: item.createdAt || null,
+  updatedAt: item.updatedAt || null,
+});
+
 export const productService = {
   list: (options = {}) => {
     const includeUnlisted = Boolean(options?.includeUnlisted);
@@ -399,6 +447,28 @@ export const productService = {
         }
 
         return allRows.map(normalizeProductRecord);
+      },
+      { forceRefresh }
+    );
+  },
+  listForLocationManagement: (options = {}) => {
+    const includeUnlisted = Boolean(options?.includeUnlisted);
+    const forceRefresh = Boolean(options?.forceRefresh);
+    const listOptions = {
+      ...options,
+      fetchAll: undefined,
+      includeListDetails: false,
+      includeTotal: false,
+      view: 'location_management',
+      universe: includeUnlisted ? options?.universe : (options?.universe || 'listed_active'),
+      includeUnlisted,
+    };
+    const cacheKey = getProductListCacheKey(listOptions);
+    return getOrLoadSessionCache(
+      cacheKey,
+      async () => {
+        const rows = await api.get(buildProductListPath(listOptions));
+        return Array.isArray(rows) ? rows.map(normalizeLocationProductRecord) : [];
       },
       { forceRefresh }
     );

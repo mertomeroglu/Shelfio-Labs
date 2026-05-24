@@ -4171,12 +4171,12 @@
 
 .pricing-analysis-page .pricing-action-list-card .data-table th:nth-child(2),
 .pricing-analysis-page .pricing-action-list-card .data-table td:nth-child(2) {
-  min-width: 240px;
+  min-width: 230px;
 }
 
 .pricing-analysis-page .pricing-action-list-card .data-table th:nth-child(3),
 .pricing-analysis-page .pricing-action-list-card .data-table td:nth-child(3) {
-  min-width: 150px;
+  min-width: 140px;
 }
 
 .pricing-analysis-page .pricing-action-list-card .data-table th:nth-child(4),
@@ -4190,12 +4190,12 @@
 
 .pricing-analysis-page .pricing-action-list-card .data-table th:nth-child(7),
 .pricing-analysis-page .pricing-action-list-card .data-table td:nth-child(7) {
-  min-width: 220px;
+  min-width: 190px;
 }
 
 .pricing-analysis-page .pricing-action-list-card .data-table th:nth-child(8),
 .pricing-analysis-page .pricing-action-list-card .data-table td:nth-child(8) {
-  min-width: 320px;
+  min-width: 230px;
 }
 
 .pricing-analysis-page .pricing-row-subtext {
@@ -4673,6 +4673,50 @@
   gap: 6px;
 }
 
+.pricing-analysis-page .pricing-price-stack,
+.pricing-analysis-page .pricing-demand-cell,
+.pricing-analysis-page .pricing-simulation-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pricing-analysis-page .pricing-price-stack span,
+.pricing-analysis-page .pricing-simulation-cell span {
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pricing-analysis-page .pricing-price-stack strong,
+.pricing-analysis-page .pricing-demand-cell strong,
+.pricing-analysis-page .pricing-simulation-cell strong {
+  color: #0f172a;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+
+.pricing-analysis-page .pricing-price-stack small,
+.pricing-analysis-page .pricing-demand-cell span,
+.pricing-analysis-page .pricing-simulation-cell small {
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.pricing-analysis-page .pricing-simulation-cell {
+  padding: 7px 8px;
+  border: 1px solid #dbe5f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.pricing-analysis-page .pricing-action-cell .status-badge,
+.pricing-analysis-page .pricing-risk-cell .status-badge {
+  width: fit-content;
+}
+
 .pricing-analysis-page .pricing-metric-stack {
   display: flex;
   flex-wrap: wrap;
@@ -4763,38 +4807,40 @@
 
 .pricing-analysis-page .data-table th:nth-child(2),
 .pricing-analysis-page .data-table td:nth-child(2) {
-  width: 22%;
+  width: 23%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(3),
 .pricing-analysis-page .data-table td:nth-child(3) {
-  width: 11%;
+  width: 12%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(4),
 .pricing-analysis-page .data-table td:nth-child(4) {
-  width: 12%;
+  width: 13%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(5),
 .pricing-analysis-page .data-table td:nth-child(5) {
-  width: 13%;
+  width: 14%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(6),
 .pricing-analysis-page .data-table td:nth-child(6) {
-  width: 14%;
+  width: 13%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(7),
 .pricing-analysis-page .data-table td:nth-child(7) {
-  width: 18%;
+  width: 14%;
 }
 
 .pricing-analysis-page .data-table th:nth-child(8),
 .pricing-analysis-page .data-table td:nth-child(8) {
-  width: 18%;
-}@media (max-width: 900px) {
+  width: 17%;
+}
+
+@media (max-width: 900px) {
   .pricing-analysis-page .pricing-bulk-grid,
   .pricing-analysis-page .pricing-bulk-tabs,
   .pricing-analysis-page .pricing-bulk-modal-foot {

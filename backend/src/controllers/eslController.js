@@ -1,4 +1,5 @@
 import { eslService } from '../services/eslService.js';
+import { sendListResponse } from '../utils/listResponse.js';
 
 export const eslController = {
   async listDevices(req, res, next) {
@@ -148,7 +149,7 @@ export const eslController = {
   async listHistory(req, res, next) {
     try {
       const data = await eslService.listHistory(req.query);
-      res.json({ success: true, data });
+      sendListResponse(res, data);
     } catch (error) {
       next(error);
     }

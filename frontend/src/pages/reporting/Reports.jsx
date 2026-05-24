@@ -34,7 +34,6 @@ const INITIAL_REPORT = {
   goodsReceiptPerformanceReport: [],
   priceCatalogDiffReport: [],
   accessAuditReport: [],
-  notificationEngagementReport: [],
   currency: 'TRY',
 };
 
@@ -78,6 +77,101 @@ const RISK_LABELS = {
   normal: 'Düşük',
 };
 
+const EMPTY_DISPLAY_VALUES = new Set(['', '-', 'bilinmiyor', 'unknown', 'undefined', 'null', 'n/a']);
+
+const cleanReportText = (value) => String(value ?? '').trim();
+
+const hasMeaningfulReportText = (value) => {
+  const normalized = cleanReportText(value).toLocaleLowerCase('tr-TR');
+  return Boolean(normalized && !EMPTY_DISPLAY_VALUES.has(normalized));
+};
+
+const normalizeReportCode = (value) => cleanReportText(value)
+  .toLocaleLowerCase('tr-TR')
+  .replace(/ı/g, 'i')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '');
+
+const formatCleanReportText = (value, fallback) => (hasMeaningfulReportText(value) ? cleanReportText(value) : fallback);
+
+const isDepotLocation = (value) => {
+  const normalized = normalizeReportCode(value);
+  return normalized.includes('depo') || normalized.includes('warehouse') || normalized.includes('backroom');
+};
+
+const isShelfLocation = (value) => {
+  const normalized = normalizeReportCode(value);
+  return normalized.includes('reyon') || normalized.includes('shelf') || normalized.includes('raf');
+};
+
+const formatMovementReason = (row = {}) => {
+  const reasonCode = normalizeReportCode(row.reasonCode || row.reason);
+  const type = normalizeReportCode(row.type);
+  const note = normalizeReportCode([row.reasonLabel, row.reason, row.note, row.description].filter(Boolean).join(' '));
+  const fromLocation = [row.fromLocationLabel, row.fromLocation].filter(Boolean).join(' ');
+  const toLocation = [row.toLocationLabel, row.toLocation, row.locationLabel, row.location].filter(Boolean).join(' ');
+
+  if (reasonCode.includes('transfer') || type === 'transfer' || note.includes('transfer')) {
+    if (isDepotLocation(fromLocation) && isShelfLocation(toLocation)) return 'Depodan reyona transfer';
+    if (isShelfLocation(fromLocation) && isDepotLocation(toLocation)) return 'Reyondan depoya transfer';
+    return 'Stok transferi';
+  }
+
+  if (reasonCode.includes('pos_sale') || reasonCode.includes('sale') || note.includes('satis') || note.includes('pos_satis')) {
+    return 'Satış işlemi';
+  }
+
+  if (reasonCode.includes('customer_return') || reasonCode.includes('return') || note.includes('iade')) {
+    return 'Müşteri iadesi';
+  }
+
+  if (reasonCode.includes('write_off') || reasonCode.includes('imha') || reasonCode.includes('waste') || note.includes('imha') || note.includes('skt')) {
+    return 'SKT geçmiş ürün imhası';
+  }
+
+  if (reasonCode.includes('product_purchase') || note.includes('mal_kabul') || note.includes('satinalma')) {
+    return 'Satın alma / mal kabul';
+  }
+
+  if (reasonCode.includes('manual_adjustment') || reasonCode.includes('count_') || type === 'adjustment') {
+    return 'Manuel stok düzeltmesi';
+  }
+
+  return formatCleanReportText(row.reasonLabel, formatCleanReportText(row.reason, 'Sebep tanımlanmadı'));
+};
+
+const RETURN_REASON_DISPLAY_LABELS = {
+  automatic_random_return: 'Otomatik iade simülasyonu',
+  auto_random_return: 'Otomatik iade simülasyonu',
+  random_return: 'Otomatik iade simülasyonu',
+  customer_request: 'Müşteri talebi',
+  customer_return: 'Müşteri talebi',
+  wrong_product: 'Yanlış ürün',
+  defective: 'Kusurlu ürün',
+  damaged: 'Hasarlı ürün',
+  expired: 'Son kullanma tarihi geçmiş',
+  customer_changed_mind: 'Müşteri vazgeçti',
+  other: 'Diğer',
+};
+
+const formatReportReturnReason = (row = {}) => {
+  const rawReason = row.returnReason;
+  const normalizedReason = normalizeReportCode(rawReason);
+  if (RETURN_REASON_DISPLAY_LABELS[normalizedReason]) return RETURN_REASON_DISPLAY_LABELS[normalizedReason];
+
+  const label = cleanReportText(row.returnReasonLabel);
+  const normalizedLabel = normalizeReportCode(label);
+  if (RETURN_REASON_DISPLAY_LABELS[normalizedLabel]) return RETURN_REASON_DISPLAY_LABELS[normalizedLabel];
+  if (hasMeaningfulReportText(label) && !label.includes('_')) return label;
+
+  const formatterLabel = formatReturnReasonLabel(rawReason, '');
+  if (hasMeaningfulReportText(formatterLabel) && !formatterLabel.includes('_')) return formatterLabel;
+
+  return 'Diğer';
+};
+
 const PDF_FONT_FAMILY = 'Roboto';
 const PDF_HEADER_COLOR = [30, 64, 175];
 const PDF_BORDER_COLOR = [203, 213, 225];
@@ -100,7 +194,6 @@ const SECTION_REPORT_KEYS = {
   movement: 'movementReport',
   returns: 'returnReport',
   sales_returns: 'salesReturnReport',
-  notification_engagement: 'notificationEngagementReport',
 };
 const SECTION_LOAD_ORDER = [
   'inventory',
@@ -118,7 +211,6 @@ const SECTION_LOAD_ORDER = [
   'movement',
   'returns',
   'sales_returns',
-  'notification_engagement',
 ];
 
 const createSectionStates = (status = 'pending') =>
@@ -562,13 +654,28 @@ export default function Reports() {
       return TYPE_LABELS[row.type] || row.type || '-';
     }
     if (section === 'movement' && column.key === 'reasonLabel') {
-      return row.reasonLabel || row.reason || 'Bilinmiyor';
+      return formatMovementReason(row);
     }
     if (section === 'returns' && column.key === 'createdAt') {
       return formatDate(row.createdAt);
     }
+    if (section === 'returns' && column.key === 'customerName') {
+      return formatCleanReportText(row.customerName, 'Müşteri bilgisi yok');
+    }
+    if (section === 'returns' && column.key === 'customerAddress') {
+      return formatCleanReportText(row.customerAddress, 'Adres bilgisi yok');
+    }
     if (section === 'returns' && column.key === 'returnReason') {
-      return row.returnReasonLabel || formatReturnReasonLabel(row.returnReason);
+      return formatReportReturnReason(row);
+    }
+    if (section === 'returns' && column.key === 'returnReasonDetail') {
+      return formatCleanReportText(row.returnReasonDetail, 'Detay girilmedi');
+    }
+    if (section === 'returns' && column.key === 'productsSummary') {
+      return formatCleanReportText(row.productsSummary, 'Ürün bilgisi yok');
+    }
+    if (section === 'returns' && column.key === 'cashierName') {
+      return formatCleanReportText(row.cashierName, 'Kasiyer bilgisi yok');
     }
     if (section === 'critical' && column.key === 'isActive') {
       return row.isActive !== false ? 'Aktif' : 'Pasif';
@@ -791,7 +898,7 @@ export default function Reports() {
     { key: 'referenceNo', label: 'Ref' },
     { key: 'productName', label: 'Ürün' },
     { key: 'type', label: 'Tip', render: (row) => <StatusBadge tone={row.type === 'IN' ? 'success' : row.type === 'OUT' ? 'danger' : row.type === 'TRANSFER' ? 'primary' : 'warning'}>{TYPE_LABELS[row.type] || row.type}</StatusBadge>, sortable: false },
-    { key: 'reasonLabel', label: 'Sebep', render: (row) => <StatusBadge tone={REASON_TONE[row.reasonCode] || 'neutral'}>{row.reasonLabel || row.reason || 'Bilinmiyor'}</StatusBadge>, sortable: false },
+    { key: 'reasonLabel', label: 'Sebep', render: (row) => <StatusBadge tone={REASON_TONE[row.reasonCode] || 'neutral'}>{formatMovementReason(row)}</StatusBadge>, sortable: false },
     { key: 'location', label: 'Konum', render: (row) => row.routeLabel || formatMovementRouteLabel(row, '-'), sortable: false },
     { key: 'qty', label: 'Miktar' },
     { key: 'previousQuantity', label: 'Önceki' },
@@ -927,19 +1034,19 @@ export default function Reports() {
   const returnColumns = [
     { key: 'referenceNo', label: 'İade Ref' },
     { key: 'originalSaleRef', label: 'Orijinal Fiş' },
-    { key: 'customerName', label: 'Müşteri' },
-    { key: 'customerAddress', label: 'Adres' },
+    { key: 'customerName', label: 'Müşteri', render: (row) => formatCleanReportText(row.customerName, 'Müşteri bilgisi yok') },
+    { key: 'customerAddress', label: 'Adres', render: (row) => formatCleanReportText(row.customerAddress, 'Adres bilgisi yok') },
     {
       key: 'returnReason',
       label: 'İade Nedeni',
-      render: (row) => <StatusBadge tone={row.returnReason === 'other' ? 'warning' : 'neutral'}>{row.returnReasonLabel || formatReturnReasonLabel(row.returnReason)}</StatusBadge>,
+      render: (row) => <StatusBadge tone={normalizeReportCode(row.returnReason) === 'other' ? 'warning' : 'neutral'}>{formatReportReturnReason(row)}</StatusBadge>,
       sortable: false,
     },
-    { key: 'returnReasonDetail', label: 'Detay' },
-    { key: 'productsSummary', label: 'Ürün(ler)' },
+    { key: 'returnReasonDetail', label: 'Detay', render: (row) => formatCleanReportText(row.returnReasonDetail, 'Detay girilmedi') },
+    { key: 'productsSummary', label: 'Ürün(ler)', render: (row) => formatCleanReportText(row.productsSummary, 'Ürün bilgisi yok') },
     { key: 'itemCount', label: 'Adet' },
     { key: 'totalAmount', label: 'Toplam Tutar', render: (row) => formatCurrency(row.totalAmount, report.currency), sortValue: (row) => row.totalAmount },
-    { key: 'cashierName', label: 'Kasiyer' },
+    { key: 'cashierName', label: 'Kasiyer', render: (row) => formatCleanReportText(row.cashierName, 'Kasiyer bilgisi yok') },
     { key: 'createdAt', label: 'Tarih', render: (row) => formatDate(row.createdAt), sortValue: (row) => new Date(row.createdAt).getTime() },
   ];
 
@@ -1218,16 +1325,6 @@ export default function Reports() {
         </div>
       </div>
 
-      <div className="mod-card">
-        <div className="mod-card-header report-card-header">
-          <div className="mod-card-icon mod-icon-indigo"><Activity size={18} /></div>
-          <div><h3>Bildirim Etkileşim ve Operasyon Uyarı Raporu</h3><p>Bildirim türü, okunma oranı ve departman yoğunluğu metrikleri</p>{renderSectionStatus('notification_engagement')}</div>
-          {renderExportActions('notification_engagement')}
-        </div>
-        <div className="report-table-scroll">
-          {renderReportTable('notification_engagement', auditMetricColumns, report.notificationEngagementReport, 'Bildirim etkileşim raporu bulunmuyor.')}
-        </div>
-      </div>
     </div>
   );
 }

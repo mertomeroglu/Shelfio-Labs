@@ -4,6 +4,8 @@ import { salesRepo } from '../../repositories/salesRepository.js';
 import { stockRepo } from '../../repositories/stockRepository.js';
 import { supplierProductRepo } from '../../repositories/supplierProductRepository.js';
 import { supplierRepo } from '../../repositories/supplierRepository.js';
+import { purchaseOrderRepo } from '../../repositories/purchaseOrderRepository.js';
+import { purchaseOrderItemRepo } from '../../repositories/purchaseOrderItemRepository.js';
 import { config } from '../../config/config.js';
 import { getPrisma } from '../../providers/postgresProvider.js';
 import { withPostgresQueryLogging } from '../../utils/performanceLogger.js';
@@ -16,6 +18,14 @@ import { settingsRepo } from '../../repositories/settingsRepository.js';
 import { logisticsTariffService } from '../logisticsTariffService.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from '../campaignPricingService.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  normalizePurchaseOrderStatus,
+  PURCHASE_ORDER_CANCELLED_STATUSES,
+  PURCHASE_ORDER_COMPLETED_STATUSES,
+  PURCHASE_ORDER_GOODS_RECEIPT_STATUSES,
+  PURCHASE_ORDER_TERMINAL_STATUSES,
+  PURCHASE_ORDER_WAITING_DELIVERY_STATUSES,
+} from '../../domain/purchaseOrderLifecycle.js';
 import {
   buildProductUniverseWhere,
   matchesProductUniverse,
@@ -128,243 +138,6 @@ const buildPricingWhere = (query = {}) => {
   return { where, productUniverse };
 };
 
-const getFastSummaryFromPostgres = async (query = {}) => {
-  const prisma = await getPrisma();
-  const { where, productUniverse } = buildPricingWhere(query);
-  const [products, categories, suppliers] = await withPostgresQueryLogging('GET /api/reports/pricing-analysis/summary', () => Promise.all([
-    prisma.product.findMany({
-      where,
-      select: {
-        id: true,
-        criticalStock: true,
-        purchasePrice: true,
-        salePrice: true,
-        stock: {
-          select: {
-            warehouseQuantity: true,
-            shelfQuantity: true,
-            batches: {
-              where: { totalQuantity: { gt: 0 } },
-              orderBy: [{ skt: 'asc' }, { batchNo: 'asc' }],
-              select: { batchNo: true, skt: true, warehouseQuantity: true, shelfQuantity: true, totalQuantity: true },
-            },
-          },
-        },
-      },
-    }),
-    prisma.category.findMany({ select: { id: true, name: true } }),
-    prisma.supplier.findMany({ select: { id: true, name: true } }),
-  ]));
-  const now = new Date();
-  const totalAnalyzedProducts = products.length;
-  let criticalStockProducts = 0;
-  let lowStockProducts = 0;
-  let sktRiskProducts = 0;
-  let nearRunoutProducts = 0;
-  let discountSuggestedProducts = 0;
-  let overStockProducts = 0;
-
-  products.forEach((product) => {
-    const stock = product.stock || {};
-    const totalStock = Number(stock.warehouseQuantity || 0) + Number(stock.shelfQuantity || 0);
-    const criticalStock = Number(product.criticalStock || 0);
-    if (totalStock <= criticalStock) criticalStockProducts += 1;
-    if (totalStock <= criticalStock + 5) lowStockProducts += 1;
-    if (totalStock > Math.max(criticalStock * 3, 20)) overStockProducts += 1;
-    const expiryText = resolveStockBatchesFefo(stock)?.skt || '';
-    const expiry = expiryText ? new Date(expiryText) : null;
-    if (expiry && Number.isFinite(expiry.getTime())) {
-      const days = Math.ceil((expiry.getTime() - now.getTime()) / DAY_MS);
-      if (days <= 7) sktRiskProducts += 1;
-      if (days <= 10) nearRunoutProducts += 1;
-    }
-    const purchasePrice = Number(product.purchasePrice || 0);
-    const salePrice = Number(product.salePrice || 0);
-    if (purchasePrice > 0 && salePrice > 0 && ((salePrice - purchasePrice) / purchasePrice) < 0.12) {
-      discountSuggestedProducts += 1;
-    }
-  });
-
-  const highRiskProducts = criticalStockProducts + sktRiskProducts;
-  const generatedAt = new Date().toISOString();
-  return {
-    generatedAt,
-    filters: {
-      universe: productUniverse,
-      analysisDate: toDateOnly(normalizeDate(query.endDate || new Date())),
-      startDate: query.startDate || null,
-      endDate: query.endDate || null,
-    },
-    filtersMeta: {
-      categories: categories.map((item) => ({ id: item.id, name: item.name })),
-      suppliers: suppliers.map((item) => ({ id: item.id, name: item.name })),
-    },
-    summary: {
-      totalAnalyzedProducts,
-      discountSuggestedProducts,
-      sktRiskProducts,
-      nearRunoutProducts,
-      orderSuggestedProducts: criticalStockProducts,
-      highRiskProducts,
-    },
-    systemControls: {
-      expiringProducts: sktRiskProducts,
-      lowStockProducts,
-      criticalStockProducts,
-      slowSalesProducts: 0,
-      overStockProducts,
-      fastRunoutProducts: criticalStockProducts,
-    },
-    actions: [
-      { key: 'discount', title: 'İndirim Aksiyonu', value: discountSuggestedProducts, detail: 'Marj ve stok sinyallerine göre özet.' },
-      { key: 'order', title: 'Sipariş Aksiyonu', value: criticalStockProducts, detail: 'Kritik stokta olan ürünler.' },
-      { key: 'risk', title: 'Kritik Risk', value: highRiskProducts, detail: 'Kritik stok veya SKT riski.' },
-    ],
-  };
-};
-
-const getFastRowsFromPostgres = async (query = {}) => {
-  const prisma = await getPrisma();
-  const { where } = buildPricingWhere(query);
-  const pagination = parsePagePagination(query, { defaultLimit: 20, maxLimit: 200 });
-  const [total, products] = await withPostgresQueryLogging('GET /api/reports/pricing-analysis/rows', () => Promise.all([
-    prisma.product.count({ where }),
-    prisma.product.findMany({
-      where,
-      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-      skip: pagination.skip,
-      take: pagination.limit,
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        categoryId: true,
-        supplierId: true,
-        purchasePrice: true,
-        salePrice: true,
-        criticalStock: true,
-        updatedAt: true,
-        category: { select: { id: true, name: true } },
-        supplier: { select: { id: true, name: true } },
-        stock: {
-          select: {
-            warehouseQuantity: true,
-            shelfQuantity: true,
-            batches: {
-              where: { totalQuantity: { gt: 0 } },
-              orderBy: [{ skt: 'asc' }, { batchNo: 'asc' }],
-              select: { batchNo: true, skt: true, warehouseQuantity: true, shelfQuantity: true, totalQuantity: true },
-            },
-          },
-        },
-        supplierProducts: {
-          where: { isActive: { not: false } },
-          take: 5,
-          select: { id: true, supplierId: true, purchasePrice: true, leadTimeDays: true, isDefault: true },
-        },
-      },
-    }),
-  ]));
-  const now = new Date();
-  const rows = products.map((product) => {
-    const stock = product.stock || {};
-    const warehouseStock = Number(stock.warehouseQuantity || 0);
-    const shelfStock = Number(stock.shelfQuantity || 0);
-    const totalStock = warehouseStock + shelfStock;
-    const criticalStock = Number(product.criticalStock || 0);
-    const expiryText = resolveStockBatchesFefo(stock)?.skt || '';
-    const expiryDate = expiryText ? new Date(expiryText) : null;
-    const daysToExpiry = expiryDate && Number.isFinite(expiryDate.getTime())
-      ? Math.ceil((expiryDate.getTime() - now.getTime()) / DAY_MS)
-      : null;
-    const sktStatus = getSktStatus(daysToExpiry);
-    const bestSupplierOption = getBestSupplierOption(product.supplierProducts || []);
-    const risk = riskScoringService.scoreProduct({
-      daysToExpiry,
-      totalStock,
-      criticalStock,
-      avgDaily7: 0,
-      salesSpeed: 'normal',
-      isCriticalStock: totalStock <= criticalStock,
-      overStockRatio: 0,
-      daysToStockout: null,
-    });
-    return compactPricingListRow({
-      productId: product.id,
-      sku: product.sku,
-      productName: product.name,
-      categoryId: product.categoryId,
-      categoryName: product.category?.name || '-',
-      supplierId: bestSupplierOption?.supplierId || product.supplierId,
-      supplierName: product.supplier?.name || '-',
-      currentPrice: Number(product.salePrice || 0),
-      salePrice: Number(product.salePrice || 0),
-      originalPrice: Number(product.salePrice || 0),
-      purchasePrice: Number(product.purchasePrice || 0),
-      supplierPrice: Number(bestSupplierOption?.purchasePrice || product.purchasePrice || 0),
-      criticalStock,
-      warehouseStock,
-      shelfStock,
-      totalStock,
-      sold7: 0,
-      sold30: 0,
-      avgDailySales: 0,
-      salesTrend: 'Dengeli',
-      trendDirection: 'flat',
-      trendRatio: 0,
-      salesSpeed: 'normal',
-      salesSpeedLabel: 'Normal',
-      expiryDate: expiryDate && Number.isFinite(expiryDate.getTime()) ? expiryDate.toISOString() : null,
-      expirySource: expiryDate ? 'actual' : 'unknown',
-      daysToExpiry,
-      sktStatus,
-      daysToStockout: null,
-      estimatedStockoutDate: null,
-      leadTimeDays: Math.max(1, Number(bestSupplierOption?.leadTimeDays || 3)),
-      discountSuggestion: { hasSuggestion: false, discountRate: 0 },
-      orderSuggestion: { hasSuggestion: totalStock <= criticalStock },
-      actionSuggestion: totalStock <= criticalStock ? 'Sipariş önerilir' : 'İzlemede',
-      riskScore: risk.score,
-      riskLevel: risk.level,
-      riskLabel: riskLabel[risk.level],
-      riskFactors: risk.factors,
-    });
-  });
-  const filtered = rows
-    .filter((row) => !query.riskLevel || row.riskLevel === query.riskLevel)
-    .filter((row) => !query.sktStatus || row.sktStatus === query.sktStatus)
-    .filter((row) => !query.salesSpeed || row.salesSpeed === query.salesSpeed);
-  const { key, rows: sortedRows } = sortRows(filtered, query.sort || 'risk_desc');
-
-  return {
-    items: sortedRows,
-    pagination: {
-      mode: 'offset',
-      page: pagination.page,
-      limit: pagination.limit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      hasNextPage: pagination.skip + products.length < total,
-      nextCursor: null,
-      cursorVersion: null,
-    },
-    filters: {
-      categoryId: query.categoryId || null,
-      supplierId: query.supplierId || null,
-      riskLevel: query.riskLevel || query.risk || null,
-      sktStatus: query.sktStatus || null,
-      salesSpeed: query.salesSpeed || null,
-      discountOnly: query.discountOnly || null,
-      orderOnly: query.orderOnly || null,
-      search: String(query.search || '').trim() || null,
-    },
-    sort: {
-      key,
-      direction: key.endsWith('_asc') ? 'asc' : 'desc',
-    },
-  };
-};
-
 const normalizeDate = (value, fallback = new Date()) => {
   const parsed = value ? new Date(value) : fallback;
   if (!Number.isFinite(parsed.getTime())) return fallback;
@@ -378,6 +151,148 @@ const toNumberValue = (value) => {
   if (typeof value === 'object' && typeof value.toNumber === 'function') return value.toNumber();
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : value;
+};
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const uniqStrings = (values = []) => [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+
+const normalizeCampaignScopeKey = (value) => String(value || '')
+  .trim()
+  .toLocaleLowerCase('tr-TR')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '');
+
+const campaignMatchesPricingRow = (campaign = {}, row = {}) => {
+  const productId = String(row.productId || '').trim();
+  const categoryId = String(row.categoryId || '').trim();
+  const brand = normalizeCampaignScopeKey(row.brand || row.brandName || '');
+  const targetProducts = (Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : []).map(String);
+  const targetCategories = (Array.isArray(campaign.targetCategoryIds) ? campaign.targetCategoryIds : []).map(String);
+  const targetBrands = (Array.isArray(campaign.targetBrands) ? campaign.targetBrands : []).map(normalizeCampaignScopeKey);
+  const hasExplicitScope = targetProducts.length || targetCategories.length || targetBrands.length;
+  if (productId && targetProducts.includes(productId)) return true;
+  if (categoryId && targetCategories.includes(categoryId)) return true;
+  if (brand && targetBrands.includes(brand)) return true;
+  return !hasExplicitScope && !['product', 'category', 'brand'].includes(String(campaign.type || '').toLowerCase());
+};
+
+const findPricingActiveCampaignConflict = (row = {}, activeCampaigns = []) => {
+  const campaign = activeCampaigns.find((item) => campaignMatchesPricingRow(item, row));
+  if (!campaign) return null;
+  return {
+    campaignId: campaign.id || null,
+    campaignName: campaign.name || campaign.internalName || campaign.publicName || 'Aktif kampanya',
+    campaignType: campaign.type || 'general',
+    reason: 'active_campaign_conflict',
+  };
+};
+
+const buildPricingProcurementContext = async () => {
+  const context = new Map();
+  const [orders, items] = await Promise.all([
+    purchaseOrderRepo.getAll().catch(() => []),
+    purchaseOrderItemRepo.getAll().catch(() => []),
+  ]);
+  const orderById = new Map((Array.isArray(orders) ? orders : []).map((order) => [String(order.id || order.orderId || ''), order]));
+  const now = Date.now();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const productId = String(item.productId || '').trim();
+    const orderId = String(item.orderId || item.purchaseOrderId || '').trim();
+    if (!productId || !orderId) return;
+    const order = orderById.get(orderId);
+    if (!order) return;
+    const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+    if (!status || PURCHASE_ORDER_TERMINAL_STATUSES.has(status) || PURCHASE_ORDER_CANCELLED_STATUSES.has(status) || PURCHASE_ORDER_COMPLETED_STATUSES.has(status)) return;
+    const eta = order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate).getTime() : null;
+    const etaDays = eta && Number.isFinite(eta) ? Math.max(0, Math.ceil((eta - now) / DAY_MS)) : 0;
+    const leadTimeDays = Math.max(toFiniteNumber(order.estimatedDeliveryDays ?? order.payload?.estimatedDeliveryDays, 0), etaDays);
+    const current = context.get(productId) || {
+      hasOpenOrder: false,
+      inboundQuantity: 0,
+      waitingDelivery: false,
+      goodsReceiptPending: false,
+      longestLeadTimeDays: 0,
+      orderIds: [],
+      statuses: [],
+    };
+    current.hasOpenOrder = true;
+    current.inboundQuantity += Math.max(0, toFiniteNumber(item.quantity, 0));
+    current.waitingDelivery = current.waitingDelivery || PURCHASE_ORDER_WAITING_DELIVERY_STATUSES.has(status);
+    current.goodsReceiptPending = current.goodsReceiptPending || PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status);
+    current.longestLeadTimeDays = Math.max(current.longestLeadTimeDays, leadTimeDays);
+    current.orderIds.push(orderId);
+    current.statuses.push(status);
+    context.set(productId, current);
+  });
+
+  return context;
+};
+
+const buildStockGuardrail = ({ totalStock, criticalStock, avgDailySales, daysToStockout }) => {
+  const safeStock = toFiniteNumber(totalStock, 0);
+  const safeCritical = Math.max(0, toFiniteNumber(criticalStock, 0));
+  const safeDaily = Math.max(0, toFiniteNumber(avgDailySales, 0));
+  const coverageDays = daysToStockout === null || daysToStockout === undefined
+    ? (safeDaily > 0 ? Number((safeStock / safeDaily).toFixed(1)) : (safeStock > 0 ? 999 : 0))
+    : toFiniteNumber(daysToStockout, null);
+  const nearCriticalThreshold = Math.max(safeCritical + 2, Math.ceil(safeCritical * 1.35), Math.ceil(safeDaily * 7));
+  const isCriticalStock = safeStock <= safeCritical;
+  const isNearCriticalFast = safeStock <= nearCriticalThreshold && (safeDaily >= 1.5 || coverageDays <= 7);
+  const isLowCoverage = coverageDays !== null && coverageDays <= 5;
+  const blockingReasons = [];
+  if (isCriticalStock) blockingReasons.push('critical_stock');
+  if (!isCriticalStock && isNearCriticalFast) blockingReasons.push('near_critical_fast_moving');
+  if (!isCriticalStock && !isNearCriticalFast && isLowCoverage) blockingReasons.push('low_stock_coverage');
+  return {
+    isCriticalStock,
+    isNearCriticalFast,
+    stockCoverageDays: coverageDays,
+    blocksDiscount: blockingReasons.length > 0,
+    blockingReasons,
+  };
+};
+
+const buildProcurementGuardrail = ({ productId, leadTimeDays, stockGuardrail, procurementContext = new Map() }) => {
+  const context = procurementContext.get(String(productId || '').trim()) || null;
+  const resolvedLeadTime = Math.max(toFiniteNumber(leadTimeDays, 0), toFiniteNumber(context?.longestLeadTimeDays, 0));
+  const hasPipeline = Boolean(context?.hasOpenOrder);
+  const pipelineWeak = !hasPipeline || resolvedLeadTime >= 14 || Boolean(context?.goodsReceiptPending);
+  const blockingReasons = [];
+  if (!hasPipeline) blockingReasons.push('replenishment_pipeline_missing');
+  if (resolvedLeadTime >= 14) blockingReasons.push('long_lead_time');
+  if (context?.goodsReceiptPending) blockingReasons.push('goods_receipt_pending_not_secured');
+  return {
+    hasPipeline,
+    pipelineWeak,
+    inboundQuantity: toFiniteNumber(context?.inboundQuantity, 0),
+    leadTimeDays: resolvedLeadTime,
+    waitingDelivery: Boolean(context?.waitingDelivery),
+    goodsReceiptPending: Boolean(context?.goodsReceiptPending),
+    orderIds: uniqStrings(context?.orderIds || []),
+    statuses: uniqStrings(context?.statuses || []),
+    blocksDiscount: Boolean(stockGuardrail?.blocksDiscount && pipelineWeak),
+    blockingReasons: stockGuardrail?.blocksDiscount && pipelineWeak ? blockingReasons : [],
+  };
+};
+
+const buildMarginGuardrail = ({ currentPrice, purchasePrice }) => {
+  const price = toFiniteNumber(currentPrice, 0);
+  const cost = toFiniteNumber(purchasePrice, 0);
+  const currentMarginPercent = price > 0 ? Number((((price - cost) / price) * 100).toFixed(1)) : null;
+  const blocksDiscount = cost > 0 && (price <= cost || (currentMarginPercent !== null && currentMarginPercent < 12));
+  const blockingReasons = [];
+  if (cost > 0 && price <= cost) blockingReasons.push('price_at_or_below_cost');
+  else if (blocksDiscount) blockingReasons.push('low_margin');
+  return {
+    currentMarginPercent,
+    blocksDiscount,
+    blockingReasons,
+  };
 };
 
 const fromDateValue = (value) => (value instanceof Date ? value.toISOString() : value ?? null);
@@ -660,7 +575,22 @@ const mapPostgresPriceEventRows = (rows = []) => {
 const compactDiscountSuggestion = (suggestion = {}) => ({
   hasSuggestion: Boolean(suggestion.hasSuggestion),
   discountRate: Number(suggestion.discountRate || 0),
+  opportunityDiscountRate: Number(suggestion.opportunityDiscountRate || 0),
+  recommendedDiscountRate: Number(suggestion.recommendedDiscountRate ?? suggestion.discountRate ?? 0),
   newPrice: Number(suggestion.newPrice || 0),
+  reason: suggestion.reason || '',
+  expectedImpact: suggestion.expectedImpact || '',
+  reasonCodes: Array.isArray(suggestion.reasonCodes) ? suggestion.reasonCodes : [],
+  blockingReasons: Array.isArray(suggestion.blockingReasons) ? suggestion.blockingReasons : [],
+  suggestedAction: suggestion.suggestedAction || '',
+  isSuppressed: Boolean(suggestion.isSuppressed),
+  suppressionReason: suggestion.suppressionReason || '',
+  sourceMetrics: suggestion.sourceMetrics || {},
+  activeCampaignFlag: Boolean(suggestion.activeCampaignFlag),
+  activeCampaignConflict: suggestion.activeCampaignConflict || null,
+  replenishmentSupportFlag: Boolean(suggestion.replenishmentSupportFlag),
+  lowStockGuardrailFlag: Boolean(suggestion.lowStockGuardrailFlag),
+  marginGuardrailFlag: Boolean(suggestion.marginGuardrailFlag),
 });
 
 const buildSaleWhere = (query = {}) => {
@@ -959,6 +889,7 @@ const compactAnalysisRow = (row = {}) => ({
   id: row.productId,
   sku: row.sku,
   productName: row.productName,
+  brand: row.brand || row.brandName || '',
   categoryId: row.categoryId,
   categoryName: row.categoryName,
   supplierId: row.supplierId,
@@ -1010,6 +941,21 @@ const compactAnalysisRow = (row = {}) => ({
   discountSuggestion: compactDiscountSuggestion(row.discountSuggestion),
   orderSuggestion: row.orderSuggestion,
   actionSuggestion: row.actionSuggestion,
+  reasonCodes: Array.isArray(row.reasonCodes) ? row.reasonCodes : [],
+  blockingReasons: Array.isArray(row.blockingReasons) ? row.blockingReasons : [],
+  suggestedAction: row.suggestedAction || row.actionSuggestion,
+  recommendedDiscountRate: Number(row.recommendedDiscountRate || 0),
+  isSuppressed: Boolean(row.isSuppressed),
+  suppressionReason: row.suppressionReason || '',
+  sourceMetrics: row.sourceMetrics || {},
+  activeCampaignFlag: Boolean(row.activeCampaignFlag || row.hasActiveDiscount),
+  activeCampaignConflict: row.activeCampaignConflict || null,
+  replenishmentSupportFlag: Boolean(row.replenishmentSupportFlag),
+  lowStockGuardrailFlag: Boolean(row.lowStockGuardrailFlag),
+  marginGuardrailFlag: Boolean(row.marginGuardrailFlag),
+  stockGuardrail: row.stockGuardrail || null,
+  procurementGuardrail: row.procurementGuardrail || null,
+  marginGuardrail: row.marginGuardrail || null,
   riskScore: row.riskScore,
   riskLevel: row.riskLevel,
   riskLabel: row.riskLabel,
@@ -1027,6 +973,7 @@ const compactPricingListRow = (row = {}) => {
     sku: compact.sku,
     name: compact.productName,
     productName: compact.productName,
+    brand: compact.brand,
     categoryId: compact.categoryId,
     categoryName: compact.categoryName,
     tag: compact.categoryName,
@@ -1051,57 +998,24 @@ const compactPricingListRow = (row = {}) => {
     orderSuggestion: compact.orderSuggestion,
     recommendationSummary: compact.actionSuggestion,
     actionSuggestion: compact.actionSuggestion,
+    reasonCodes: compact.reasonCodes,
+    blockingReasons: compact.blockingReasons,
+    suggestedAction: compact.suggestedAction,
+    recommendedDiscountRate: compact.recommendedDiscountRate,
+    isSuppressed: compact.isSuppressed,
+    suppressionReason: compact.suppressionReason,
+    sourceMetrics: compact.sourceMetrics,
+    activeCampaignFlag: compact.activeCampaignFlag,
+    activeCampaignConflict: compact.activeCampaignConflict,
+    replenishmentSupportFlag: compact.replenishmentSupportFlag,
+    lowStockGuardrailFlag: compact.lowStockGuardrailFlag,
+    marginGuardrailFlag: compact.marginGuardrailFlag,
+    stockGuardrail: compact.stockGuardrail,
+    procurementGuardrail: compact.procurementGuardrail,
+    marginGuardrail: compact.marginGuardrail,
     riskScore: compact.riskScore,
     riskLevel: compact.riskLevel,
     riskLabel: compact.riskLabel,
-  };
-};
-
-const isExplicitFullAnalysisRequest = (query = {}) => (
-  query.full === true
-  || query.full === 'true'
-  || query.export === true
-  || query.export === 'true'
-);
-
-const buildPaginatedAnalysisFromPostgres = async (query = {}) => {
-  const [summaryPayload, rowsPayload] = await Promise.all([
-    getFastSummaryFromPostgres(query),
-    getFastRowsFromPostgres(query),
-  ]);
-  const rows = Array.isArray(rowsPayload.items) ? rowsPayload.items : [];
-  const pagination = rowsPayload.pagination || {};
-
-  return {
-    ...summaryPayload,
-    items: rows,
-    rows,
-    total: pagination.total ?? rows.length,
-    page: pagination.page ?? 1,
-    limit: pagination.limit ?? rows.length,
-    sections: {
-      fastSellingProducts: rows.filter((row) => row.salesSpeed === 'fast').slice(0, 20),
-      slowAndExpiryRiskProducts: rows
-        .filter((row) => row.salesSpeed === 'slow' || ['critical', 'soon'].includes(row.sktStatus))
-        .slice(0, 40),
-      dynamicDiscountSuggestions: rows.filter((row) => row.discountSuggestion?.hasSuggestion).slice(0, 40),
-      stockRunoutAnalysis: rows.filter((row) => row.daysToStockout !== null && row.daysToStockout !== undefined).slice(0, 40),
-      automaticOrderSuggestions: rows.filter((row) => row.orderSuggestion?.hasSuggestion).slice(0, 40),
-      salesPattern: [],
-      riskScorePanel: rows.slice(0, 50),
-    },
-    pagination,
-    meta: {
-      pagination,
-      filters: rowsPayload.filters,
-      sort: rowsPayload.sort,
-      listMode: 'paginated',
-    },
-    rowMeta: {
-      pagination,
-      filters: rowsPayload.filters,
-      sort: rowsPayload.sort,
-    },
   };
 };
 
@@ -1683,15 +1597,6 @@ export const pricingAnalysisService = {
     }
 
     const analysisPromise = (async () => {
-    if (
-      config.dataStore === 'postgres'
-      && query.forceRefresh !== true
-      && query.forceRefresh !== 'true'
-      && !isExplicitFullAnalysisRequest(query)
-    ) {
-      return buildPaginatedAnalysisFromPostgres(query);
-    }
-
     const {
       products,
       categories,
@@ -1706,7 +1611,10 @@ export const pricingAnalysisService = {
     const supplierMap = new Map(suppliers.map((item) => [item.id, item]));
     const stockMap = new Map(stocks.map((item) => [item.productId, item]));
     const supplierProductsByProduct = groupSupplierProductsByProduct(supplierProducts);
-    const activeCampaigns = await listActiveCampaignDefinitions();
+    const [activeCampaigns, procurementContext] = await Promise.all([
+      listActiveCampaignDefinitions(),
+      buildPricingProcurementContext(),
+    ]);
 
     const analysisDate = toDateOnly(normalizeDate(query.endDate || new Date()));
     const startDate = query.startDate ? normalizeDate(query.startDate, null) : null;
@@ -1781,6 +1689,36 @@ export const pricingAnalysisService = {
         const priceHistoryMetrics = buildPriceHistoryMetrics(product);
         const salesTrendLast14Days = salesTrendLast14DaysMap.get(product.id) || [];
 
+        const rowForGuardrails = {
+          productId: product.id,
+          categoryId: product.categoryId,
+          brand: product.brand || '',
+        };
+        const activeCampaignConflict = projectedProduct.hasActiveDiscount
+          ? (findPricingActiveCampaignConflict(rowForGuardrails, activeCampaigns) || {
+            campaignId: projectedProduct.activeCampaign?.id || null,
+            campaignName: projectedProduct.activeCampaign?.name || 'Aktif kampanya',
+            campaignType: projectedProduct.activeCampaign?.type || 'active',
+            reason: 'active_campaign_conflict',
+          })
+          : null;
+        const stockGuardrail = buildStockGuardrail({
+          totalStock,
+          criticalStock,
+          avgDailySales: metrics.avgDaily7,
+          daysToStockout,
+        });
+        const procurementGuardrail = buildProcurementGuardrail({
+          productId: product.id,
+          leadTimeDays,
+          stockGuardrail,
+          procurementContext,
+        });
+        const marginGuardrail = buildMarginGuardrail({
+          currentPrice,
+          purchasePrice: Number(bestSupplierOption?.purchasePrice || product.purchasePrice || 0),
+        });
+
         const recommendation = recommendationEngine.buildRecommendations({
           product: analysisProduct,
           metrics,
@@ -1790,6 +1728,10 @@ export const pricingAnalysisService = {
           totalStock,
           criticalStock,
           leadTimeDays,
+          activeCampaignConflict,
+          stockGuardrail,
+          procurementGuardrail,
+          marginGuardrail,
         });
 
         const risk = riskScoringService.scoreProduct({
@@ -1807,6 +1749,7 @@ export const pricingAnalysisService = {
           productId: product.id,
           sku: product.sku,
           productName: product.name,
+          brand: product.brand || '',
           categoryId: product.categoryId,
           categoryName: category?.name || '-',
           supplierId: bestSupplierOption?.supplierId || product.supplierId,
@@ -1859,6 +1802,21 @@ export const pricingAnalysisService = {
           discountSuggestion: recommendation.discount,
           orderSuggestion: recommendation.order,
           actionSuggestion: recommendation.actionSuggestion,
+          reasonCodes: recommendation.reasonCodes,
+          blockingReasons: recommendation.blockingReasons,
+          suggestedAction: recommendation.suggestedAction,
+          recommendedDiscountRate: recommendation.recommendedDiscountRate,
+          isSuppressed: recommendation.isSuppressed,
+          suppressionReason: recommendation.suppressionReason,
+          sourceMetrics: recommendation.sourceMetrics,
+          activeCampaignFlag: Boolean(activeCampaignConflict),
+          activeCampaignConflict,
+          replenishmentSupportFlag: procurementGuardrail.hasPipeline,
+          lowStockGuardrailFlag: stockGuardrail.blocksDiscount,
+          marginGuardrailFlag: marginGuardrail.blocksDiscount,
+          stockGuardrail,
+          procurementGuardrail,
+          marginGuardrail,
           riskScore: risk.score,
           riskLevel: risk.level,
           riskLabel: riskLabel[risk.level],
@@ -1887,29 +1845,39 @@ export const pricingAnalysisService = {
       );
     });
 
-    const fastSellingProducts = filtered
+    const allFastSellingProducts = filtered
       .filter((row) => row.salesSpeed === 'fast')
-      .sort((a, b) => b.sold7 - a.sold7)
+      .sort((a, b) => b.sold7 - a.sold7);
+
+    const fastSellingProducts = allFastSellingProducts
       .slice(0, 20);
 
-    const slowAndExpiryRiskProducts = filtered
+    const allSlowAndExpiryRiskProducts = filtered
       .filter((row) => row.salesSpeed === 'slow' || ['critical', 'soon'].includes(row.sktStatus))
-      .sort((a, b) => b.riskScore - a.riskScore)
+      .sort((a, b) => b.riskScore - a.riskScore);
+
+    const slowAndExpiryRiskProducts = allSlowAndExpiryRiskProducts
       .slice(0, 40);
 
-    const dynamicDiscountSuggestions = filtered
+    const allDynamicDiscountSuggestions = filtered
       .filter((row) => row.discountSuggestion.hasSuggestion)
-      .sort((a, b) => b.discountSuggestion.discountRate - a.discountSuggestion.discountRate)
+      .sort((a, b) => b.discountSuggestion.discountRate - a.discountSuggestion.discountRate);
+
+    const dynamicDiscountSuggestions = allDynamicDiscountSuggestions
       .slice(0, 40);
 
-    const stockRunoutAnalysis = filtered
+    const allStockRunoutAnalysis = filtered
       .filter((row) => row.daysToStockout !== null)
-      .sort((a, b) => a.daysToStockout - b.daysToStockout)
+      .sort((a, b) => a.daysToStockout - b.daysToStockout);
+
+    const stockRunoutAnalysis = allStockRunoutAnalysis
       .slice(0, 40);
 
-    const automaticOrderSuggestions = filtered
+    const allAutomaticOrderSuggestions = filtered
       .filter((row) => row.orderSuggestion.hasSuggestion)
-      .sort((a, b) => (a.daysToStockout || 9999) - (b.daysToStockout || 9999))
+      .sort((a, b) => (a.daysToStockout || 9999) - (b.daysToStockout || 9999));
+
+    const automaticOrderSuggestions = allAutomaticOrderSuggestions
       .slice(0, 40);
 
     const riskScorePanel = filtered
@@ -1931,13 +1899,13 @@ export const pricingAnalysisService = {
       {
         key: 'discount',
         title: 'İndirim Aksiyonu',
-        value: dynamicDiscountSuggestions.length,
+        value: allDynamicDiscountSuggestions.length,
         detail: 'SKT ve satış hızı sinyallerine göre dinamik fiyat önerileri.',
       },
       {
         key: 'order',
         title: 'Sipariş Aksiyonu',
-        value: automaticOrderSuggestions.length,
+        value: allAutomaticOrderSuggestions.length,
         detail: 'Tükenme riski olan ürünler için sipariş zamanlaması.',
       },
       {
@@ -1958,10 +1926,10 @@ export const pricingAnalysisService = {
       },
       summary: {
         totalAnalyzedProducts: filtered.length,
-        discountSuggestedProducts: dynamicDiscountSuggestions.length,
+        discountSuggestedProducts: allDynamicDiscountSuggestions.length,
         sktRiskProducts: filtered.filter((row) => ['critical', 'soon'].includes(row.sktStatus)).length,
         nearRunoutProducts: filtered.filter((row) => row.daysToStockout !== null && row.daysToStockout <= 10).length,
-        orderSuggestedProducts: automaticOrderSuggestions.length,
+        orderSuggestedProducts: allAutomaticOrderSuggestions.length,
         highRiskProducts: filtered.filter((row) => ['high', 'critical'].includes(row.riskLevel)).length,
       },
       filtersMeta: {
@@ -1991,10 +1959,6 @@ export const pricingAnalysisService = {
   },
 
   async getSummary(query = {}) {
-    if (config.dataStore === 'postgres' && query.forceRefresh !== true && query.forceRefresh !== 'true') {
-      return getFastSummaryFromPostgres(query);
-    }
-
     const analysis = await this.getAnalysis(query);
     return {
       generatedAt: analysis.generatedAt,
@@ -2007,10 +1971,6 @@ export const pricingAnalysisService = {
   },
 
   async getRows(query = {}) {
-    if (config.dataStore === 'postgres' && query.forceRefresh !== true && query.forceRefresh !== 'true') {
-      return getFastRowsFromPostgres(query);
-    }
-
     const analysis = await this.getAnalysis(query);
     const { key, rows } = sortRows(analysis.rows || [], query.sort || 'risk_desc');
     const { pageRows, pagination } = paginateRows(rows, query);

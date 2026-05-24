@@ -65,8 +65,8 @@ export const estimateImpact = ({
   const demandMultiplier = 1 + ((safeDiscount / 100) * elasticity);
   const expectedSales = Number((safeVelocity * demandMultiplier).toFixed(2));
   const depletionDays = expectedSales > 0 ? Number((safeStock / expectedSales).toFixed(1)) : Number.POSITIVE_INFINITY;
-  const estimatedSalesIncreasePct = safeVelocity > 0 ?
-    Number((((expectedSales - safeVelocity) / safeVelocity) * 100).toFixed(1))
+  const estimatedSalesIncreasePct = safeVelocity > 0
+    ? Number((((expectedSales - safeVelocity) / safeVelocity) * 100).toFixed(1))
     : 0;
 
   const periodDays = 14;
@@ -186,5 +186,3 @@ export const toggleAllIds = (selectedIds = [], rows = [], checked) => {
 
   return [...set];
 };
-
-

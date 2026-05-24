@@ -15,6 +15,7 @@ import { resolveStoreScheduleStatus } from '../utils/storeSchedule.js';
 import { formatReturnReasonLabel } from '../utils/displayLabels.js';
 import { getBarcodeCandidates } from '../utils/barcode.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
+import { settingsService } from './settingsService.js';
 
 const buildReferenceNo = (type) => {
   const normalized = String(type || '').toLowerCase();
@@ -69,6 +70,7 @@ const AUTO_SALE_PAYMENT_WEIGHTS = [
   { method: 'eft', weight: 3 },
   { method: 'giftcard', weight: 2 },
 ];
+const AUTO_SALE_LOG_SOURCE = 'otomatik_satis_paneli';
 
 const normalizeGiftCardCode = (value) => String(value || '').trim().toUpperCase();
 
@@ -103,6 +105,12 @@ const clampRatio = (value, fallback = 0) => {
   return Math.max(0, Math.min(1, numeric));
 };
 
+const clampPositiveInt = (value, fallback, { min = 1, max = 20 } = {}) => {
+  const numeric = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, numeric));
+};
+
 const pickWeightedPaymentMethod = () => {
   const totalWeight = AUTO_SALE_PAYMENT_WEIGHTS.reduce((sum, row) => sum + row.weight, 0);
   let cursor = Math.random() * totalWeight;
@@ -111,6 +119,34 @@ const pickWeightedPaymentMethod = () => {
     if (cursor <= 0) return row.method;
   }
   return 'card';
+};
+
+const recordAutoSaleDeveloperLog = async ({ level = 'info', message, payload = {}, response = null, error = null, userContext = null } = {}) => {
+  try {
+    await settingsService.recordDeveloperLog({
+      level,
+      source: AUTO_SALE_LOG_SOURCE,
+      message,
+      action: 'POST /api/pos/sales/automatic',
+      endpoint: '/api/pos/sales/automatic',
+      requestUrl: '/api/pos/sales/automatic',
+      requestPayload: payload,
+      payload,
+      response,
+      stack: error?.stack || '',
+      statusCode: error instanceof AppError ? error.statusCode : level === 'error' ? 500 : 200,
+      errorType: error ? 'automatic_sale_error' : 'automatic_sale_event',
+      description: message,
+    }, userContext, {
+      source: AUTO_SALE_LOG_SOURCE,
+      endpoint: '/api/pos/sales/automatic',
+      requestUrl: '/api/pos/sales/automatic',
+      action: 'POST /api/pos/sales/automatic',
+      statusCode: error instanceof AppError ? error.statusCode : level === 'error' ? 500 : 200,
+    });
+  } catch (logError) {
+    console.warn('[POS automatic sale log skipped]', logError?.message || logError);
+  }
 };
 
 const resolveVatRate = (value, fallback = 20) => {
@@ -351,6 +387,45 @@ const findProductByBarcodeFromPostgres = async (barcode) => {
 };
 
 const listAutomaticSaleProductPool = async () => {
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    const activeCampaigns = await listActiveCampaignDefinitions();
+    const rows = await withPostgresQueryLogging('AUTO POS product pool', () => prisma.product.findMany({
+      where: {
+        isActive: { not: false },
+        isListed: { not: false },
+        stock: { is: {
+          shelfQuantity: { gt: 0 },
+        } },
+      },
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        barcode: true,
+        salePrice: true,
+        categoryId: true,
+        brand: true,
+        unit: true,
+        stock: { select: { shelfQuantity: true } },
+      },
+    }));
+
+    return rows.reduce((pool, product) => {
+      const shelfQuantity = Number(product.stock?.shelfQuantity || 0);
+      const pricedProduct = mapPosProductRow(product, activeCampaigns);
+      const unitPrice = Number(pricedProduct.effectivePrice || pricedProduct.currentPrice || pricedProduct.salePrice || product.salePrice || 0);
+      if (product?.id && shelfQuantity > 0 && Number.isFinite(unitPrice) && unitPrice > 0) {
+        pool.push({
+          productId: product.id,
+          shelfQuantity,
+          unitPrice: roundMoney(unitPrice),
+        });
+      }
+      return pool;
+    }, []);
+  }
+
   const products = await productRepo.getAll();
   const activeCampaigns = await listActiveCampaignDefinitions();
   const pool = [];
@@ -375,41 +450,102 @@ const listAutomaticSaleProductPool = async () => {
   return pool;
 };
 
-const buildAutomaticSaleItems = async (targetAmount) => {
+const shuffleRows = (rows = []) => [...rows].sort(() => Math.random() - 0.5);
+
+const randomIntBetween = (min, max) => {
+  const safeMin = Math.ceil(Number(min));
+  const safeMax = Math.floor(Number(max));
+  if (!Number.isFinite(safeMin) || !Number.isFinite(safeMax) || safeMax <= safeMin) return safeMin;
+  return safeMin + Math.floor(Math.random() * (safeMax - safeMin + 1));
+};
+
+const sumAutomaticSaleItems = (items, priceMap) => roundMoney((items || []).reduce((sum, item) => (
+  sum + (Number(priceMap.get(item.productId) || 0) * Number(item.quantity || 0))
+), 0));
+
+const buildAutomaticSaleItems = async ({ minAmount, maxAmount, minProductCount = 1, maxProductCount = 3 } = {}) => {
   const pool = await listAutomaticSaleProductPool();
   if (!pool.length) {
-    throw new AppError(400, 'Otomatik satış için stokta aktif ve listelenmiş ürün bulunamadı.');
+    throw new AppError(422, 'Otomatik satış için uygun stoklu ürün bulunamadı.', { details: { poolCount: 0 } });
   }
 
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  const maxLines = Math.min(shuffled.length, 1 + Math.floor(Math.random() * 3));
-  const itemsByProductId = new Map();
-  let runningTotal = 0;
-
-  for (const candidate of shuffled) {
-    if (itemsByProductId.size >= maxLines) break;
-    const remainingTarget = Math.max(0, targetAmount - runningTotal);
-    const maxUsefulQty = remainingTarget > 0 ? Math.max(1, Math.floor(remainingTarget / candidate.unitPrice)) : 1;
-    const maxQty = Math.max(1, Math.min(candidate.shelfQuantity, maxUsefulQty, 3));
-    const quantity = 1 + Math.floor(Math.random() * maxQty);
-    itemsByProductId.set(candidate.productId, {
-      productId: candidate.productId,
-      quantity,
-    });
-    runningTotal += candidate.unitPrice * quantity;
+  const safeMinAmount = roundMoney(minAmount);
+  const safeMaxAmount = roundMoney(maxAmount);
+  if (!Number.isFinite(safeMinAmount) || !Number.isFinite(safeMaxAmount) || safeMinAmount <= 0 || safeMaxAmount < safeMinAmount) {
+    throw new AppError(400, 'Otomatik satış tutar aralığı geçersiz.', { details: { minAmount, maxAmount } });
   }
 
-  if (!itemsByProductId.size) {
-    const fallback = shuffled[0];
-    itemsByProductId.set(fallback.productId, { productId: fallback.productId, quantity: 1 });
+  const priceMap = new Map(pool.map((item) => [item.productId, item.unitPrice]));
+  const affordablePool = pool.filter((item) => item.unitPrice <= safeMaxAmount);
+  if (!affordablePool.length) {
+    throw new AppError(422, 'Belirlenen tutar aralığına uygun sepet oluşturulamadı.', { details: { poolCount: pool.length, affordablePoolCount: 0, minAmount: safeMinAmount, maxAmount: safeMaxAmount } });
   }
 
-  return Array.from(itemsByProductId.values());
+  const safeMinProductCount = clampPositiveInt(minProductCount, 1, { min: 1, max: 20 });
+  const safeMaxProductCount = Math.max(safeMinProductCount, clampPositiveInt(maxProductCount, 3, { min: 1, max: 20 }));
+  const maxDistinct = Math.min(safeMaxProductCount, affordablePool.length);
+  const minDistinct = Math.min(safeMinProductCount, maxDistinct);
+
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    const targetDistinct = randomIntBetween(minDistinct, maxDistinct);
+    const shuffled = shuffleRows(affordablePool);
+    const itemsByProductId = new Map();
+
+    for (const candidate of shuffled) {
+      if (itemsByProductId.size >= targetDistinct) break;
+      const runningTotal = sumAutomaticSaleItems(Array.from(itemsByProductId.values()), priceMap);
+      if (runningTotal + candidate.unitPrice > safeMaxAmount) continue;
+      itemsByProductId.set(candidate.productId, { productId: candidate.productId, quantity: 1 });
+    }
+
+    if (itemsByProductId.size < minDistinct) continue;
+
+    let guard = 0;
+    while (sumAutomaticSaleItems(Array.from(itemsByProductId.values()), priceMap) < safeMinAmount && guard < 80) {
+      guard += 1;
+      const currentItems = shuffleRows(Array.from(itemsByProductId.values()));
+      let updated = false;
+
+      for (const current of currentItems) {
+        const candidate = affordablePool.find((row) => row.productId === current.productId);
+        if (!candidate) continue;
+        const currentTotal = sumAutomaticSaleItems(Array.from(itemsByProductId.values()), priceMap);
+        const nextQty = Number(current.quantity || 0) + 1;
+        if (nextQty > Math.min(candidate.shelfQuantity, 8)) continue;
+        if (currentTotal + candidate.unitPrice > safeMaxAmount) continue;
+        itemsByProductId.set(candidate.productId, { productId: candidate.productId, quantity: nextQty });
+        updated = true;
+        break;
+      }
+
+      if (!updated) break;
+    }
+
+    const items = Array.from(itemsByProductId.values());
+    const total = sumAutomaticSaleItems(items, priceMap);
+    if (items.length >= minDistinct && items.length <= maxDistinct && total >= safeMinAmount && total <= safeMaxAmount) {
+      return {
+        items,
+        diagnostics: {
+          poolCount: pool.length,
+          affordablePoolCount: affordablePool.length,
+          selectedItems: items,
+          total,
+          minAmount: safeMinAmount,
+          maxAmount: safeMaxAmount,
+          minProductCount: safeMinProductCount,
+          maxProductCount: safeMaxProductCount,
+        },
+      };
+    }
+  }
+
+  throw new AppError(422, 'Belirlenen tutar aralığına uygun sepet oluşturulamadı.', { details: { poolCount: pool.length, affordablePoolCount: affordablePool.length, minAmount: safeMinAmount, maxAmount: safeMaxAmount, minProductCount: safeMinProductCount, maxProductCount: safeMaxProductCount } });
 };
 
 const assertDeskCode = (deskCode) => {
   if (!VALID_DESK_CODES.includes(deskCode)) {
-    throw new AppError(400, 'Geçersiz kasa kodu');
+    throw new AppError(400, 'Geçerli kasa seçilmedi.');
   }
 };
 
@@ -821,6 +957,9 @@ export const posService = {
       changeAmount,
       customer: payload.customer || null,
       giftCardCode: giftCardCode || null,
+      source: payload.source || null,
+      automationSource: payload.automationSource || null,
+      payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : null,
       status: 'completed',
       createdAt: now,
     };
@@ -859,81 +998,155 @@ export const posService = {
 
   async createAutomaticSale(payload, userContext) {
     const deskCode = normalizeDeskCode(payload?.deskCode);
-    assertDeskCode(deskCode);
-
-    const targetAmount = roundMoney(payload?.amount);
-    if (!Number.isFinite(targetAmount) || targetAmount <= 0) {
-      throw new AppError(400, 'Satış tutarı 0’dan büyük olmalıdır');
-    }
-
-    const items = await buildAutomaticSaleItems(targetAmount);
-    const paymentMethod = pickWeightedPaymentMethod();
-    const sale = await this.completeSale({
-      deskCode,
-      items,
-      paymentMethod,
-      customer: null,
-    }, userContext);
-
-    const now = new Date().toISOString();
-    const userId = userContext?.id || null;
-    const user = userId ? await userRepo.findById(userId) : null;
-    const markedSale = await salesRepo.updateById(sale.id, (current) => ({
-      ...current,
+    const legacyAmount = roundMoney(payload?.amount);
+    const minAmount = roundMoney(payload?.minAmount ?? legacyAmount);
+    const maxAmount = roundMoney(payload?.maxAmount ?? legacyAmount);
+    const requestedMinProductCount = Number(payload?.minProductCount);
+    const requestedMaxProductCount = Number(payload?.maxProductCount);
+    const attemptPayload = {
       source: AUTO_SALE_SOURCE,
-      automationSource: AUTO_SALE_SOURCE,
-      cashierName: current.cashierName || 'Otomatik Satış Paneli',
-      updatedAt: now,
-      payload: {
-        ...(current.payload || {}),
+      deskCode,
+      minAmount,
+      maxAmount,
+      returnRate: payload?.returnRate,
+      forceReturn: payload?.forceReturn === true,
+      minProductCount: payload?.minProductCount,
+      maxProductCount: payload?.maxProductCount,
+    };
+
+    await recordAutoSaleDeveloperLog({
+      level: 'info',
+      message: 'Otomatik satış denemesi başladı.',
+      payload: attemptPayload,
+      userContext,
+    });
+
+    try {
+      assertDeskCode(deskCode);
+
+      if (!Number.isFinite(minAmount) || !Number.isFinite(maxAmount) || minAmount <= 0 || maxAmount <= 0 || minAmount > maxAmount) {
+        throw new AppError(400, 'Otomatik satış tutar aralığı geçersiz.', { details: { minAmount, maxAmount } });
+      }
+
+      if (
+        !Number.isFinite(requestedMinProductCount)
+        || !Number.isFinite(requestedMaxProductCount)
+        || requestedMinProductCount < 1
+        || requestedMaxProductCount < 1
+        || requestedMinProductCount > requestedMaxProductCount
+      ) {
+        throw new AppError(400, 'Ürün sayısı aralığı geçersiz.', { details: { minProductCount: payload?.minProductCount, maxProductCount: payload?.maxProductCount } });
+      }
+
+      const minProductCount = clampPositiveInt(payload?.minProductCount, 1, { min: 1, max: 20 });
+      const maxProductCount = clampPositiveInt(payload?.maxProductCount, 3, { min: 1, max: 20 });
+      const { items, diagnostics } = await buildAutomaticSaleItems({ minAmount, maxAmount, minProductCount, maxProductCount });
+      const paymentMethod = pickWeightedPaymentMethod();
+      const now = new Date().toISOString();
+      const userId = userContext?.id || null;
+      const user = userId ? await userRepo.findById(userId) : null;
+      const sale = await this.completeSale({
+        deskCode,
+        items,
+        paymentMethod,
+        customer: null,
         source: AUTO_SALE_SOURCE,
         automationSource: AUTO_SALE_SOURCE,
-        createdBy: user?.name || userContext?.name || 'system',
-        createdByUserId: user?.id || null,
-        generatedByPanel: true,
-        generatedWithRealProducts: true,
-        targetAmount,
-      },
-    })) || sale;
+        payload: {
+          source: AUTO_SALE_SOURCE,
+          automationSource: AUTO_SALE_SOURCE,
+          createdBy: user?.name || userContext?.name || 'system',
+          createdByUserId: user?.id || null,
+          generatedByPanel: true,
+          generatedWithRealProducts: true,
+          targetAmount: legacyAmount > 0 ? legacyAmount : null,
+          minAmount,
+          maxAmount,
+          minProductCount,
+          maxProductCount,
+          poolCount: diagnostics.poolCount,
+        },
+      }, userContext);
 
-    const returnRate = clampRatio(payload?.returnRate, 0.03);
-    const hasRealItems = (markedSale.items || []).some((item) => item?.productId && item.productId !== BAG_PRODUCT_ID);
-    let automaticReturnCreated = false;
-    let automaticReturnReferenceNo = null;
-    if (returnRate > 0 && hasRealItems && Math.random() < returnRate) {
-      try {
-        const returnItems = (markedSale.items || [])
-          .filter((item) => item?.productId && item.productId !== BAG_PRODUCT_ID)
-          .slice(0, 1)
-          .map((item) => ({
-            productId: item.productId,
-            quantity: 1,
-            unitPrice: item.unitPrice,
-            vatRate: item.vatRate,
-          }));
+      const markedSale = {
+        ...sale,
+        source: AUTO_SALE_SOURCE,
+        automationSource: AUTO_SALE_SOURCE,
+        cashierName: sale.cashierName || 'Otomatik Satış Paneli',
+        updatedAt: now,
+      };
 
-        if (returnItems.length) {
-          const returnRecord = await this.processReturn({
-            deskCode,
-            originalSaleRef: markedSale.referenceNo,
-            refundMethod: markedSale.paymentMethod || paymentMethod,
-            returnReason: 'automatic_random_return',
-            returnReasonDetail: 'Otomatik satış paneli rastgele iade simülasyonu',
-            items: returnItems,
-          }, userContext);
-          automaticReturnCreated = true;
-          automaticReturnReferenceNo = returnRecord?.referenceNo || null;
+      await recordAutoSaleDeveloperLog({
+        level: 'info',
+        message: 'Otomatik satış başarıyla oluşturuldu.',
+        payload: {
+          ...attemptPayload,
+          poolCount: diagnostics.poolCount,
+          selectedItems: diagnostics.selectedItems,
+          totalAmount: markedSale.totalAmount,
+          paymentMethod,
+          referenceNo: markedSale.referenceNo,
+        },
+        response: { success: true, referenceNo: markedSale.referenceNo, totalAmount: markedSale.totalAmount },
+        userContext,
+      });
+
+      const returnRate = clampRatio(payload?.returnRate, 0.03);
+      const hasRealItems = (markedSale.items || []).some((item) => item?.productId && item.productId !== BAG_PRODUCT_ID);
+      let automaticReturnCreated = false;
+      let automaticReturnReferenceNo = null;
+      const shouldCreateReturn = payload?.forceReturn === true || (returnRate > 0 && Math.random() < returnRate);
+      if (returnRate > 0 && hasRealItems && shouldCreateReturn) {
+        try {
+          const returnItems = (markedSale.items || [])
+            .filter((item) => item?.productId && item.productId !== BAG_PRODUCT_ID)
+            .slice(0, 1)
+            .map((item) => ({
+              productId: item.productId,
+              quantity: 1,
+              unitPrice: item.unitPrice,
+              vatRate: item.vatRate,
+            }));
+
+          if (returnItems.length) {
+            const returnRecord = await this.processReturn({
+              deskCode,
+              originalSaleRef: markedSale.referenceNo,
+              refundMethod: markedSale.paymentMethod || paymentMethod,
+              returnReason: 'automatic_random_return',
+              returnReasonDetail: 'Otomatik satış paneli rastgele iade simülasyonu',
+              items: returnItems,
+            }, userContext);
+            automaticReturnCreated = true;
+            automaticReturnReferenceNo = returnRecord?.referenceNo || null;
+          }
+        } catch (error) {
+          await recordAutoSaleDeveloperLog({
+            level: 'warning',
+            message: `Otomatik iade oluşturulamadı: ${error?.message || 'Bilinmeyen hata'}`,
+            payload: { ...attemptPayload, referenceNo: markedSale.referenceNo },
+            error,
+            userContext,
+          });
+          console.warn('[POS] Otomatik iade oluşturulamadı:', error?.message || error);
         }
-      } catch (error) {
-        console.warn('[POS] Otomatik iade oluşturulamadı:', error?.message || error);
       }
-    }
 
-    return {
-      ...markedSale,
-      automaticReturnCreated,
-      automaticReturnReferenceNo,
-    };
+      return {
+        ...markedSale,
+        automaticReturnCreated,
+        automaticReturnReferenceNo,
+      };
+    } catch (error) {
+      await recordAutoSaleDeveloperLog({
+        level: error instanceof AppError ? 'warning' : 'error',
+        message: error?.message || 'Otomatik satış oluşturulamadı.',
+        payload: attemptPayload,
+        error,
+        userContext,
+      });
+      throw error instanceof AppError ? error : new AppError(500, error?.message || 'Otomatik satış oluşturulamadı.', { stack: error?.stack });
+    }
   },
 
   async processReturn(payload, userContext) {

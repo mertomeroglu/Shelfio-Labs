@@ -42,6 +42,8 @@ const TYPE_LABELS_TR = {
   system: 'Sistem',
   order: 'Sipariş',
   task: 'Görev',
+  purchase_order: 'Sipariş Takibi',
+  goods_receipt: 'Mal Kabul',
 };
 
 const ACTION_LABELS_TR = {
@@ -302,7 +304,7 @@ const sortByPriorityAndTime = (items) => [...items].sort((left, right) => {
 const isTaskOpen = (task) => String(task?.status || '') !== 'completed';
 
 export const notificationService = {
-  async notifyUser({ userId, type, title, message, severity = 'low', relatedTaskId = null, dedupeKey = null, actionUrl = null, actionType = null }) {
+  async notifyUser({ userId, type, title, message, severity = 'low', relatedTaskId = null, dedupeKey = null, actionUrl = null, actionType = null, payload = null, createdBy = null }) {
     return maybeCreate({
       userId,
       type,
@@ -313,6 +315,8 @@ export const notificationService = {
       dedupeKey,
       actionUrl,
       actionType,
+      payload,
+      createdBy,
     });
   },
 

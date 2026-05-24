@@ -1,11 +1,12 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Activity, BarChart3, Eye, EyeOff, Lock, ShieldCheck, User } from 'lucide-react';
+import { Activity, BarChart3, Cookie, Eye, EyeOff, Lock, ShieldCheck, User } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.js';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import LoginTransition from '../../components/LoginTransition.jsx';
 import logoPng from '../../assets/logo.png';
 import Toast from '../../components/Toast.jsx';
+import { openCookiePreferences } from '../../components/CookieConsent.jsx';
 
 export default function Login() {
   usePageTitle();
@@ -144,6 +145,9 @@ export default function Login() {
 
       <footer className="auth-footer">
         <p>© 2026 Shelfio Stok ve Fiyat Yönetim Platformu. Tüm hakları saklıdır.</p>
+        <button type="button" className="auth-footer-link" onClick={openCookiePreferences}>
+          <Cookie size={13} /> Çerez Tercihleri
+        </button>
         <small>Kurumsal erişim ekranı</small>
       </footer>
     </div>

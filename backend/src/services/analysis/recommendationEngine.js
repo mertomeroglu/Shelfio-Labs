@@ -27,9 +27,24 @@ const addDays = (date, days) => {
 };
 
 export const recommendationEngine = {
-  buildRecommendations({ product, metrics, daysToExpiry, overStockRatio, daysToStockout, totalStock, criticalStock, leadTimeDays }) {
+  buildRecommendations({
+    product,
+    metrics,
+    daysToExpiry,
+    overStockRatio,
+    daysToStockout,
+    totalStock,
+    criticalStock,
+    leadTimeDays,
+    activeCampaignConflict = null,
+    stockGuardrail = {},
+    procurementGuardrail = {},
+    marginGuardrail = {},
+  }) {
     const reasons = [];
     const effects = [];
+    const reasonCodes = [];
+    const blockingReasons = [];
 
     const discountRate = getDiscountRate({
       daysToExpiry,
@@ -38,15 +53,37 @@ export const recommendationEngine = {
       trendDirection: metrics.trendDirection,
     });
 
-    const shouldDiscount = discountRate >= 10;
-    if (daysToExpiry !== null && daysToExpiry <= 7) reasons.push('SKT yaklaşmış');
-    if (metrics.salesSpeed === 'slow') reasons.push('satış hızı düşük');
-    if (overStockRatio >= 1.0) reasons.push('stok seviyesi yüksek');
-    if (metrics.trendDirection === 'down') reasons.push('satış trendi düşüşte');
+    if (daysToExpiry !== null && daysToExpiry <= 7) {
+      reasons.push('SKT yaklaşmış');
+      reasonCodes.push('near_expiry');
+    }
+    if (metrics.salesSpeed === 'slow') {
+      reasons.push('satış hızı düşük');
+      reasonCodes.push('slow_sales');
+    }
+    if (overStockRatio >= 1.0) {
+      reasons.push('stok seviyesi yüksek');
+      reasonCodes.push('overstock');
+    }
+    if (metrics.trendDirection === 'down') {
+      reasons.push('satış trendi düşüşte');
+      reasonCodes.push('demand_down');
+    }
+
+    if (activeCampaignConflict) blockingReasons.push('active_campaign_conflict');
+    if (stockGuardrail?.blocksDiscount) blockingReasons.push(...(stockGuardrail.blockingReasons || ['stock_guardrail_blocked']));
+    if (procurementGuardrail?.blocksDiscount) blockingReasons.push(...(procurementGuardrail.blockingReasons || ['replenishment_guardrail_blocked']));
+    if (marginGuardrail?.blocksDiscount) blockingReasons.push(...(marginGuardrail.blockingReasons || ['margin_guardrail_blocked']));
+
+    const uniqueBlockingReasons = [...new Set(blockingReasons)];
+    const isSuppressed = discountRate >= 10 && uniqueBlockingReasons.length > 0;
+    const shouldDiscount = discountRate >= 10 && !isSuppressed;
 
     if (shouldDiscount) {
       effects.push('stok devir hızı artabilir');
       effects.push('SKT kaynaklı fire riski azalabilir');
+    } else if (isSuppressed) {
+      effects.push('indirim guardrail nedeniyle bastırıldı');
     }
 
     const suggestedOrderQty = getOrderRecommendationQty({
@@ -72,26 +109,67 @@ export const recommendationEngine = {
     const newPrice = shouldDiscount ? Number((currentPrice * (1 - discountRate / 100)).toFixed(2)) : currentPrice;
 
     let actionSuggestion = 'İzlemeye devam et';
-    if (shouldOrder && shouldDiscount) actionSuggestion = 'Fiyat indirimi + erken sipariş kombinasyonu uygula';
+    if (isSuppressed) actionSuggestion = 'İndirim önerme; stok, kampanya, tedarik veya marj guardrailini kontrol et';
+    else if (shouldOrder && shouldDiscount) actionSuggestion = 'Fiyat indirimi + erken sipariş kombinasyonu uygula';
     else if (shouldOrder) actionSuggestion = 'Sipariş planını öne çek';
     else if (shouldDiscount) actionSuggestion = 'Dinamik indirim veya kampanya başlat';
     else if (overStockRatio >= 1.1 && metrics.salesSpeed === 'slow') actionSuggestion = 'Ön raf görünürlüğü ve paket tekliflerini artır';
 
+    const sourceMetrics = {
+      sold7: Number(metrics.sold7 || 0),
+      sold30: Number(metrics.sold30 || 0),
+      avgDailySales: Number(metrics.avgDaily7 || 0),
+      salesSpeed: metrics.salesSpeed,
+      trendDirection: metrics.trendDirection,
+      totalStock,
+      criticalStock,
+      daysToStockout,
+      daysToExpiry,
+      overStockRatio,
+      leadTimeDays,
+      currentMarginPercent: marginGuardrail?.currentMarginPercent ?? null,
+      activeCampaignFlag: Boolean(activeCampaignConflict),
+      replenishmentSupportFlag: Boolean(procurementGuardrail?.hasPipeline),
+      lowStockGuardrailFlag: Boolean(stockGuardrail?.blocksDiscount),
+      marginGuardrailFlag: Boolean(marginGuardrail?.blocksDiscount),
+    };
+
     return {
       discount: {
         hasSuggestion: shouldDiscount,
-        discountRate,
+        discountRate: shouldDiscount ? discountRate : 0,
+        opportunityDiscountRate: discountRate,
+        recommendedDiscountRate: shouldDiscount ? discountRate : 0,
         newPrice,
         reason: reasons.length ? reasons.join(', ') : 'Belirgin indirim sinyali yok',
         expectedImpact: effects.length ? effects.join(' ve ') : 'Etkisi sınırlı',
+        reasonCodes,
+        blockingReasons: uniqueBlockingReasons,
+        suggestedAction: actionSuggestion,
+        isSuppressed,
+        suppressionReason: isSuppressed ? uniqueBlockingReasons.join(',') : '',
+        sourceMetrics,
+        activeCampaignFlag: Boolean(activeCampaignConflict),
+        activeCampaignConflict,
+        replenishmentSupportFlag: Boolean(procurementGuardrail?.hasPipeline),
+        lowStockGuardrailFlag: Boolean(stockGuardrail?.blocksDiscount),
+        marginGuardrailFlag: Boolean(marginGuardrail?.blocksDiscount),
       },
       order: {
         hasSuggestion: shouldOrder,
         suggestedQty: suggestedOrderQty,
         suggestedOrderDate,
         reason: orderReason.length ? orderReason.join(', ') : 'Sipariş gereksinimi düşük',
+        reasonCodes: orderReason.length ? ['order_pressure'] : [],
       },
       actionSuggestion,
+      reasonCodes,
+      blockingReasons: uniqueBlockingReasons,
+      suggestedAction: actionSuggestion,
+      recommendedDiscountRate: shouldDiscount ? discountRate : 0,
+      isSuppressed,
+      suppressionReason: isSuppressed ? uniqueBlockingReasons.join(',') : '',
+      sourceMetrics,
     };
   },
 };

@@ -143,6 +143,7 @@ export const settingsController = {
         browserInfo: req.headers['user-agent'] || '',
         requestUrl: req.originalUrl,
         source: 'frontend',
+        requestId: req.requestId,
       };
 
       const data = await settingsService.recordDeveloperLog(req.body || {}, req.user, meta);
@@ -164,6 +165,7 @@ export const settingsController = {
         browserInfo: req.headers['user-agent'] || '',
         requestUrl: req.originalUrl,
         source: 'frontend',
+        requestId: req.requestId,
       };
       const data = await settingsService.recordDeveloperLog(req.body || {}, null, meta);
       res.status(201).json({ success: true, data });

@@ -1159,18 +1159,40 @@ export default function LocationManagementPage() {
         setIsLoading(true);
         const [sectionList, productList, warehouseData] = await Promise.all([
           sectionService.list(),
-          productService.list({ fetchAll: true, includeListDetails: true }),
-          warehouseService.listLocations({}),
+          productService.listForLocationManagement(),
+          warehouseService.listLocations({ includeShelfDetails: false }),
         ]);
 
         const safeSections = Array.isArray(sectionList) ? sectionList : [];
+        const safeProducts = Array.isArray(productList) ? productList : [];
+        const productShelfPlan = safeProducts
+          .filter((item) => item.sectionId && item.shelfSide && item.shelfNo && item.shelfLevel)
+          .map((item) => ({
+            sectionId: item.sectionId,
+            sectionNumber: item.sectionNumber || null,
+            sectionName: item.sectionName || null,
+            locationCode: null,
+            shelfSide: String(item.shelfSide || 'L').toUpperCase(),
+            shelfNo: Number(item.shelfNo || 0),
+            shelfLevel: Number(item.shelfLevel || 0),
+            productId: item.id,
+            productName: item.name,
+            sku: item.sku,
+            storageType: item.requiredStorageType || item.storageType || 'Ortam',
+            shelfStock: Number(item.shelfStock || 0),
+            maxShelfStock: Number(item.maxShelfStock || item.shelfCapacity || 0),
+            averageDesi: Number(item.averageDesi || 0),
+            isVirtualLocation: item.isVirtualLocation === true,
+            capacityMode: item.capacityMode || null,
+            stockingStrategy: item.stockingStrategy || null,
+          }));
         setSections(safeSections);
-        setProducts(Array.isArray(productList) ? productList : []);
+        setProducts(safeProducts);
         setWarehouseRows(Array.isArray(warehouseData?.rows) ? warehouseData.rows : []);
         setWarehouseSummary(warehouseData?.summary || null);
         setDerivedDepotAssignments(Array.isArray(warehouseData?.depotAssignments) ? warehouseData.depotAssignments : []);
         setDerivedDepotZones(Array.isArray(warehouseData?.depotZones) ? warehouseData.depotZones : []);
-        setDerivedShelfPlan(Array.isArray(warehouseData?.shelfPlan) ? warehouseData.shelfPlan : []);
+        setDerivedShelfPlan(Array.isArray(warehouseData?.shelfPlan) && warehouseData.shelfPlan.length ? warehouseData.shelfPlan : productShelfPlan);
         setDerivedShelfZones(Array.isArray(warehouseData?.shelfZones) ? warehouseData.shelfZones : []);
         setSelectedSectionId((current) => current || safeSections[0]?.id || '');
       } catch (error) {

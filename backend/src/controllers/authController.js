@@ -26,6 +26,15 @@ export const authController = {
     }
   },
 
+  async refresh(req, res, next) {
+    try {
+      const data = await authService.refreshSession(req.body || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async register(req, res, next) {
     try {
       const data = await authService.register(req.body);
