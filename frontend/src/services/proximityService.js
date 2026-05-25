@@ -1,8 +1,10 @@
-import { customerPortalRequest } from './customerPortalAuthService.js';
+import { customerPortalRequest, refreshCustomerSession } from './customerPortalAuthService.js';
 
 const EVENT_TYPE_ALIASES = new Map([
   ['ZONE_STAY', 'DWELL'],
   ['STAY', 'DWELL'],
+  ['DWELL', 'DWELL'],
+  ['ZONE_STAY_CHECK', 'DWELL'],
 ]);
 const ALLOWED_EVENT_TYPES = new Set(['ZONE_ENTER', 'ZONE_EXIT', 'DWELL']);
 const FRONTEND_SOURCE = 'WEBVIEW_BRIDGE';
@@ -25,7 +27,7 @@ export function normalizeNativeBeaconEvent(detail = {}) {
   const major = parseOptionalInteger(detail.major);
   const minor = parseOptionalInteger(detail.minor);
   const rssi = Number(detail.rssi);
-  const rawEventType = normalizeText(detail.eventType).toUpperCase();
+  const rawEventType = normalizeText(detail.eventType || detail.checkType).toUpperCase();
   const eventType = EVENT_TYPE_ALIASES.get(rawEventType) || rawEventType;
   const detectedAt = normalizeText(detail.detectedAt) || new Date().toISOString();
 
@@ -72,5 +74,13 @@ export const proximityService = {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+  async sendEventWithAuthRetry(payload) {
+    const response = await this.sendEvent(payload);
+    if (response?.shouldNotify === false && response?.reason === 'NOT_AUTHENTICATED') {
+      await refreshCustomerSession();
+      return this.sendEvent(payload);
+    }
+    return response;
   },
 };

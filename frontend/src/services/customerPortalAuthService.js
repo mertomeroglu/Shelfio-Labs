@@ -87,7 +87,7 @@ async function request(path, options = {}, retry = true) {
   return payload?.data ?? payload;
 }
 
-export { request as customerPortalRequest };
+export { request as customerPortalRequest, refreshSessionToken as refreshCustomerSession };
 
 export const customerPortalAuthService = {
   getStoredUser: getUser,

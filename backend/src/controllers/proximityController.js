@@ -39,6 +39,7 @@ const productDiagnosticsFromNotification = (notification = null) => {
     productId: normalizeText(payload.productId) || null,
     barcode: normalizeText(payload.barcode) || null,
     productName: normalizeText(payload.productName) || null,
+    offerSource: normalizeText(payload.offerSource) || null,
   };
 };
 
@@ -53,6 +54,7 @@ const productDiagnosticsFromMaps = ({ notification = null, row = {}, productById
     productId: fromNotification.productId || product?.id || (dedupeIdentity && !product ? dedupeIdentity : null),
     barcode: fromNotification.barcode || product?.barcode || null,
     productName: fromNotification.productName || product?.name || null,
+    offerSource: fromNotification.offerSource || null,
     dedupeKey: row.dedupeKey || null,
   };
 };
@@ -129,6 +131,17 @@ const buildBeaconData = async (payload = {}, existing = {}) => {
   const nextMetadata = metadata !== undefined
     ? { ...metadata }
     : (existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? { ...existing.metadata } : undefined);
+  const existingMetadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {};
+  if (
+    nextMetadata
+    && metadata !== undefined
+    && payload.eslDeviceId === undefined
+    && payload.linkedEslDeviceId === undefined
+    && !nextMetadata.eslDeviceId
+    && existingMetadata.eslDeviceId
+  ) {
+    nextMetadata.eslDeviceId = existingMetadata.eslDeviceId;
+  }
   if (nextMetadata && (payload.eslDeviceId !== undefined || payload.linkedEslDeviceId !== undefined)) {
     if (linkedEslDeviceId) nextMetadata.eslDeviceId = linkedEslDeviceId;
     else delete nextMetadata.eslDeviceId;
@@ -457,6 +470,7 @@ export const proximityController = {
           productId: diagnostics.productId,
           barcode: diagnostics.barcode,
           productName: diagnostics.productName,
+          offerSource: diagnostics.offerSource,
           dedupeKey: diagnostics.dedupeKey,
           dedupeUntil: delivery ? resolveDeliveryDedupeUntil(delivery, deliveryRule) : null,
         };
@@ -518,6 +532,7 @@ export const proximityController = {
           productId: diagnostics.productId,
           barcode: diagnostics.barcode,
           productName: diagnostics.productName,
+          offerSource: diagnostics.offerSource,
           dedupeKey: diagnostics.dedupeKey,
           dedupeUntil: resolveDeliveryDedupeUntil(row, rule),
           zoneName: notification?.payload?.zoneName || zoneMap.get(row.locationZoneId)?.name || null,

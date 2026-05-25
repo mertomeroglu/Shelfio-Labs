@@ -6,6 +6,8 @@ const ALLOWED_EVENT_TYPES = new Set(['ZONE_ENTER', 'ZONE_EXIT', 'DWELL']);
 const EVENT_TYPE_ALIASES = new Map([
   ['ZONE_STAY', 'DWELL'],
   ['STAY', 'DWELL'],
+  ['DWELL', 'DWELL'],
+  ['ZONE_STAY_CHECK', 'DWELL'],
 ]);
 const DEFAULT_EVENT_TYPE = 'ZONE_ENTER';
 const DEFAULT_SOURCE = 'WEBVIEW_BRIDGE';
@@ -55,7 +57,7 @@ const validateAndNormalizePayload = (payload = {}) => {
   const major = parseNullableInt(payload.major, 'major');
   const minor = parseNullableInt(payload.minor, 'minor');
   const rssi = parseRssi(payload.rssi);
-  const eventType = parseEventType(payload.eventType);
+  const eventType = parseEventType(payload.eventType || payload.checkType);
   const source = normalizeUpper(payload.source || DEFAULT_SOURCE) || DEFAULT_SOURCE;
   const detectedAt = parseDetectedAt(payload.detectedAt);
 

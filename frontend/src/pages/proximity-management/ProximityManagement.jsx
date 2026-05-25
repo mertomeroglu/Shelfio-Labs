@@ -69,6 +69,8 @@ const MODAL_DESCRIPTIONS = {
 const REASON_LABELS = {
   PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H: 'Bu ürün için yakın zamanda bildirim gönderildi',
   NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT: 'Etiketteki üründe aktif indirim yok',
+  NO_LINKED_ESL_DEVICE: 'Beacon elektronik etiketle eşleşmemiş',
+  NO_LABEL_PRODUCT: 'Etikette ürün bilgisi yok',
   UNKNOWN_BEACON: 'Beacon eşleşmedi',
   NOT_AUTHENTICATED: 'Müşteri oturumu yok',
 };
@@ -83,6 +85,8 @@ const formatReason = (value) => {
   if (!code) return '-';
   if (code === 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H') return 'Bu \u00fcr\u00fcn i\u00e7in yak\u0131n zamanda bildirim g\u00f6nderildi';
   if (code === 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT') return 'Etiketteki \u00fcr\u00fcnde aktif indirim yok';
+  if (code === 'NO_LINKED_ESL_DEVICE') return 'Beacon elektronik etiketle eşleşmemiş';
+  if (code === 'NO_LABEL_PRODUCT') return 'Etikette ürün bilgisi yok';
   if (code === 'UNKNOWN_BEACON') return 'Beacon e\u015fle\u015fmedi';
   if (code === 'NOT_AUTHENTICATED') return 'M\u00fc\u015fteri oturumu yok';
   return REASON_LABELS[code] || code;
@@ -393,6 +397,8 @@ export default function ProximityManagement() {
       status: beacon?.status || 'ACTIVE',
       firmwareVersion: beacon?.firmwareVersion || '',
       eslDeviceId: beacon?.metadata?.eslDeviceId || beacon?.eslDeviceId || beacon?.linkedEslDeviceId || '',
+      originalEslDeviceId: beacon?.metadata?.eslDeviceId || beacon?.eslDeviceId || beacon?.linkedEslDeviceId || '',
+      clearEslDeviceLink: false,
       metadata: stringifyJson(beacon?.metadata),
     });
   };
@@ -476,19 +482,30 @@ export default function ProximityManagement() {
       }
       if (modal.type === 'beacon') {
         if (!String(form.deviceCode || '').trim()) throw new Error('Lütfen cihaz kodunu girin.');
+        const metadata = parseJsonField(form.metadata, {});
         const payload = {
           ...form,
           major: form.major === '' ? null : Number(form.major),
           minor: form.minor === '' ? null : Number(form.minor),
           locationZoneId: form.locationZoneId || null,
           sectionId: form.sectionId || null,
-          eslDeviceId: form.eslDeviceId || null,
           metadata: {
-            ...parseJsonField(form.metadata, {}),
+            ...metadata,
             ...(form.eslDeviceId ? { eslDeviceId: form.eslDeviceId } : {}),
           },
         };
-        if (!form.eslDeviceId) delete payload.metadata.eslDeviceId;
+        if (form.eslDeviceId) {
+          payload.eslDeviceId = form.eslDeviceId;
+        } else if (form.clearEslDeviceLink === true) {
+          payload.eslDeviceId = null;
+          delete payload.metadata.eslDeviceId;
+        } else if (form.originalEslDeviceId) {
+          payload.metadata.eslDeviceId = form.originalEslDeviceId;
+        } else {
+          delete payload.metadata.eslDeviceId;
+        }
+        delete payload.originalEslDeviceId;
+        delete payload.clearEslDeviceLink;
         delete payload.metadataText;
         if (modal.id) await proximityAdminService.updateBeacon(modal.id, payload);
         else await proximityAdminService.createBeacon(payload);
@@ -847,6 +864,7 @@ function EventLogTab({ rows, filters, setFilters, onRefresh, loading, beacons, z
             <th>Ürün</th>
             <th>Product ID</th>
             <th>Barcode</th>
+            <th>Offer source</th>
             <th>Dedupe key</th>
             <th>Dedupe until</th>
           </tr>
@@ -867,6 +885,7 @@ function EventLogTab({ rows, filters, setFilters, onRefresh, loading, beacons, z
               <td>{empty(row.productName || row.productId)}</td>
               <td className="pm-mono">{empty(row.productId)}</td>
               <td className="pm-mono">{empty(row.barcode)}</td>
+              <td>{empty(row.offerSource)}</td>
               <td className="pm-mono">{empty(row.dedupeKey)}</td>
               <td>{formatDate(row.dedupeUntil)}</td>
             </tr>
@@ -898,6 +917,7 @@ function DeliveryLogTab({ rows, filters, setFilters, onRefresh, loading, beacons
             <th>Ürün</th>
             <th>Product ID</th>
             <th>Barcode</th>
+            <th>Offer source</th>
             <th>Zone</th>
             <th>Beacon</th>
             <th>Dedupe key</th>
@@ -916,6 +936,7 @@ function DeliveryLogTab({ rows, filters, setFilters, onRefresh, loading, beacons
               <td>{empty(row.productName || row.productId)}</td>
               <td className="pm-mono">{empty(row.productId)}</td>
               <td className="pm-mono">{empty(row.barcode)}</td>
+              <td>{empty(row.offerSource)}</td>
               <td>{empty(row.zoneName || row.locationZone?.name || row.locationZoneId)}</td>
               <td>{empty(row.beaconDevice?.name || row.beaconDevice?.deviceCode || row.beaconDeviceId)}</td>
               <td className="pm-mono">{empty(row.dedupeKey)}</td>
@@ -1024,7 +1045,39 @@ function BeaconForm({ form, errors = {}, updateForm, zoneOptions, sectionOptions
       <FormSection title="Temel Bilgiler">
         <TextField label="Cihaz Adı" value={form.name} onChange={(value) => updateForm('name', value)} required placeholder="Örn: Süt Reyonu Beacon 1" help="Bu cihazı panelde hangi adla görmek istiyorsunuz?" error={errors.name} />
         <TextField label="Cihaz Kodu" value={form.deviceCode} onChange={(value) => updateForm('deviceCode', value)} required placeholder="Örn: esp_sut_01" help="Cihazı sistem içinde tanımlayan kısa benzersiz kod." error={errors.deviceCode} />
-        <SelectField label="Bağlı Etiket / ESL Cihazı" value={form.eslDeviceId} onChange={(value) => updateForm('eslDeviceId', value)} options={eslDeviceOptions} placeholder="Etiket seçin" help="Bu beacon hangi elektronik etiket cihazı ile ilişkilendirilecek?" />
+        <SelectField
+          label="Bağlı Etiket / ESL Cihazı"
+          value={form.eslDeviceId}
+          onChange={(value) => {
+            updateForm('eslDeviceId', value);
+            if (value) updateForm('clearEslDeviceLink', false);
+          }}
+          options={eslDeviceOptions}
+          placeholder="Etiket seçin"
+          help="Bu beacon hangi elektronik etiket cihazı ile ilişkilendirilecek?"
+        />
+        {!form.eslDeviceId ? (
+          <div className="pm-field pm-field-wide">
+            <small className="pm-inline-warning">
+              Bu beacon bir elektronik etiketle eşleşmezse indirimli ürün bildirimi üretilemez.
+              {form.originalEslDeviceId && form.clearEslDeviceLink !== true ? ' Kaydettiğinizde mevcut ESL bağlantısı korunur.' : ''}
+            </small>
+          </div>
+        ) : null}
+        {form.originalEslDeviceId ? (
+          <div className="pm-field pm-field-wide">
+            <button
+              type="button"
+              className="pm-secondary-button"
+              onClick={() => {
+                updateForm('eslDeviceId', '');
+                updateForm('clearEslDeviceLink', true);
+              }}
+            >
+              ESL bağlantısını kaldır
+            </button>
+          </div>
+        ) : null}
         <SelectField label="Eşleşen Reyon" value={form.sectionId} onChange={(value) => updateForm('sectionId', value)} options={sectionOptions} placeholder="Reyon seçin" help="Beacon'ın bağlı olduğu reyonu seçin." />
         <SelectField label="Eşleşen Yakınlık Alanı" value={form.locationZoneId} onChange={(value) => updateForm('locationZoneId', value)} options={filteredZoneOptions} placeholder="Yakınlık alanı seçin" help="Beacon'ın bulunduğu yakınlık alanını seçin." />
         <SelectField label="Durum" value={form.status} onChange={(value) => updateForm('status', value)} options={BEACON_STATUS_OPTIONS} required placeholder="Durum seçin" help="Cihaz aktifse müşteri algılama için kullanılabilir." error={errors.status} />

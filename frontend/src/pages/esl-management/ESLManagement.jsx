@@ -94,6 +94,22 @@ const getProductPriceLabel = (pricing) => `₺${(Number(pricing?.displayPrice) |
 
 const isRecord = (value) => Boolean(value && typeof value === 'object');
 
+const TEMPLATE_IDS = new Set(TEMPLATES.map((template) => template.id));
+
+const normalizeTemplateId = (template) => {
+  const value = String(template || '').trim();
+  return TEMPLATE_IDS.has(value) ? value : 'standard';
+};
+
+const readFirstValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
+
+const toNumberOrNull = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = typeof value === 'string' ? value.replace(/[^\d,.-]/g, '').replace(',', '.') : value;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+};
+
 const normalizeEslProduct = (product) => (isRecord(product) ? product : null);
 
 const normalizeEslDevice = (device) => (
@@ -141,7 +157,88 @@ const resolveEslDisplayPricing = (product = {}) => {
 
 const resolveTemplateForPricing = (template, pricing) => {
   const requestedTemplate = String(template || '').trim();
-  return requestedTemplate || 'standard';
+  return normalizeTemplateId(requestedTemplate);
+};
+
+const resolveDeviceLabelPreview = (device) => {
+  if (!isRecord(device)) return null;
+
+  const labelCandidates = [
+    device.currentLabel,
+    device.lastLabelData,
+    device.lastPayload?.label,
+    device.lastPayload,
+    device.lastRenderedContent,
+    device.label,
+  ].filter(isRecord);
+  const label = labelCandidates.find((candidate) => candidate.clearLabel !== true) || null;
+  const product = normalizeEslProduct(
+    label?.product
+    || device.assignedProduct
+    || device.product
+  );
+
+  const hasProductAssignment = Boolean(device.assignedProductId && product);
+  const hasLabelPayload = Boolean(label && label.clearLabel !== true);
+  if (!hasProductAssignment && !hasLabelPayload) return null;
+
+  const displayPrice = toNumberOrNull(readFirstValue(
+    label?.displayPrice,
+    label?.salePrice,
+    label?.price,
+    product?.displayPrice,
+    product?.salePrice,
+    product?.currentPrice,
+    product?.price
+  )) || 0;
+  const regularPrice = toNumberOrNull(readFirstValue(
+    label?.regularPrice,
+    label?.previousPrice,
+    product?.regularPrice,
+    product?.salePrice,
+    product?.price
+  )) || displayPrice;
+  const campaignPrice = toNumberOrNull(readFirstValue(label?.campaignPrice, product?.campaignPrice));
+  const previousSalePrice = toNumberOrNull(readFirstValue(
+    label?.previousPrice,
+    label?.previousSalePrice,
+    label?.oldPrice,
+    product?.previousSalePrice,
+    product?.previousPrice,
+    product?.oldPrice
+  )) || 0;
+  const hasActiveCampaign = Boolean(readFirstValue(label?.hasActiveCampaign, product?.hasActiveCampaign))
+    || (campaignPrice !== null && campaignPrice > 0 && Math.round(campaignPrice * 100) < Math.round(regularPrice * 100))
+    || (previousSalePrice > displayPrice && displayPrice > 0);
+
+  const previewProduct = {
+    id: readFirstValue(product?.id, device.assignedProductId, label?.productId),
+    name: readFirstValue(label?.productName, label?.name, product?.name, product?.productName, device.productName),
+    productName: readFirstValue(label?.productName, label?.name, product?.productName, product?.name, device.productName),
+    sku: readFirstValue(label?.productSku, label?.sku, product?.sku, device.productSku, device.sku),
+    barcode: readFirstValue(label?.productBarcode, label?.barcode, product?.barcode, device.productBarcode, device.barcode),
+    salePrice: displayPrice,
+    displayPrice,
+    regularPrice,
+    campaignPrice,
+    previousSalePrice: previousSalePrice || (hasActiveCampaign ? regularPrice : 0),
+    hasActiveCampaign,
+    origin: readFirstValue(label?.origin, product?.origin, 'Türkiye'),
+    expiryDate: readFirstValue(label?.expiryDate, label?.lastPriceChangeDate, product?.expiryDate, product?.lastPriceChangeDate, ''),
+    lastPriceChangeDate: readFirstValue(label?.lastPriceChangeDate, label?.expiryDate, product?.lastPriceChangeDate, ''),
+  };
+
+  return {
+    product: previewProduct,
+    pricing: {
+      regularPrice,
+      campaignPrice: hasActiveCampaign ? (campaignPrice || displayPrice) : null,
+      displayPrice,
+      hasActiveCampaign,
+      priceSource: hasActiveCampaign ? 'campaign' : 'regular',
+    },
+    template: normalizeTemplateId(readFirstValue(label?.template, device.template, product?.template)),
+  };
 };
 
 export default function ESLManagement() {
@@ -382,9 +479,13 @@ export default function ESLManagement() {
   const historyStart = history.length ? ((historyPage - 1) * HISTORY_PAGE_SIZE) + 1 : 0;
   const historyEnd = history.length ? Math.min(historyPage * HISTORY_PAGE_SIZE, history.length) : 0;
   const pagedHistory = history.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
-  const previewProduct = selectedProduct;
-  const previewPricing = selectedProductPricing;
-  const previewTemplate = effectiveSelectedTemplate || 'standard';
+  const deviceLabelPreview = !selectedProduct ? resolveDeviceLabelPreview(selectedDevice) : null;
+  const previewProduct = selectedProduct || deviceLabelPreview?.product || null;
+  const previewPricing = selectedProduct ? selectedProductPricing : deviceLabelPreview?.pricing || null;
+  const previewTemplate = selectedProduct
+    ? (effectiveSelectedTemplate || 'standard')
+    : (deviceLabelPreview?.template || effectiveSelectedTemplate || 'standard');
+  const previewEmptyMessage = selectedDeviceId ? 'Bu cihazda kayıtlı etiket bulunmuyor.' : 'Ürün seçilmedi';
   const isProductSelected = Boolean(selectedProduct);
   const isDeviceSelected = Boolean(selectedDeviceId);
   const isTemplateSelected = Boolean(effectiveSelectedTemplate);
@@ -967,12 +1068,12 @@ export default function ESLManagement() {
             </div>
             <div className="esl-preview-container">
               <ESLPreview
-                key={`${selectedDeviceId || 'no-device'}-${selectedProductId || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
+                key={`${selectedDeviceId || 'no-device'}-${selectedProductId || deviceLabelPreview?.product?.id || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
                 product={previewProduct && previewPricing ? {
                   name: getProductNameLabel(previewProduct),
                   barcode: getProductBarcodeLabel(previewProduct),
                   salePrice: previewPricing.displayPrice,
-                  previousSalePrice: previewPricing.hasActiveCampaign ? previewPricing.regularPrice : 0,
+                  previousSalePrice: previewProduct.previousSalePrice || (previewPricing.hasActiveCampaign ? previewPricing.regularPrice : 0),
                   origin: previewProduct.origin || 'Türkiye',
                   expiryDate: previewProduct.lastPriceChangeDate || previewProduct.lastPriceChangeAt || '',
                 } : null}
@@ -982,7 +1083,7 @@ export default function ESLManagement() {
               <div className="esl-preview-info">
                 <div className="esl-preview-info-row">
                   <span>Ürün:</span>
-                  <strong>{previewProduct ? getProductNameLabel(previewProduct) : 'Ürün seçilmedi'}</strong>
+                  <strong>{previewProduct ? getProductNameLabel(previewProduct) : previewEmptyMessage}</strong>
                 </div>
                 <div className="esl-preview-info-row">
                   <span>SKU:</span>

@@ -20,6 +20,7 @@ const CUSTOMER_NOTIFICATION_TYPES = new Set([
 const normalizeText = (value) => String(value || '').trim();
 const normalizeLower = (value) => normalizeText(value).toLocaleLowerCase('tr-TR');
 const normalizeUpper = (value) => normalizeText(value).toUpperCase();
+const normalizeSourceKey = (value) => normalizeText(value).replace(/[\s-]+/g, '_').toLowerCase();
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const toCooldownBucketKey = (date = new Date(), cooldownMs = DEFAULT_CUSTOMER_DOMAIN_COOLDOWN_MINUTES * 60 * 1000) => {
   const safeCooldownMs = Number.isFinite(Number(cooldownMs)) && Number(cooldownMs) >= 1000
@@ -46,6 +47,15 @@ const toPriceNumberOrNull = (value) => {
   const normalized = typeof value === 'string' ? value.replace(',', '.') : value;
   const numeric = Number(normalized);
   return Number.isFinite(numeric) ? numeric : null;
+};
+const isPriceLower = (previous, next) => {
+  const previousPrice = toPriceNumberOrNull(previous);
+  const nextPrice = toPriceNumberOrNull(next);
+  return previousPrice !== null
+    && nextPrice !== null
+    && previousPrice > 0
+    && nextPrice > 0
+    && Math.round(previousPrice * 100) > Math.round(nextPrice * 100);
 };
 const formatTryPrice = (value) => {
   const numeric = toPriceNumberOrNull(value);
@@ -558,10 +568,18 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
     id: true,
     name: true,
     barcode: true,
+    salePrice: true,
+    payload: true,
+    lastPriceChangeSource: true,
     categoryId: true,
     sectionId: true,
     section: { select: { id: true, name: true, number: true } },
     category: { select: { id: true, name: true, mainSectionName: true, mainSectionNo: true } },
+    priceEvents: {
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+      select: { id: true, previousSalePrice: true, salePrice: true, source: true, payload: true, createdAt: true },
+    },
   };
   const barcode = normalizeText(label.barcode);
   const assignedProductId = normalizeText(
@@ -599,29 +617,14 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
   return null;
 };
 
-const hasLabelDiscount = (label = {}) => {
-  if (label.hasActiveCampaign === true) return true;
-  const regularPrice = toPriceNumberOrNull(label.regularPrice);
-  if (regularPrice === null || regularPrice <= 0) return false;
-
-  const discountedPrices = [
-    label.campaignPrice,
-    label.displayPrice,
-    label.price,
-  ].map(toPriceNumberOrNull).filter((value) => value !== null && value > 0);
-
-  return discountedPrices.some((value) => Math.round(value * 100) < Math.round(regularPrice * 100));
-};
-
-const hasActiveCampaignForProduct = async (product = {}) => {
-  if (!product?.id) return false;
-  const campaigns = await listActiveCampaignDefinitions();
-  return campaigns.some((campaign = {}) => {
+const findActiveCampaignForProduct = (product = {}, campaigns = []) => {
+  if (!product?.id) return null;
+  return (Array.isArray(campaigns) ? campaigns : []).find((campaign = {}) => {
     const targetProductIds = Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds.map(String) : [];
     const targetBarcodes = Array.isArray(campaign.targetBarcodes) ? campaign.targetBarcodes.map(String) : [];
     return targetProductIds.includes(String(product.id))
       || (product.barcode && targetBarcodes.includes(String(product.barcode)));
-  });
+  }) || null;
 };
 
 const resolveDiscountPrices = (label = {}) => {
@@ -630,6 +633,171 @@ const resolveDiscountPrices = (label = {}) => {
   const campaignPrice = toPriceNumberOrNull(label.campaignPrice);
   const effectivePrice = campaignPrice ?? displayPrice ?? toPriceNumberOrNull(label.price);
   return { regularPrice, displayPrice, campaignPrice, effectivePrice };
+};
+
+const PRODUCT_EDIT_SOURCES = new Set([
+  'product_update',
+  'product_edit',
+  'product_management',
+  'products',
+  'products_screen',
+  'product_screen',
+  'manual_correction',
+  'price_correction',
+]);
+
+const PRICE_DROP_SOURCE_MAP = new Map([
+  ['campaign_price_applied', 'CAMPAIGN'],
+  ['campaign_engine', 'CAMPAIGN'],
+  ['campaign', 'CAMPAIGN'],
+  ['promotion', 'PROMOTION'],
+  ['promo', 'PROMOTION'],
+  ['temporary_price_action', 'DEMAND_PRICING'],
+  ['demand_pricing', 'DEMAND_PRICING'],
+  ['demand_analysis', 'DEMAND_PRICING'],
+  ['sell_price_recommendation', 'PRICE_DROP'],
+  ['pricing_analysis', 'PRICE_DROP'],
+  ['pricing_decision_table', 'PRICE_DROP'],
+  ['bulk_price_update', 'SYSTEM_PRICE_RULE'],
+  ['bulk_price_update_modal', 'SYSTEM_PRICE_RULE'],
+  ['auto_pricing', 'SYSTEM_PRICE_RULE'],
+  ['automatic_pricing', 'SYSTEM_PRICE_RULE'],
+  ['system_price_rule', 'SYSTEM_PRICE_RULE'],
+  ['system', 'SYSTEM_PRICE_RULE'],
+  ['purchase', 'PRICE_DROP'],
+  ['procurement', 'PRICE_DROP'],
+]);
+
+const collectPriceSignalKeys = (event = {}) => {
+  const payload = isObject(event.payload) ? event.payload : {};
+  return [
+    event.source,
+    payload.source,
+    payload.reason,
+    payload.actionType,
+    payload.type,
+    payload.sourceModal,
+    payload.module,
+    payload.origin,
+  ].map(normalizeSourceKey).filter(Boolean);
+};
+
+const isProductCorrectionPriceEvent = (event = {}) => (
+  collectPriceSignalKeys(event).some((key) => PRODUCT_EDIT_SOURCES.has(key) || key.includes('correction'))
+);
+
+const resolveOfferSourceFromPriceEvent = (event = {}) => {
+  for (const key of collectPriceSignalKeys(event)) {
+    if (PRICE_DROP_SOURCE_MAP.has(key)) return PRICE_DROP_SOURCE_MAP.get(key);
+    if (key.includes('campaign')) return 'CAMPAIGN';
+    if (key.includes('promotion') || key.includes('promo')) return 'PROMOTION';
+    if (key.includes('demand')) return 'DEMAND_PRICING';
+    if (key.includes('pricing') || key.includes('price_analysis')) return 'PRICE_DROP';
+    if (key.includes('system') || key.includes('auto')) return 'SYSTEM_PRICE_RULE';
+  }
+  return null;
+};
+
+const collectPriceHistoryEvents = (product = {}) => {
+  const payload = isObject(product.payload) ? product.payload : {};
+  return [
+    ...(Array.isArray(product.priceEvents) ? product.priceEvents : []),
+    ...(Array.isArray(product.priceHistory) ? product.priceHistory : []),
+    ...(Array.isArray(payload.priceHistory) ? payload.priceHistory : []),
+  ].filter(isObject).sort((left, right) => {
+    const leftTime = new Date(left.createdAt || left.at || left.eventDate || left.date || 0).getTime() || 0;
+    const rightTime = new Date(right.createdAt || right.at || right.eventDate || right.date || 0).getTime() || 0;
+    return rightTime - leftTime;
+  });
+};
+
+const resolveEventPrices = (event = {}) => {
+  const payload = isObject(event.payload) ? event.payload : {};
+  return {
+    previousPrice: event.previousSalePrice ?? event.previousPrice ?? payload.previousSalePrice ?? payload.previousPrice,
+    nextPrice: event.salePrice ?? event.newPrice ?? event.price ?? payload.salePrice ?? payload.newPrice ?? payload.price,
+  };
+};
+
+const resolveProductPriceDropSignal = ({ product = {}, corroborated = false } = {}) => {
+  for (const event of collectPriceHistoryEvents(product)) {
+    const { previousPrice, nextPrice } = resolveEventPrices(event);
+    if (!isPriceLower(previousPrice, nextPrice)) continue;
+    if (isProductCorrectionPriceEvent(event)) return null;
+    const offerSource = resolveOfferSourceFromPriceEvent(event);
+    if (offerSource) return { offerSource, previousPrice: toPriceNumberOrNull(previousPrice), effectivePrice: toPriceNumberOrNull(nextPrice) };
+    if (corroborated) {
+      return { offerSource: 'UNKNOWN_DISCOUNT_SIGNAL', previousPrice: toPriceNumberOrNull(previousPrice), effectivePrice: toPriceNumberOrNull(nextPrice) };
+    }
+  }
+  return null;
+};
+
+const resolveProductReferencePrice = (product = {}) => {
+  const payload = isObject(product.payload) ? product.payload : {};
+  return toPriceNumberOrNull(
+    product.oldPrice
+    ?? product.listPrice
+    ?? product.regularPrice
+    ?? payload.oldPrice
+    ?? payload.listPrice
+    ?? payload.regularPrice
+    ?? payload.previousSalePrice
+  );
+};
+
+const resolveProximityOfferSignal = ({ product = {}, label = {}, campaigns = [] } = {}) => {
+  const prices = resolveDiscountPrices(label);
+  const activeCampaign = findActiveCampaignForProduct(product, campaigns);
+  if (activeCampaign || product.hasActiveCampaign === true || label.hasActiveCampaign === true) {
+    return { eligible: true, offerSource: activeCampaign ? 'CAMPAIGN' : 'ESL_LABEL_DISCOUNT', prices };
+  }
+  if (normalizeLower(label.template) === 'discount') {
+    return { eligible: true, offerSource: 'ESL_LABEL_DISCOUNT', prices };
+  }
+  if (isPriceLower(prices.regularPrice, prices.campaignPrice) || isPriceLower(prices.regularPrice, prices.displayPrice)) {
+    return { eligible: true, offerSource: 'ESL_LABEL_DISCOUNT', prices };
+  }
+
+  const referencePrice = resolveProductReferencePrice(product);
+  const currentPrice = toPriceNumberOrNull(product.salePrice ?? product.currentPrice ?? product.price);
+  const corroboratedLabelSignal = Boolean(
+    normalizeLower(label.template) === 'discount'
+    || label.hasActiveCampaign === true
+    || isPriceLower(prices.regularPrice, prices.campaignPrice)
+    || isPriceLower(prices.regularPrice, prices.displayPrice)
+  );
+  const historyDrop = resolveProductPriceDropSignal({ product, corroborated: corroboratedLabelSignal });
+  if (historyDrop) {
+    return {
+      eligible: true,
+      offerSource: historyDrop.offerSource,
+      prices: {
+        ...prices,
+        regularPrice: prices.regularPrice ?? historyDrop.previousPrice ?? referencePrice,
+        displayPrice: prices.displayPrice ?? historyDrop.effectivePrice ?? currentPrice,
+        effectivePrice: prices.effectivePrice ?? historyDrop.effectivePrice ?? currentPrice,
+      },
+    };
+  }
+
+  if (isPriceLower(referencePrice, currentPrice)) {
+    const source = normalizeSourceKey(product.lastPriceChangeSource);
+    if (!PRODUCT_EDIT_SOURCES.has(source) && PRICE_DROP_SOURCE_MAP.has(source)) {
+      return {
+        eligible: true,
+        offerSource: PRICE_DROP_SOURCE_MAP.get(source) || 'PRICE_DROP',
+        prices: {
+          ...prices,
+          regularPrice: prices.regularPrice ?? referencePrice,
+          displayPrice: prices.displayPrice ?? currentPrice,
+          effectivePrice: prices.effectivePrice ?? currentPrice,
+        },
+      };
+    }
+  }
+
+  return { eligible: false, offerSource: null, prices };
 };
 
 const resolveProductAisle = ({ product = {}, label = {}, context = {} } = {}) => {
@@ -699,7 +867,6 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
 
   const product = await findLabelProduct({ label, eslDevice: {} });
   if (!product) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
-  const labelHasDiscount = hasLabelDiscount(label);
   const actionUrl = buildProductDetailRoute(product.id);
   if (!actionUrl || !isCustomerActionUrl(actionUrl) || actionUrl.startsWith('/personel')) {
     return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
@@ -717,8 +884,14 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
   const productDedupeKey = buildProductDiscountDedupeKey({ userId, productId: product.id, barcode });
   if (!productDedupeKey) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
 
-  const { regularPrice, displayPrice, campaignPrice, effectivePrice } = resolveDiscountPrices(label);
-  if (effectivePrice === null) {
+  const campaigns = await listActiveCampaignDefinitions();
+  const offerSignal = resolveProximityOfferSignal({ product, label, campaigns });
+  const signalPrices = offerSignal.prices || {};
+  const regularPrice = signalPrices.regularPrice;
+  const displayPrice = signalPrices.displayPrice ?? toPriceNumberOrNull(product.salePrice);
+  const campaignPrice = signalPrices.campaignPrice;
+  const effectivePrice = signalPrices.effectivePrice ?? displayPrice ?? campaignPrice;
+  if (effectivePrice === null || effectivePrice === undefined) {
     return {
       candidate: null,
       reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT',
@@ -727,7 +900,7 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
     };
   }
 
-  if (!labelHasDiscount && !(await hasActiveCampaignForProduct(product))) {
+  if (!offerSignal.eligible) {
     return {
       candidate: null,
       reason: 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT',
@@ -766,6 +939,7 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           regularPrice,
           displayPrice,
           campaignPrice,
+          offerSource: offerSignal.offerSource || 'UNKNOWN_DISCOUNT_SIGNAL',
           campaignName: normalizeText(label.campaignName) || null,
           zoneId: context.locationZoneId,
           zoneCode: context.zoneCode,

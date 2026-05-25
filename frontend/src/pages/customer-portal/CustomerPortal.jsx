@@ -171,12 +171,16 @@ function readCustomerPrefs(storageKey = CUSTOMER_PREFS_KEY) {
     const parsed = raw ? JSON.parse(raw) : null;
     const hasInAppPreference = typeof parsed?.inAppNotifications === 'boolean';
     const hasPhonePreference = typeof parsed?.phoneNotifications === 'boolean';
-    const campaignEnabled = parsed?.campaign !== false;
-    const stockEnabled = parsed?.stock !== false;
-    return {
-      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : campaignEnabled,
-      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : stockEnabled,
+    const hasLegacyCampaignPreference = typeof parsed?.campaign === 'boolean';
+    const hasLegacyStockPreference = typeof parsed?.stock === 'boolean';
+    const migrated = {
+      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : (hasLegacyCampaignPreference ? parsed.campaign !== false : true),
+      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : (hasLegacyStockPreference ? parsed.stock !== false : true),
     };
+    if (parsed && (!hasInAppPreference || !hasPhonePreference)) {
+      writeStoredObject(storageKey, { ...parsed, ...migrated });
+    }
+    return migrated;
   } catch {
     return { inAppNotifications: true, phoneNotifications: true };
   }

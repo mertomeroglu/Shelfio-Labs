@@ -31,6 +31,7 @@ const logProximityDecision = ({ response = {}, payload = {} } = {}) => {
     dedupeKey: response?.dedupeKey || null,
     dedupeUntil: response?.dedupeUntil || null,
     eventType: payload?.eventType || null,
+    deviceId: payload?.deviceId || payload?.deviceCode || null,
   });
 };
 
@@ -54,9 +55,11 @@ const readCustomerNotificationPrefs = () => {
     const parsed = raw ? JSON.parse(raw) : null;
     const hasInAppPreference = typeof parsed?.inAppNotifications === 'boolean';
     const hasPhonePreference = typeof parsed?.phoneNotifications === 'boolean';
+    const hasLegacyCampaignPreference = typeof parsed?.campaign === 'boolean';
+    const hasLegacyStockPreference = typeof parsed?.stock === 'boolean';
     return {
-      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : parsed?.campaign !== false,
-      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : parsed?.stock !== false,
+      inAppNotifications: hasInAppPreference ? parsed.inAppNotifications !== false : (hasLegacyCampaignPreference ? parsed.campaign !== false : true),
+      phoneNotifications: hasPhonePreference ? parsed.phoneNotifications !== false : (hasLegacyStockPreference ? parsed.stock !== false : true),
     };
   } catch {
     return { inAppNotifications: true, phoneNotifications: true };
@@ -267,7 +270,7 @@ export default function ProximityEventProvider({ children }) {
       cooldownRef.current.set(cooldownKey, now + FRONTEND_COOLDOWN_MS);
 
       try {
-        const response = await proximityService.sendEvent(normalized.payload);
+        const response = await proximityService.sendEventWithAuthRetry(normalized.payload);
         if (disposed || !response?.success) return;
 
         if (!response.shouldNotify || !response.notification) {
