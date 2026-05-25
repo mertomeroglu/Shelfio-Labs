@@ -1,6 +1,7 @@
 ﻿const CUSTOMER_TOKEN_KEY = 'shelfio_customer_token';
 const CUSTOMER_REFRESH_TOKEN_KEY = 'shelfio_customer_refresh_token';
 const CUSTOMER_USER_KEY = 'shelfio_customer_user';
+export const CUSTOMER_AUTH_UPDATED_EVENT = 'shelfio:customer-auth-updated';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const normalizeCustomerUser = (user) => {
@@ -12,10 +13,19 @@ const getToken = () => localStorage.getItem(CUSTOMER_TOKEN_KEY) || '';
 const getRefreshToken = () => localStorage.getItem(CUSTOMER_REFRESH_TOKEN_KEY) || '';
 const setToken = (token) => localStorage.setItem(CUSTOMER_TOKEN_KEY, token || '');
 const setRefreshToken = (token) => localStorage.setItem(CUSTOMER_REFRESH_TOKEN_KEY, token || '');
+const dispatchAuthUpdated = (detail = {}) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent(CUSTOMER_AUTH_UPDATED_EVENT, { detail }));
+  } catch {
+    // Customer auth notifications are best-effort for in-app listeners.
+  }
+};
 const clear = () => {
   localStorage.removeItem(CUSTOMER_TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_REFRESH_TOKEN_KEY);
   localStorage.removeItem(CUSTOMER_USER_KEY);
+  dispatchAuthUpdated({ authenticated: false });
 };
 const setUser = (user) => localStorage.setItem(CUSTOMER_USER_KEY, JSON.stringify(normalizeCustomerUser(user) || null));
 const getUser = () => {
@@ -45,6 +55,7 @@ async function refreshSessionToken() {
     setToken(data.token);
     setRefreshToken(data.refreshToken);
     if (data?.customer) setUser(normalizeCustomerUser(data.customer));
+    dispatchAuthUpdated({ authenticated: true, source: 'refresh' });
     return data.token;
   }).finally(() => {
     pendingRefreshPromise = null;
@@ -98,6 +109,7 @@ export const customerPortalAuthService = {
     setToken(data.token);
     setRefreshToken(data.refreshToken || '');
     setUser(normalizeCustomerUser(data.customer));
+    dispatchAuthUpdated({ authenticated: true, source: 'login' });
     return data;
   },
   async register(payload) {
@@ -105,6 +117,7 @@ export const customerPortalAuthService = {
     setToken(data.token);
     setRefreshToken(data.refreshToken || '');
     setUser(normalizeCustomerUser(data.customer));
+    dispatchAuthUpdated({ authenticated: true, source: 'register' });
     return data;
   },
   forgotPassword: (email) => request('/customer-auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),

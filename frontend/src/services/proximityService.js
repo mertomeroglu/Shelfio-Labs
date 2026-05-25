@@ -40,11 +40,15 @@ export function normalizeNativeBeaconEvent(detail = {}) {
   }
 
   if (!deviceId && (!uuid || major === null || minor === null)) {
-    return { valid: false, reason: 'MISSING_BEACON_IDENTITY' };
+    return { valid: false, reason: 'INVALID_DEVICE_IDENTITY' };
   }
 
   return {
     valid: true,
+    raw: {
+      eventType: normalizeText(detail.eventType).toUpperCase(),
+      checkType: normalizeText(detail.checkType).toUpperCase(),
+    },
     payload: {
       ...(deviceId ? { deviceId } : {}),
       ...(uuid ? { uuid } : {}),
@@ -75,11 +79,17 @@ export const proximityService = {
       body: JSON.stringify(payload),
     });
   },
-  async sendEventWithAuthRetry(payload) {
+  async sendEventWithAuthRetry(payload, { onRetryAfterRefresh, onRefreshFailed } = {}) {
     const response = await this.sendEvent(payload);
     if (response?.shouldNotify === false && response?.reason === 'NOT_AUTHENTICATED') {
-      await refreshCustomerSession();
-      return this.sendEvent(payload);
+      try {
+        await refreshCustomerSession();
+        if (typeof onRetryAfterRefresh === 'function') onRetryAfterRefresh(response);
+        return this.sendEvent(payload);
+      } catch (error) {
+        if (typeof onRefreshFailed === 'function') onRefreshFailed(error, response);
+        return response;
+      }
     }
     return response;
   },

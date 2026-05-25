@@ -6,6 +6,7 @@ import {
   normalizeNativeBeaconEvent,
   proximityService,
 } from '../../services/proximityService.js';
+import { CUSTOMER_AUTH_UPDATED_EVENT, customerPortalAuthService } from '../../services/customerPortalAuthService.js';
 import { cleanSectionDisplayName } from '../../services/formatters.js';
 import './ProximityEventProvider.css';
 
@@ -16,25 +17,46 @@ const CUSTOMER_PREFS_UPDATED_EVENT = 'shelfio:customer-preferences-updated';
 const CUSTOMER_NOTIFICATIONS_REFRESH_EVENT = 'shelfio:customer-notifications-refresh';
 const FRONTEND_COOLDOWN_MS = 1 * 1000;
 const DISMISS_COOLDOWN_MS = 60 * 1000;
+const QUEUED_EVENT_TTL_MS = 60 * 1000;
+const QUEUED_EVENT_LIMIT = 10;
 const PRODUCT_DISCOUNT_DESCRIPTION = 'Şu an bulunduğunuz reyonda ilginizi çekebilecek ürünlere rastladık.';
 const PRODUCT_DISCOUNT_NATIVE_BODY = 'İlgini çekebilecek ürünler keşfettik.';
 
-const isDev = () => Boolean(import.meta.env?.DEV);
+const isDebug = () => {
+  if (import.meta.env?.DEV) return true;
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem('shelfio.proximity.debug') === 'true';
+  } catch {
+    return false;
+  }
+};
 const normalizeText = (value) => String(value || '').trim();
-const logProximityDecision = ({ response = {}, payload = {} } = {}) => {
-  if (!isDev()) return;
-  console.info('[proximity] no customer notification', {
-    reason: response?.reason || 'NO_REASON',
+const currentRoute = () => (typeof window === 'undefined' ? '' : `${window.location.pathname || ''}${window.location.search || ''}`);
+const buildDebugFields = ({ detail = {}, normalized = null, payload = null, route = currentRoute(), reason = null, response = null } = {}) => {
+  const normalizedPayload = payload || normalized?.payload || {};
+  return {
+    route,
+    eventType: detail?.eventType || normalized?.raw?.eventType || null,
+    checkType: detail?.checkType || normalized?.raw?.checkType || null,
+    normalizedEventType: normalizedPayload?.eventType || null,
+    deviceId: normalizedPayload?.deviceId || detail?.deviceId || detail?.deviceCode || null,
+    uuid: normalizedPayload?.uuid || detail?.uuid || null,
+    major: normalizedPayload?.major ?? detail?.major ?? null,
+    minor: normalizedPayload?.minor ?? detail?.minor ?? null,
+    rssi: normalizedPayload?.rssi ?? detail?.rssi ?? null,
+    reason: reason || response?.reason || null,
+    shouldNotify: response?.shouldNotify ?? null,
     productId: response?.productId || response?.notification?.payload?.productId || null,
     barcode: response?.barcode || response?.notification?.payload?.barcode || null,
-    productName: response?.productName || response?.notification?.payload?.productName || null,
-    dedupeKey: response?.dedupeKey || null,
     dedupeUntil: response?.dedupeUntil || null,
-    eventType: payload?.eventType || null,
-    deviceId: payload?.deviceId || payload?.deviceCode || null,
-  });
+    dedupeKey: response?.dedupeKey || null,
+  };
 };
-
+const logProximityDebug = (eventName, fields = {}) => {
+  if (!isDebug()) return;
+  console.info(`[proximity] ${eventName}`, fields);
+};
 const readCustomerId = () => {
   if (typeof window === 'undefined') return 'guest';
   try {
@@ -68,6 +90,7 @@ const readCustomerNotificationPrefs = () => {
 
 const resolveSurface = (pathname) => {
   const path = String(pathname || '');
+  if (path.startsWith('/personel')) return 'personnel';
   return path.startsWith('/musteri') ? 'customer' : null;
 };
 
@@ -213,6 +236,8 @@ export default function ProximityEventProvider({ children }) {
   const navigate = useNavigate();
   const cooldownRef = useRef(new Map());
   const dismissedRef = useRef(new Map());
+  const queuedEventsRef = useRef([]);
+  const processingQueueRef = useRef(false);
   const [activeNotification, setActiveNotification] = useState(null);
   const [notificationPrefs, setNotificationPrefs] = useState(readCustomerNotificationPrefs);
   const surface = useMemo(() => resolveSurface(location.pathname), [location.pathname]);
@@ -248,72 +273,197 @@ export default function ProximityEventProvider({ children }) {
     handleClose();
   }, [activeNotification, handleClose, navigate]);
 
-  useEffect(() => {
-    if (surface !== 'customer') return undefined;
-
-    let disposed = false;
-
-    const handleBeaconDetected = async (event) => {
-      const normalized = normalizeNativeBeaconEvent(event?.detail);
-      if (!normalized.valid) {
-        if (isDev()) console.debug('[proximity] ignored native beacon event', normalized.reason);
+  const pruneQueuedEvents = useCallback(() => {
+    const now = Date.now();
+    const kept = [];
+    queuedEventsRef.current.forEach((item) => {
+      if (now - item.queuedAt <= QUEUED_EVENT_TTL_MS) {
+        kept.push(item);
         return;
       }
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({
+        detail: item.detail,
+        normalized: item.normalized,
+        reason: 'QUEUE_TTL_EXPIRED',
+      }));
+    });
+    queuedEventsRef.current = kept;
+  }, []);
 
-      const cooldownKey = getBeaconCooldownKey(normalized.payload);
-      const now = Date.now();
-      const cooldownUntil = cooldownRef.current.get(cooldownKey) || 0;
-      if (cooldownUntil > now) {
-        if (isDev()) console.debug('[proximity] customer frontend cooldown active');
-        return;
-      }
-      cooldownRef.current.set(cooldownKey, now + FRONTEND_COOLDOWN_MS);
+  const enqueueBeaconEvent = useCallback(({ detail, normalized, reason }) => {
+    pruneQueuedEvents();
+    if (queuedEventsRef.current.length >= QUEUED_EVENT_LIMIT) {
+      const dropped = queuedEventsRef.current.shift();
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({
+        detail: dropped?.detail,
+        normalized: dropped?.normalized,
+        reason: 'QUEUE_LIMIT_EXCEEDED',
+      }));
+    }
+    queuedEventsRef.current.push({
+      detail,
+      normalized,
+      queuedAt: Date.now(),
+    });
+    logProximityDebug('BEACON_EVENT_QUEUED', buildDebugFields({ detail, normalized, reason }));
+  }, [pruneQueuedEvents]);
 
-      try {
-        const response = await proximityService.sendEventWithAuthRetry(normalized.payload);
-        if (disposed || !response?.success) return;
+  const deliverNormalizedEvent = useCallback(async ({ detail, normalized }) => {
+    const route = currentRoute();
+    const activeSurface = resolveSurface(typeof window === 'undefined' ? location.pathname : window.location.pathname);
 
-        if (!response.shouldNotify || !response.notification) {
-          logProximityDecision({ response, payload: normalized.payload });
-          return;
-        }
+    if (activeSurface === 'personnel') {
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'PERSONNEL_SURFACE' }));
+      return false;
+    }
 
-        if (normalizeText(response.notification.actionUrl) && !canNavigateToCustomerRoute(response.notification.actionUrl)) {
-          if (isDev()) console.debug('[proximity] ignored non-customer actionUrl');
-          return;
-        }
+    if (activeSurface !== 'customer') {
+      return false;
+    }
 
-        const signature = getNotificationSignature(response.notification);
-        const dismissedUntil = dismissedRef.current.get(signature) || 0;
-        if (dismissedUntil > Date.now()) {
-          return;
-        }
+    if (!customerPortalAuthService.isLoggedIn()) {
+      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', buildDebugFields({ detail, normalized, route, reason: 'CUSTOMER_TOKEN_MISSING' }));
+      return false;
+    }
 
-        if (notificationPrefs.inAppNotifications !== false) {
-          setActiveNotification({
-            id: `${response.eventId || Date.now()}`,
-            notification: response.notification,
-          });
-        }
-        dispatchNativeNotificationEvent(response.notification, notificationPrefs);
-        try {
-          window.dispatchEvent(new CustomEvent(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, {
-            detail: { notification: response.notification, eventId: response.eventId || null },
+    const cooldownKey = getBeaconCooldownKey(normalized.payload);
+    const now = Date.now();
+    const cooldownUntil = cooldownRef.current.get(cooldownKey) || 0;
+    if (cooldownUntil > now) {
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'FRONTEND_COOLDOWN_ACTIVE' }));
+      return false;
+    }
+    cooldownRef.current.set(cooldownKey, now + FRONTEND_COOLDOWN_MS);
+
+    try {
+      logProximityDebug('PROXIMITY_POST_STARTED', buildDebugFields({ detail, normalized, route }));
+      const response = await proximityService.sendEventWithAuthRetry(normalized.payload, {
+        onRetryAfterRefresh: () => {
+          logProximityDebug('PROXIMITY_POST_RETRY_AFTER_REFRESH', buildDebugFields({ detail, normalized, route, reason: 'NOT_AUTHENTICATED' }));
+        },
+        onRefreshFailed: (error) => {
+          logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', buildDebugFields({
+            detail,
+            normalized,
+            route,
+            reason: error?.message || 'CUSTOMER_REFRESH_FAILED',
           }));
-        } catch {
-          // Notification center refresh is best-effort for web/native shells.
-        }
-      } catch (error) {
-        if (isDev()) console.debug('[proximity] customer event delivery failed', error?.message || error);
-      }
-    };
+        },
+      });
+      logProximityDebug('PROXIMITY_POST_RESULT', buildDebugFields({ detail, normalized, route, response }));
+      if (!response?.success) return true;
 
+      if (!response.shouldNotify || !response.notification) {
+        return true;
+      }
+
+      if (normalizeText(response.notification.actionUrl) && !canNavigateToCustomerRoute(response.notification.actionUrl)) {
+        logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'NON_CUSTOMER_ACTION_URL' }));
+        return true;
+      }
+
+      const signature = getNotificationSignature(response.notification);
+      const dismissedUntil = dismissedRef.current.get(signature) || 0;
+      if (dismissedUntil > Date.now()) {
+        return true;
+      }
+
+      if (notificationPrefs.inAppNotifications !== false) {
+        setActiveNotification({
+          id: `${response.eventId || Date.now()}`,
+          notification: response.notification,
+        });
+      }
+      dispatchNativeNotificationEvent(response.notification, notificationPrefs);
+      try {
+        window.dispatchEvent(new CustomEvent(CUSTOMER_NOTIFICATIONS_REFRESH_EVENT, {
+          detail: { notification: response.notification, eventId: response.eventId || null },
+        }));
+      } catch {
+        // Notification center refresh is best-effort for web/native shells.
+      }
+      return true;
+    } catch (error) {
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({
+        detail,
+        normalized,
+        route,
+        reason: error?.message || 'PROXIMITY_POST_FAILED',
+      }));
+      return false;
+    }
+  }, [location.pathname, notificationPrefs]);
+
+  const flushQueuedEvents = useCallback(async () => {
+    if (processingQueueRef.current) return;
+    pruneQueuedEvents();
+    if (surface !== 'customer') return;
+    if (!customerPortalAuthService.isLoggedIn()) {
+      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', { route: currentRoute(), reason: 'CUSTOMER_TOKEN_MISSING', queuedCount: queuedEventsRef.current.length });
+      return;
+    }
+
+    processingQueueRef.current = true;
+    try {
+      while (queuedEventsRef.current.length) {
+        const next = queuedEventsRef.current.shift();
+        await deliverNormalizedEvent(next);
+      }
+    } finally {
+      processingQueueRef.current = false;
+    }
+  }, [deliverNormalizedEvent, pruneQueuedEvents, surface]);
+
+  const handleBeaconDetected = useCallback(async (event) => {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    const route = currentRoute();
+    logProximityDebug('BEACON_EVENT_RECEIVED', buildDebugFields({ detail, route }));
+
+    const normalized = normalizeNativeBeaconEvent(detail);
+    if (!normalized.valid) {
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: normalized.reason }));
+      return;
+    }
+
+    const activeSurface = resolveSurface(typeof window === 'undefined' ? location.pathname : window.location.pathname);
+    if (activeSurface === 'personnel') {
+      logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'PERSONNEL_SURFACE' }));
+      return;
+    }
+
+    if (!customerPortalAuthService.isLoggedIn()) {
+      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', buildDebugFields({ detail, normalized, route, reason: 'CUSTOMER_TOKEN_MISSING' }));
+      enqueueBeaconEvent({ detail, normalized, reason: 'CUSTOMER_TOKEN_MISSING' });
+      return;
+    }
+
+    if (activeSurface !== 'customer') {
+      enqueueBeaconEvent({ detail, normalized, reason: 'WAITING_FOR_CUSTOMER_SURFACE' });
+      return;
+    }
+
+    await deliverNormalizedEvent({ detail, normalized });
+  }, [deliverNormalizedEvent, enqueueBeaconEvent, location.pathname]);
+
+  useEffect(() => {
     window.addEventListener(NATIVE_BEACON_EVENT, handleBeaconDetected);
     return () => {
-      disposed = true;
       window.removeEventListener(NATIVE_BEACON_EVENT, handleBeaconDetected);
     };
-  }, [notificationPrefs, surface]);
+  }, [handleBeaconDetected]);
+
+  useEffect(() => {
+    flushQueuedEvents();
+  }, [flushQueuedEvents]);
+
+  useEffect(() => {
+    window.addEventListener(CUSTOMER_AUTH_UPDATED_EVENT, flushQueuedEvents);
+    window.addEventListener('focus', flushQueuedEvents);
+    return () => {
+      window.removeEventListener(CUSTOMER_AUTH_UPDATED_EVENT, flushQueuedEvents);
+      window.removeEventListener('focus', flushQueuedEvents);
+    };
+  }, [flushQueuedEvents]);
 
   return (
     <>
