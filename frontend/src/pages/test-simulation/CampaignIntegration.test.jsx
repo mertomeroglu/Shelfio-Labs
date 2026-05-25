@@ -8,6 +8,7 @@ const mockGetLoginActivities = vi.fn();
 const mockGetAuditLogs = vi.fn();
 const mockGetDeveloperLogs = vi.fn();
 const mockCategoryList = vi.fn();
+const mockCategoryLabelList = vi.fn();
 const mockDashboard = vi.fn();
 const mockPricingAnalysis = vi.fn();
 const mockPurchaseSuggestions = vi.fn();
@@ -24,7 +25,12 @@ vi.mock('../../services/settingsService.js', () => ({
     sendDeveloperLog: vi.fn(),
   },
 }));
-vi.mock('../../services/categoryService.js', () => ({ categoryService: { list: (...args) => mockCategoryList(...args) } }));
+vi.mock('../../services/categoryService.js', () => ({
+  categoryService: {
+    list: (...args) => mockCategoryList(...args),
+    listLabels: (...args) => mockCategoryLabelList(...args),
+  },
+}));
 vi.mock('../../services/reportService.js', () => ({ reportService: { getDashboard: (...args) => mockDashboard(...args) } }));
 vi.mock('../../services/pricingAnalysisService.js', () => ({ pricingAnalysisService: { getAnalysis: (...args) => mockPricingAnalysis(...args) } }));
 vi.mock('../../services/procurementService.js', () => ({ procurementService: { listSuggestions: (...args) => mockPurchaseSuggestions(...args) } }));
@@ -47,6 +53,7 @@ describe('CampaignIntegration', () => {
     mockGetAuditLogs.mockResolvedValue([]);
     mockGetDeveloperLogs.mockResolvedValue([]);
     mockCategoryList.mockResolvedValue([{ id: 'c1', name: 'Sut' }]);
+    mockCategoryLabelList.mockResolvedValue([]);
     mockDashboard.mockResolvedValue({ overview: { totalProducts: 20, totalSuppliers: 3, totalStockQuantity: 300 } });
     mockPricingAnalysis.mockResolvedValue({
       sections: {
@@ -64,7 +71,7 @@ describe('CampaignIntegration', () => {
     const user = userEvent.setup();
     renderCampaignPage();
 
-    const suggestionButtons = await screen.findAllByRole('button', { name: /Create Campaign from Suggestion/i });
+    const suggestionButtons = await screen.findAllByRole('button', { name: /Öneriden kampanya oluştur/i });
     await user.click(suggestionButtons[0]);
     await user.click(await screen.findByRole('tab', { name: /Genel/i }));
 

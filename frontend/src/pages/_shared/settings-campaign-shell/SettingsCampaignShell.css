@@ -584,7 +584,7 @@
   }
 }
 
-/* "Kampanya ModÃ¼lÃ¼" label kaldÄ±rÄ±ldÄ± â€” nav sadece tab butonlarÄ± */
+/* "Kampanya Modülü" label kaldırıldı - nav sadece tab butonları */
 .campaign-mode-nav-shell--top .location-type-switch-label {
   display: none;
 }
@@ -875,7 +875,7 @@
   padding: 18px;
 }
 
-/* Yeni otomasyon toggle satÄ±rlarÄ± */
+/* Yeni otomasyon toggle satırları */
 .campaign-automation-toggles {
   display: grid;
   gap: 0;
@@ -970,7 +970,7 @@
   margin-top: 10px;
 }
 
-/* Kampanya YÃ¶netimi > Hediye KartÄ±: 2 bloklu layout */
+/* Kampanya Yönetimi > Hediye Kartı: 2 bloklu layout */
 .campaign-giftcard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
@@ -1038,7 +1038,7 @@
   }
 }
 
-/* Hediye KartÄ± liste filtreleri */
+/* Hediye Kartı liste filtreleri */
 .s-giftcard-list-filters {
   display: flex;
   gap: 8px;
@@ -2076,7 +2076,7 @@
   display: none;
 }
 
-/* Campaign: KPI kartlarÄ± aynÄ± yÃ¼kseklikte */
+/* Campaign: KPI kartları aynı yükseklikte */
 .campaign-management-page .campaign-summary-grid {
   align-items: stretch;
 }
@@ -2087,7 +2087,7 @@
   justify-content: center;
 }
 
-/* Campaign: Ã¶neriler ve aktif kampanyalar bÃ¶lÃ¼mÃ¼ padding tutarlÄ±lÄ±ÄŸÄ± */
+/* Campaign: öneriler ve aktif kampanyalar bölümü padding tutarlılığı */
 .campaign-management-page .campaign-home-decision-card {
   padding: 18px;
 }
@@ -2526,7 +2526,7 @@
   margin-bottom: 14px !important;
 }
 
-/* Kampanya grafik satÄ±rÄ± soldan boÅŸluk bÄ±rakmadan, tam geniÅŸlikte daÄŸÄ±lsÄ±n */
+/* Kampanya grafik satırı soldan boşluk bırakmadan, tam genişlikte dağılsın */
 .campaign-management-page .campaign-chart-grid.campaign-section {
   width: 100%;
   max-width: none;
@@ -5157,18 +5157,18 @@
   margin-top: 10px;
 }
 
-/* Kampanya YÃ¶netimi tablo gÃ¶rÃ¼nÃ¼mÃ¼: gereksiz iÃ§ kapsayÄ±cÄ± daralmasÄ±nÄ± kaldÄ±r */
+/* Kampanya Yönetimi tablo görünümü: gereksiz iç kapsayıcı daralmasını kaldır */
 .campaign-management-page .campaign-table-stack--standalone .campaign-table-card {
   padding: 0;
 }
 
-/* BaÅŸlÄ±ÄŸÄ±n altÄ±ndaki Ã§izgiyi kaldÄ±r */
+/* Başlığın altındaki çizgiyi kaldır */
 .campaign-management-page .campaign-table-stack--standalone .campaign-table-card-head {
   border-bottom: 0;
   padding-bottom: 0;
 }
 
-/* Pagination Ã¼stÃ¼ndeki Ã§izgiyi kaldÄ±r */
+/* Pagination üstündeki çizgiyi kaldır */
 .campaign-management-page .campaign-table-stack--standalone .campaign-table-pagination {
   border-top: 0;
 }
@@ -5278,7 +5278,7 @@
 
 .campaign-management-page .campaign-module-insight-card--expiry .campaign-module-summary-grid::before,
 .campaign-management-page .campaign-module-insight-card--sales .campaign-module-summary-grid::before {
-  content: "Ust ozet alani";
+  content: "Üst özet alanı";
 }
 
 .campaign-management-page .campaign-module-insight-card--expiry .campaign-metric-explainer-grid--insight::before,
@@ -9185,7 +9185,7 @@
 }
 
 .campaign-management-page .campaign-scenario-chip.is-active::after {
-  content: "SeÃ§ili";
+  content: "Seçili";
   position: absolute;
   top: 9px;
   right: 10px;
@@ -9463,6 +9463,23 @@
  * Some .campaign-* rules remain in dashboard.css where they are interleaved
  * with pricing/purchase shared selector groups and need a separate pass.
  */
+
+.settings-campaign-runtime-fallback {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+}
+
+.settings-campaign-runtime-fallback pre {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid #fee2e2;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
 
 /* Phase A: moved from styles/dashboard.css; Settings route-specific layout and s-* controls. */
 .settings-layout {
@@ -10942,7 +10959,8 @@
 
 .s-auto-sale-panel .s-card-header {
   margin-bottom: 12px;
-  align-items: flex-start;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
@@ -10950,12 +10968,28 @@
 .s-auto-sale-title-group {
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
+  min-height: 36px;
 }
 
-.s-auto-sale-title-group > div:last-child {
+.s-auto-sale-title-copy {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.s-auto-sale-title-group .s-card-icon {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.s-auto-sale-title-group .s-card-title,
+.s-auto-sale-title-group .s-card-desc {
+  margin: 0;
+  line-height: 1.2;
 }
 
 .s-auto-sale-header-actions {
@@ -11055,7 +11089,7 @@
 
 .s-auto-sale-bottom-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
   gap: 8px;
   margin-top: 10px;
 }
@@ -11115,6 +11149,70 @@
 .s-auto-sale-summary-grid strong {
   font-size: 0.84rem;
   color: #0f172a;
+}
+
+.s-auto-sale-recent-card {
+  min-width: 0;
+}
+
+.s-auto-sale-recent-list {
+  display: grid;
+  gap: 6px;
+}
+
+.s-auto-sale-recent-row {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.s-auto-sale-recent-main,
+.s-auto-sale-recent-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.s-auto-sale-recent-main {
+  justify-content: space-between;
+}
+
+.s-auto-sale-recent-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0f172a;
+  font-size: 0.82rem;
+}
+
+.s-auto-sale-recent-main span {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #1e40af;
+}
+
+.s-auto-sale-recent-meta {
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.s-auto-sale-recent-empty {
+  border: 1px dashed rgba(100, 116, 139, 0.35);
+  border-radius: 10px;
+  padding: 14px;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .s-auto-sale-desk-list {
@@ -14338,10 +14436,12 @@
 
 .campaign-management-page .campaign-chart-grid.campaign-section > .campaign-chart-card {
   display: grid !important;
-  grid-template-rows: auto 1fr !important;
-  gap: 14px !important;
-  min-height: 286px !important;
-  padding: 18px !important;
+  grid-template-rows: auto auto !important;
+  gap: 12px !important;
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 16px !important;
+  overflow: hidden !important;
   border-radius: 8px !important;
 }
 
@@ -14376,28 +14476,677 @@
 .campaign-management-page .campaign-chart-canvas {
   min-width: 0 !important;
   min-height: 0 !important;
+  overflow: hidden !important;
 }
 
 .campaign-management-page .campaign-chart-empty {
   min-height: 180px !important;
   display: grid !important;
   place-items: center !important;
-  text-align: center !important;
-}
-
-.campaign-management-page .campaign-refresh-toolbar {
-  align-items: center !important;
+  align-content: center !important;
   gap: 8px !important;
+  text-align: center !important;
+  border: 1px dashed #cbd5e1 !important;
+  border-radius: 10px !important;
+  background: #f8fafc !important;
+  color: #64748b !important;
+  padding: 18px !important;
 }
 
-.campaign-management-page .campaign-clear-history-button {
+.campaign-management-page .campaign-chart-empty-icon {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 7px !important;
-  min-height: 36px !important;
-  padding: 0 12px !important;
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 999px !important;
+  background: #eff6ff !important;
+  color: #2563eb !important;
+}
+
+.campaign-management-page .campaign-chart-empty strong {
+  color: #0f172a !important;
+  font-size: 0.9rem !important;
+  line-height: 1.25 !important;
+}
+
+.campaign-management-page .campaign-chart-empty span:not(.campaign-chart-empty-icon) {
+  max-width: 34ch !important;
+  color: #64748b !important;
+  font-size: 0.8rem !important;
+  line-height: 1.45 !important;
+}
+
+.campaign-management-page .campaign-bar-chart {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.campaign-management-page .campaign-bar-chart-row {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.campaign-management-page .campaign-bar-chart-label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.campaign-management-page .campaign-bar-chart-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-bar-chart-label strong {
+  justify-self: end;
+  color: #0f172a;
+  font-size: 0.86rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-bar-chart-track {
+  width: 100%;
+  max-width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2f7;
+}
+
+.campaign-management-page .campaign-bar-chart-fill {
+  display: block;
+  width: var(--campaign-chart-bar-width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--campaign-chart-bar-color, #4f46e5);
+  transition: width 180ms ease;
+}
+
+.campaign-management-page .campaign-chart-empty-action {
+  margin-top: 4px !important;
+  min-height: 32px !important;
+  padding: 0 10px !important;
+  border-radius: 8px !important;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-card {
+  overflow: hidden;
+  border: 1px solid #dbe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.campaign-management-page .campaign-suggestion-candidates-wrap {
+  width: 100%;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th,
+.campaign-management-page .campaign-suggestion-candidates-table td {
+  padding: 10px 9px;
+  vertical-align: middle;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(1),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(1) {
+  width: 17%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(2),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(2) {
+  width: 11%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(3),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(3) {
+  width: 10%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(4),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(4),
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(5),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(5) {
+  width: 8%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(6),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(6) {
+  width: 8%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(7),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(7) {
+  width: 13%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(8),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(8) {
+  width: 13%;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(9),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(9) {
+  width: 12%;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-title strong,
+.campaign-management-page .campaign-suggestion-candidate-title span,
+.campaign-management-page .campaign-suggestion-candidate-action span,
+.campaign-management-page .campaign-suggestion-candidate-action small,
+.campaign-management-page .campaign-suggestion-candidate-reason span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-title strong {
+  color: #0f172a;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-title span,
+.campaign-management-page .campaign-suggestion-candidate-action small {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-action span {
+  color: #334155;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-reason span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: #475569;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-actions .ghost-button,
+.campaign-management-page .campaign-suggestion-candidate-actions .primary-button {
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-candidate-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.campaign-management-page .campaign-candidate-pagination--top {
+  border-top: 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.campaign-management-page .campaign-candidate-pagination > div {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.campaign-management-page .campaign-candidate-pagination .ghost-button,
+.campaign-management-page .campaign-candidate-pagination .primary-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+@media (max-width: 760px) {
+  .campaign-management-page .campaign-suggestion-candidates-card .campaign-table-card-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .campaign-management-page .campaign-suggestion-candidates-wrap {
+    overflow-x: auto;
+  }
+
+  .campaign-management-page .campaign-suggestion-candidates-table {
+    min-width: 980px;
+  }
+
+  .campaign-management-page .campaign-candidate-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .campaign-management-page .campaign-candidate-pagination > div {
+    justify-content: stretch;
+  }
+
+  .campaign-management-page .campaign-candidate-pagination .ghost-button,
+  .campaign-management-page .campaign-candidate-pagination .primary-button {
+    flex: 1;
+  }
+}
+
+.campaign-management-page .campaign-suggestion-row--module-summary {
+  grid-template-columns: minmax(0, 1fr) 168px;
+  align-items: stretch;
+  gap: 14px;
+  padding: 14px;
+}
+
+.campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-main {
+  gap: 8px;
+}
+
+.campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-short-action {
+  margin: 0;
+  color: #334155;
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.campaign-management-page .campaign-suggestion-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(92px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.campaign-management-page .campaign-suggestion-summary-item {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.campaign-management-page .campaign-suggestion-summary-item--wide {
+  grid-column: span 2;
+}
+
+.campaign-management-page .campaign-suggestion-summary-label {
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.campaign-management-page .campaign-suggestion-summary-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-suggestion-summary-item--wide strong {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-actions {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  justify-items: stretch;
+  min-width: 168px;
+}
+
+.campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-actions .ghost-button,
+.campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-actions .primary-button {
+  width: 100%;
+  min-height: 34px;
+  justify-content: center;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-category-label-scope {
+  display: grid;
+  gap: 10px;
+  min-height: 100%;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.campaign-management-page .campaign-category-scope-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(320px, 1.05fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.campaign-management-page .campaign-category-scope-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 240px;
+  padding: 12px;
+  border: 1px solid #e5edf7;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.campaign-management-page .campaign-category-scope-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.campaign-management-page .campaign-category-scope-pane-head h5 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.campaign-management-page .campaign-category-scope-pane-head span {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-category-grid-list {
+  align-content: start;
+  max-height: 310px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.campaign-management-page .campaign-form-group-head--compact {
+  gap: 4px;
+}
+
+.campaign-management-page .campaign-category-label-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.campaign-management-page .campaign-category-label-toolbar .field-group span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.campaign-management-page .campaign-category-label-toolbar .field-group small {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.campaign-management-page .campaign-category-label-count,
+.campaign-management-page .campaign-category-label-empty {
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.campaign-management-page .campaign-category-label-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.campaign-management-page .campaign-category-label-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 7px;
+}
+
+.campaign-management-page .campaign-category-label-chip {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.campaign-management-page .campaign-category-label-chip span,
+.campaign-management-page .campaign-category-label-chip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-category-label-chip span {
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.campaign-management-page .campaign-category-label-chip small {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.campaign-management-page .campaign-category-label-chip.is-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.campaign-management-page .campaign-insight-table--compact {
+  table-layout: fixed;
+  min-width: 1040px;
+}
+
+.campaign-management-page .campaign-insight-table--compact th,
+.campaign-management-page .campaign-insight-table--compact td {
+  padding: 9px 10px;
+  vertical-align: middle;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-title {
+  width: 22%;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-type,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-scope,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-kind {
+  width: 12%;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-count,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-metric-cell,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-risk,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-status {
+  width: 10%;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-actions {
+  width: 15%;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-title strong,
+.campaign-management-page .campaign-insight-line-clamp {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-cell-title strong,
+.campaign-management-page .campaign-insight-line-clamp {
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-signal-pill {
+  max-width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-row-actions {
+  display: grid;
+  grid-template-columns: 72px 78px;
+  justify-content: end;
+  gap: 6px;
+}
+
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-row-actions .ghost-button,
+.campaign-management-page .campaign-insight-table--compact .campaign-insight-row-actions .primary-button {
+  min-height: 30px;
+  width: 100%;
+  justify-content: center;
+  padding: 6px 8px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-insight-table--expiry-actions .campaign-insight-cell-title {
+  width: 24%;
+}
+
+.campaign-management-page .campaign-insight-table--sales-actions .campaign-insight-cell-title {
+  width: 21%;
+}
+
+.campaign-management-page .campaign-insight-row--muted td {
+  color: #94a3b8;
+  background: #f8fafc;
+}
+
+@media (max-width: 1120px) {
+  .campaign-management-page .campaign-suggestion-summary-grid {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  .campaign-management-page .campaign-suggestion-row--module-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .campaign-management-page .campaign-suggestion-summary-grid,
+  .campaign-management-page .campaign-category-label-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-management-page .campaign-suggestion-row--module-summary .campaign-suggestion-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-management-page .campaign-suggestion-summary-item--wide {
+    grid-column: span 1;
+  }
+}
+
+.campaign-management-page .campaign-header-actions {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+  margin-left: auto !important;
   white-space: nowrap !important;
+}
+
+.campaign-management-page .campaign-header-updated {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 36px !important;
+  border: 1px solid #dbe5f0 !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+  padding: 0 12px !important;
+  font-size: 0.8rem !important;
+  font-weight: 700 !important;
+}
+
+.campaign-management-page .campaign-header-refresh-button {
+  min-height: 36px !important;
+  border-radius: 10px !important;
+  padding: 0 14px !important;
+  gap: 7px !important;
+}
+
+.campaign-management-page .campaign-header-refresh-button .is-spinning,
+.campaign-management-page .campaign-chart-empty-action .is-spinning {
+  animation: campaign-refresh-spin 0.8s linear infinite;
+}
+
+@media (max-width: 720px) {
+  .campaign-management-page .campaign-header-actions {
+    width: 100% !important;
+    flex-wrap: wrap !important;
+    justify-content: flex-start !important;
+    margin-left: 0 !important;
+  }
 }
 
 .campaign-management-page .campaign-signal-pill,
@@ -14453,6 +15202,65 @@
   }
 }
 /* Campaign module tables: keep newly added tables aligned with the main suggestion table. */
+.campaign-management-page .campaign-master-filter-panel {
+  padding: 16px;
+}
+
+.campaign-management-page .campaign-master-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.campaign-management-page .campaign-master-filter-grid--advanced {
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  margin-top: 12px;
+}
+
+.campaign-management-page .campaign-advanced-filter-panel {
+  margin-top: 12px;
+  border-top: 1px solid #e5edf7;
+  padding-top: 10px;
+}
+
+.campaign-management-page .campaign-advanced-filter-panel summary {
+  cursor: pointer;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.campaign-management-page .campaign-master-filter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+@media (max-width: 960px) {
+  .campaign-management-page .campaign-master-filter-grid,
+  .campaign-management-page .campaign-master-filter-grid--advanced {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .campaign-management-page .campaign-master-filter-grid,
+  .campaign-management-page .campaign-master-filter-grid--advanced {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .campaign-management-page .campaign-master-filter-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .campaign-management-page .campaign-layout-shell:is(.campaign-view-general, .campaign-view-product, .campaign-view-category, .campaign-view-brand, .campaign-view-expiry, .campaign-view-sales) .campaign-table-card,
 .campaign-management-page .campaign-layout-shell:is(.campaign-view-general, .campaign-view-product, .campaign-view-category, .campaign-view-brand, .campaign-view-expiry, .campaign-view-sales) .campaign-suggestions-panel--module,
 .campaign-management-page .campaign-module-insight-card--expiry .campaign-insight-standard-section,
@@ -14608,13 +15416,13 @@
 .campaign-management-page .campaign-table-empty {
   display: grid;
   justify-items: center;
-  gap: 8px;
-  min-height: 132px;
-  margin: 14px;
-  padding: 22px;
+  gap: 6px;
+  min-height: 74px;
+  margin: 8px;
+  padding: 12px 14px;
   border: 1px dashed #cbd5e1;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border-radius: 10px;
+  background: #f8fafc;
   color: #64748b;
   text-align: center;
 }
@@ -14635,6 +15443,26 @@
   line-height: 1.45;
 }
 
+.campaign-management-page .campaign-suggestion-disclaimer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 12px 0;
+  padding: 9px 11px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.campaign-management-page .campaign-suggestion-disclaimer svg {
+  flex: 0 0 auto;
+  color: #2563eb;
+}
+
 .campaign-management-page .campaign-suggestion-list {
   display: grid;
   gap: 10px;
@@ -14647,6 +15475,31 @@
   border-radius: 12px;
   background: #ffffff;
   padding: 12px;
+}
+
+.campaign-management-page .campaign-suggestion-row--special {
+  grid-template-columns: minmax(0, 1fr) 168px;
+}
+
+.campaign-management-page .campaign-suggestion-row--special .campaign-suggestion-main {
+  gap: 7px;
+}
+
+.campaign-management-page .campaign-suggestion-row--special .campaign-suggestion-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.campaign-management-page .campaign-suggestion-row--special .campaign-suggestion-meta span {
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .campaign-management-page .campaign-suggestions-pagination,
@@ -14739,5 +15592,331 @@
 
   .campaign-management-page .campaign-suggestions-panel--module .campaign-suggestions-count-pill {
     align-self: flex-start;
+  }
+}
+.campaign-management-page .campaign-switch-count {
+  display: none;
+}
+
+.campaign-management-page .campaign-table-card-head {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.campaign-management-page .campaign-table-pagination,
+.campaign-management-page .campaign-suggestions-pagination,
+.campaign-management-page .campaign-candidate-pagination {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.campaign-management-page .campaign-table-pagination > span,
+.campaign-management-page .campaign-suggestions-pagination > span,
+.campaign-management-page .campaign-candidate-pagination > span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-table-pagination-actions,
+.campaign-management-page .campaign-suggestions-pagination-actions,
+.campaign-management-page .campaign-candidate-pagination > div {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.campaign-management-page .campaign-table-pagination .ghost-button,
+.campaign-management-page .campaign-suggestions-pagination .ghost-button,
+.campaign-management-page .campaign-candidate-pagination .ghost-button {
+  min-width: 68px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 0.78rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-table-pagination-page,
+.campaign-management-page .campaign-candidate-pagination--bottom {
+  display: none;
+}
+
+.campaign-management-page .campaign-table-card .table-wrapper,
+.campaign-management-page .campaign-insight-standard-section .campaign-insight-table-wrap,
+.campaign-management-page .campaign-suggestion-candidates-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.campaign-management-page .campaign-insight-suggestion-table,
+.campaign-management-page .campaign-suggestion-candidates-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 1120px;
+}
+
+.campaign-management-page .campaign-insight-suggestion-table th,
+.campaign-management-page .campaign-insight-suggestion-table td,
+.campaign-management-page .campaign-suggestion-candidates-table th,
+.campaign-management-page .campaign-suggestion-candidates-table td {
+  height: 54px;
+  vertical-align: middle;
+}
+
+.campaign-management-page .campaign-insight-cell-title,
+.campaign-management-page .campaign-suggestion-candidate-title {
+  min-width: 180px;
+}
+
+.campaign-management-page .campaign-insight-cell-title strong,
+.campaign-management-page .campaign-insight-product-cell strong,
+.campaign-management-page .campaign-suggestion-candidate-title strong,
+.campaign-management-page .campaign-suggestion-candidate-title span,
+.campaign-management-page .campaign-insight-cell-impact span,
+.campaign-management-page .campaign-suggestion-candidate-reason span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-insight-cell-impact,
+.campaign-management-page .campaign-suggestion-candidate-reason {
+  min-width: 160px;
+}
+
+.campaign-management-page .campaign-insight-cell-actions,
+.campaign-management-page .campaign-suggestion-candidates-table th:last-child,
+.campaign-management-page .campaign-suggestion-candidates-table td:last-child,
+.campaign-management-page .campaign-insight-suggestion-table th:last-child,
+.campaign-management-page .campaign-insight-suggestion-table td:last-child {
+  width: 210px;
+  min-width: 210px;
+  text-align: right;
+}
+
+.campaign-management-page .campaign-row-actions,
+.campaign-management-page .campaign-insight-row-actions,
+.campaign-management-page .campaign-suggestion-candidate-actions,
+.campaign-management-page .table-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+  width: 100%;
+  min-width: 190px;
+}
+
+.campaign-management-page .campaign-row-actions .ghost-button,
+.campaign-management-page .campaign-row-actions .primary-button,
+.campaign-management-page .campaign-insight-row-actions .ghost-button,
+.campaign-management-page .campaign-insight-row-actions .primary-button,
+.campaign-management-page .campaign-suggestion-candidate-actions .ghost-button,
+.campaign-management-page .campaign-suggestion-candidate-actions .primary-button {
+  flex: 0 0 auto;
+  height: 32px;
+  min-width: 72px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.campaign-management-page .campaign-suggestion-candidate-actions .primary-button,
+.campaign-management-page .campaign-insight-row-actions .primary-button {
+  min-width: 112px;
+}
+
+.campaign-management-page .campaign-suggestion-candidates-table th:nth-child(8),
+.campaign-management-page .campaign-suggestion-candidates-table td:nth-child(8) {
+  width: 18%;
+}
+
+.campaign-management-page .campaign-insight-table--product-actions th:nth-child(1),
+.campaign-management-page .campaign-insight-table--product-actions td:nth-child(1) {
+  width: 17%;
+}
+
+.campaign-management-page .campaign-insight-table--product-actions th:nth-child(8),
+.campaign-management-page .campaign-insight-table--product-actions td:nth-child(8) {
+  width: 17%;
+}
+
+.campaign-management-page .campaign-insight-table--sales-actions th:nth-child(1),
+.campaign-management-page .campaign-insight-table--sales-actions td:nth-child(1) {
+  width: 18%;
+}
+
+.campaign-management-page .campaign-insight-row--muted {
+  display: none;
+}
+
+.campaign-management-page .campaign-table-card-head > .campaign-table-pagination,
+.campaign-management-page .campaign-table-card-head > .campaign-suggestions-pagination,
+.campaign-management-page .campaign-table-card-head > .campaign-candidate-pagination {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.campaign-management-page .campaign-table-card-head .campaign-table-pagination .ghost-button,
+.campaign-management-page .campaign-table-card-head .campaign-suggestions-pagination .ghost-button,
+.campaign-management-page .campaign-table-card-head .campaign-candidate-pagination .ghost-button {
+  min-width: 68px !important;
+  height: 30px !important;
+  padding: 0 10px !important;
+  border-radius: 7px !important;
+  font-size: 0.78rem !important;
+}
+
+.campaign-management-page .campaign-insight-row-actions,
+.campaign-management-page .campaign-suggestion-candidate-actions {
+  min-width: 190px !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-end !important;
+}
+
+.campaign-management-page .campaign-insight-cell-actions,
+.campaign-management-page .campaign-suggestion-candidates-table td:last-child,
+.campaign-management-page .campaign-insight-suggestion-table td:last-child {
+  width: 210px !important;
+  min-width: 210px !important;
+  text-align: right !important;
+}
+
+.campaign-management-page .campaign-row-actions--menu {
+  position: relative;
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  justify-content: flex-end !important;
+  gap: 8px;
+  min-width: 168px !important;
+  width: 100%;
+}
+
+.campaign-management-page .campaign-row-actions--menu .primary-button {
+  flex: 0 0 auto;
+  min-width: 118px !important;
+}
+
+.campaign-management-page .campaign-row-action-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.campaign-management-page .campaign-row-action-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+}
+
+.campaign-management-page .campaign-row-action-menu-trigger:hover,
+.campaign-management-page .campaign-row-action-menu-trigger[aria-expanded="true"] {
+  border-color: #c7d2fe;
+  background: #f8fafc;
+  color: #1d4ed8;
+}
+
+.campaign-management-page .campaign-row-action-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 128px;
+  padding: 6px;
+  border: 1px solid #dbe4f0;
+  border-radius: 9px;
+  background: #ffffff;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.14);
+}
+
+.campaign-management-page .campaign-row-action-menu-panel button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #0f172a;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.campaign-management-page .campaign-row-action-menu-panel button:hover,
+.campaign-management-page .campaign-row-action-menu-panel button:focus-visible {
+  background: #eff6ff;
+  color: #1d4ed8;
+  outline: none;
+}
+
+.campaign-management-page .campaign-home-table-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.campaign-management-page .campaign-home-table-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.campaign-management-page .campaign-home-table-tabs button.is-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.campaign-management-page .campaign-home-table-tabs strong {
+  font-size: 0.78rem;
+  color: inherit;
+}
+
+@media (max-width: 860px) {
+  .campaign-management-page .campaign-category-scope-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-management-page .campaign-category-scope-pane {
+    min-height: 0;
   }
 }

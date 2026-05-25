@@ -12,6 +12,7 @@ router.use(requireScope());
 router.get('/', requirePermission(PERMISSIONS.STOCK_VIEW), stockController.getStocks);
 router.get('/expiry/expired-notifications/dry-run', requirePermission(PERMISSIONS.STOCK_VIEW), stockController.expiredBatchNotificationDryRun);
 router.post('/expiry/expired-notifications/run', requirePermission(PERMISSIONS.STOCK_UPDATE), stockController.runExpiredBatchNotifications);
+router.get('/skt-policy/manual-review', requirePermission(PERMISSIONS.STOCK_VIEW), stockController.sktPolicyManualReview);
 router.get('/expired-batches', requirePermission(PERMISSIONS.STOCK_VIEW), stockController.expiredBatchWarnings);
 router.post('/expired-batches/dispose', requirePermission(PERMISSIONS.STOCK_UPDATE), stockController.disposeExpiredBatches);
 router.get('/movements/summary', requirePermission(PERMISSIONS.STOCK_VIEW), stockController.movementsSummary);

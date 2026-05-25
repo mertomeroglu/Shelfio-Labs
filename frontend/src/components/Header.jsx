@@ -113,12 +113,12 @@ function formatStoreStatusLabel(date, settings) {
   if (!settings) return 'Saat bilgisi yükleniyor';
   const status = resolveStoreScheduleStatus(date, settings);
   if (status.isClosed) {
-    if (status.specialLabel) return `Mağaza Kapalı | ${status.specialLabel}`;
-    return 'Mağaza Kapalı';
+    if (status.specialLabel) return `Kapalı | ${status.specialLabel}`;
+    return 'Kapalı';
   }
 
   const range = `${status.opensAt} - ${status.closesAt}`;
-  return `${status.isStoreOpen ? 'Mağaza Açık' : 'Mağaza Kapalı'} | ${range}`;
+  return `${status.isStoreOpen ? 'Açık' : 'Kapalı'} | ${range}`;
 }
 
 function getNotificationIcon(type) {

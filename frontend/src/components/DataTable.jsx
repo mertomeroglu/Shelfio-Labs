@@ -17,6 +17,13 @@ export default function DataTable({
   sortConfig: controlledSortConfig = undefined,
   onSortChange = null,
   manualSorting = false,
+  compactPagination = false,
+  className = '',
+  panelClassName = '',
+  tableWrapperClassName = '',
+  tableClassName = '',
+  loadingStateClassName = '',
+  emptyStateClassName = '',
 }) {
   const [internalSortConfig, setInternalSortConfig] = useState(initialSort);
   const [page, setPage] = useState(1);
@@ -236,9 +243,11 @@ export default function DataTable({
     }
   };
 
+  const panelClassNames = ['table-panel', className, panelClassName].filter(Boolean).join(' ');
+
   if (isLoading) {
     return (
-      <div className="table-panel loading-state">
+      <div className={[panelClassNames, 'loading-state', loadingStateClassName].filter(Boolean).join(' ')}>
         <span className="loader"></span>
         <p>Veriler yükleniyor...</p>
       </div>
@@ -247,14 +256,14 @@ export default function DataTable({
 
   if (!rows.length) {
     return (
-      <div className="table-panel">
+      <div className={[panelClassNames, emptyStateClassName].filter(Boolean).join(' ')}>
         <EmptyState title="Veri yok" description={emptyMessage} />
       </div>
     );
   }
 
   return (
-    <div className="table-panel">
+    <div className={panelClassNames}>
       {topHorizontalScroll && horizontalMeta.maxScroll > 0 ? (
         <div className="table-top-scroll-shell">
           <button
@@ -287,8 +296,8 @@ export default function DataTable({
           </button>
         </div>
       ) : null}
-      <div className="table-wrapper" ref={tableWrapperRef} onScroll={handleWrapperScroll}>
-        <table className="data-table">
+      <div className={['table-wrapper', tableWrapperClassName].filter(Boolean).join(' ')} ref={tableWrapperRef} onScroll={handleWrapperScroll}>
+        <table className={['data-table', tableClassName].filter(Boolean).join(' ')}>
           <thead>
             <tr>
               {columns.map((column) => (
@@ -347,10 +356,35 @@ export default function DataTable({
         </table>
       </div>
       {totalPages > 1 ? (
-        <div className="table-pagination">
+        <div className={`table-pagination ${compactPagination ? 'table-pagination--compact' : ''}`}>
           <div className="table-pagination-summary-block">
             <div className="table-pagination-summary">
-            <span>Sayfa</span>
+              {compactPagination ? (
+                <span>Sayfa {currentPage} / {totalPages}</span>
+              ) : (
+                <>
+                  <span>Sayfa</span>
+                  <input
+                    className="table-page-input"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={pageInput}
+                    onChange={handlePageInputChange}
+                    onKeyDown={handlePageInputKeyDown}
+                    aria-label="Sayfa numarası"
+                  />
+                  <span>/ {totalPages}</span>
+                </>
+              )}
+              <span className="table-pagination-total">· {startEntry}-{endEntry} / {totalCount} kayıt</span>
+            </div>
+            {pageInputError ? <p className="table-pagination-error">{pageInputError}</p> : null}
+          </div>
+          <div className="table-pagination-actions">
+            <button className="ghost-button" type="button" onClick={() => movePage(1)} disabled={currentPage === 1}>İlk</button>
+            <button className="ghost-button" type="button" onClick={() => movePage(currentPage - 1)} disabled={currentPage === 1}>Önceki</button>
+            {compactPagination ? (
               <input
                 className="table-page-input"
                 type="text"
@@ -361,14 +395,7 @@ export default function DataTable({
                 onKeyDown={handlePageInputKeyDown}
                 aria-label="Sayfa numarası"
               />
-              <span>/ {totalPages}</span>
-              <span className="table-pagination-total">· {startEntry}-{endEntry} / {totalCount} kayıt</span>
-            </div>
-            {pageInputError ? <p className="table-pagination-error">{pageInputError}</p> : null}
-          </div>
-          <div className="table-pagination-actions">
-            <button className="ghost-button" type="button" onClick={() => movePage(1)} disabled={currentPage === 1}>İlk</button>
-            <button className="ghost-button" type="button" onClick={() => movePage(currentPage - 1)} disabled={currentPage === 1}>Önceki</button>
+            ) : null}
             <button className="primary-button" type="button" onClick={goToPage}>Git</button>
             <button className="primary-button" type="button" onClick={() => movePage(currentPage + 1)} disabled={currentPage === totalPages}>Sonraki</button>
             <button className="ghost-button" type="button" onClick={() => movePage(totalPages)} disabled={currentPage === totalPages}>Son</button>

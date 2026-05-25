@@ -115,8 +115,13 @@ export const procurementService = {
     return result;
   },
 
-  generateSuggestions: (payload = {}) => api.post('/procurement/suggestions/generate', payload),
-  listSuggestions: (params = {}) => api.get(`/procurement/suggestions${buildQueryString(params)}`),
+  generateSuggestions: async (payload = {}) => {
+    const result = await api.post('/procurement/suggestions/generate', payload, { cache: 'no-store' });
+    invalidateProcurementCache();
+    return result;
+  },
+  listSuggestions: (params = {}) => api.get(`/procurement/suggestions${buildQueryString(params)}`, { cache: 'no-store' }),
+  getSuggestionSummary: (params = {}) => api.get(`/procurement/suggestions/summary${buildQueryString(params)}`, { cache: 'no-store' }),
   updateSuggestion: (id, payload) => api.patch(`/procurement/suggestions/${id}`, payload),
   approveSuggestion: (id, payload = {}) => api.post(`/procurement/suggestions/${id}/approve`, payload),
   rejectSuggestion: (id) => api.post(`/procurement/suggestions/${id}/reject`, {}),

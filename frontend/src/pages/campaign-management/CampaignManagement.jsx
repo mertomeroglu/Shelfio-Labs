@@ -1,5 +1,5 @@
-import SettingsCampaignShell from '../_shared/settings-campaign-shell/SettingsCampaignShell.jsx';
+import CampaignManagementShell from './CampaignManagementShell.jsx';
 
 export default function CampaignManagement() {
-  return <SettingsCampaignShell pageMode="campaign" />;
+  return <CampaignManagementShell />;
 }

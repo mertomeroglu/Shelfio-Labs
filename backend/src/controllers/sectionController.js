@@ -1,4 +1,5 @@
 import { sectionService } from '../services/sectionService.js';
+import { sendListResponse } from '../utils/listResponse.js';
 
 export const sectionController = {
   async list(req, res, next) {
@@ -40,7 +41,11 @@ export const sectionController = {
   async listTransferRequests(req, res, next) {
     try {
       const transferRequests = await sectionService.listTransferRequests(req.query, req.user);
-      res.json(transferRequests);
+      sendListResponse(res, {
+        items: transferRequests,
+        pagination: transferRequests?.meta?.pagination,
+        filters: transferRequests?.meta?.filters || {},
+      });
     } catch (error) {
       next(error);
     }
@@ -50,6 +55,24 @@ export const sectionController = {
     try {
       const transferRequest = await sectionService.updateTransferRequestStatus(req.params.requestId, req.body, req.user);
       res.json(transferRequest);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async bulkUpdateTransferRequests(req, res, next) {
+    try {
+      const result = await sectionService.bulkUpdateTransferRequests(req.body || {}, req.user);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async runTransferAutomationScan(req, res, next) {
+    try {
+      const result = await sectionService.runTransferAutomationScan(req.body || {});
+      res.json(result);
     } catch (error) {
       next(error);
     }

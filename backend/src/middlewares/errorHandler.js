@@ -1,6 +1,20 @@
 ﻿import { AppError } from '../utils/appError.js';
 import { settingsService } from '../services/settingsService.js';
 
+const TECHNICAL_ERROR_PATTERN = /(prisma|invocation|unknown argument|database|sql|constraint|foreign key|relation|stack|clientvalidationerror|repository|delegate)/i;
+
+const toPublicErrorMessage = (error, statusCode) => {
+  const message = String(error?.message || '').trim();
+  if (!(error instanceof AppError)) return 'Sunucu hatası.';
+  if (Number(statusCode || 0) >= 500 || TECHNICAL_ERROR_PATTERN.test(message)) {
+    return 'İşlem tamamlanamadı. Lütfen tekrar deneyin.';
+  }
+  return message || 'İşlem tamamlanamadı.';
+};
+
+const hasTechnicalErrorMessage = (error, statusCode) =>
+  Number(statusCode || 0) >= 500 || TECHNICAL_ERROR_PATTERN.test(String(error?.message || ''));
+
 export const notFoundHandler = (req, res) => {
   res.status(404).json({
     success: false,
@@ -18,7 +32,7 @@ export const errorHandler = (error, req, res, next) => {
   }
 
   const statusCode = error instanceof AppError ? error.statusCode : 500;
-  const message = error instanceof AppError ? error.message : 'Sunucu hatası.';
+  const message = toPublicErrorMessage(error, statusCode);
   const shouldRecordDeveloperLog = statusCode >= 500;
 
   const lowerMessage = String(error?.message || '').toLowerCase();
@@ -61,11 +75,12 @@ export const errorHandler = (error, req, res, next) => {
     message,
     requestId: req.requestId,
   };
+  const technicalPublicError = hasTechnicalErrorMessage(error, statusCode);
 
   if (error instanceof AppError) {
     if (error.errorCode) responsePayload.errorCode = error.errorCode;
-    if (error.fieldErrors && typeof error.fieldErrors === 'object') responsePayload.fieldErrors = error.fieldErrors;
-    if (error.details && typeof error.details === 'object') responsePayload.details = error.details;
+    if (!technicalPublicError && error.fieldErrors && typeof error.fieldErrors === 'object') responsePayload.fieldErrors = error.fieldErrors;
+    if (!technicalPublicError && error.details && typeof error.details === 'object') responsePayload.details = error.details;
     if (error.draftProductId) responsePayload.draftProductId = error.draftProductId;
   }
 

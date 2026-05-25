@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import pdfFonts from 'pdfmake/build/vfs_fonts';
 import { Link2, Plus, Minus, Filter, Package, ShoppingBag, Wallet, Truck, Scale, Boxes, Tag, AlertTriangle, Trash2, Info } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import ConfirmModal from '../../components/ConfirmModal.jsx';
@@ -269,11 +266,40 @@ const isValidSuggestionQuantity = (item = {}) => {
   return Number.isFinite(quantity) && quantity > 0;
 };
 
+const getSuggestionLookupKey = (item = {}) => {
+  const supplierProductId = String(item?.supplierProductId || '').trim();
+  const productId = toEntityKey(item?.productId);
+  const supplierId = String(item?.supplierId || '').trim();
+  return [
+    supplierProductId ? `sp:${supplierProductId}` : '',
+    productId ? `p:${productId}` : '',
+    supplierId ? `s:${supplierId}` : '',
+    String(item?.suggestionId || item?.id || '').trim(),
+  ].filter(Boolean).join('|') || 'unknown';
+};
+
+const isApiSupplierProductRow = (row = {}) => Boolean(
+  row
+  && row.source === 'api'
+  && row.isActive !== false
+  && String(row.id || row.supplierProductId || '').trim()
+);
+
 const resolveSuggestionRow = (suggestionItem, availableRows = [], products = [], supplierLookup = new Map()) => {
+  const supplierProductId = String(suggestionItem?.supplierProductId || '').trim();
   const productId = toEntityKey(suggestionItem?.productId);
   const supplierId = String(suggestionItem?.supplierId || '').trim();
   const suggestionSku = normalizeSuggestionLookupText(suggestionItem?.sku || suggestionItem?.productSku);
   const suggestionName = normalizeSuggestionLookupText(suggestionItem?.productName);
+
+  if (supplierProductId) {
+    const directMatch = availableRows.find((row) => (
+      String(row?.id || row?.supplierProductId || '').trim() === supplierProductId
+      && row?.source === 'api'
+      && row?.isActive !== false
+    ));
+    if (directMatch) return directMatch;
+  }
 
   const matchedProduct = products.find((product) =>
     (productId && toEntityKey(product?.id) === productId)
@@ -325,7 +351,8 @@ const resolveSuggestionRow = (suggestionItem, availableRows = [], products = [],
 
   return {
     id: `suggestion-fallback:${String(suggestionItem?.suggestionId || matchedProduct.id || productId || 'unknown')}`,
-    source: 'api',
+    supplierProductId: null,
+    source: 'suggestion_fallback',
     isActive: true,
     isPreferred: true,
     productId: matchedProduct.id || productId,
@@ -360,6 +387,23 @@ const resolveSuggestionRow = (suggestionItem, availableRows = [], products = [],
     updatedAt: suggestionItem?.updatedAt || new Date().toISOString(),
     isSuggestionFallback: true,
   };
+};
+
+const getSuggestionResolveFailureMessage = (item = {}, products = [], supplierLookup = new Map()) => {
+  const productId = toEntityKey(item?.productId);
+  const supplierId = String(item?.supplierId || '').trim();
+  const suggestionSku = normalizeSuggestionLookupText(item?.sku || item?.productSku);
+  const suggestionName = normalizeSuggestionLookupText(item?.productName);
+  const matchedProduct = products.find((product) => (
+    (productId && toEntityKey(product?.id) === productId)
+    || (suggestionSku && normalizeSuggestionLookupText(product?.sku) === suggestionSku)
+    || (suggestionName && normalizeSuggestionLookupText(product?.name) === suggestionName)
+  )) || null;
+
+  if (!productId && !suggestionSku && !suggestionName) return 'Öneri kaydı eksik olduğu için taslak açılamadı.';
+  if (!matchedProduct) return 'Bu öneriye bağlı ürün eşleşmesi bulunamadı.';
+  if (supplierId && !supplierLookup.has(supplierId)) return 'Bu öneriye bağlı tedarikçi eşleşmesi bulunamadı.';
+  return 'Ürün bulundu ancak geçerli tedarikçi bağlantısı alınamadı.';
 };
 
 const DEFAULT_CARGO_TYPES = [
@@ -1074,7 +1118,24 @@ const REPORT_TABLE_STANDARD = {
 
 const PDF_FONT_FAMILY = 'Roboto';
 
-const getPdfVfs = () => {
+let catalogPdfModulesPromise = null;
+
+const loadCatalogPdfModules = async () => {
+  if (!catalogPdfModulesPromise) {
+    catalogPdfModulesPromise = Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+      import('pdfmake/build/vfs_fonts'),
+    ]).then(([jsPdfModule, autoTableModule, pdfFontsModule]) => ({
+      jsPDF: jsPdfModule?.jsPDF || jsPdfModule?.default?.jsPDF || jsPdfModule?.default || jsPdfModule,
+      autoTable: autoTableModule?.default || autoTableModule?.autoTable || autoTableModule,
+      pdfFonts: pdfFontsModule?.default || pdfFontsModule,
+    }));
+  }
+  return catalogPdfModulesPromise;
+};
+
+const getPdfVfs = (pdfFonts) => {
   const nestedVfs = pdfFonts?.pdfMake?.vfs || pdfFonts?.vfs || pdfFonts?.default?.pdfMake?.vfs || pdfFonts?.default?.vfs;
   if (nestedVfs && Object.keys(nestedVfs).length > 0) {
     return nestedVfs;
@@ -1085,13 +1146,13 @@ const getPdfVfs = () => {
   return directFontEntries.length ? Object.fromEntries(directFontEntries) : {};
 };
 
-const ensureTurkishPdfFont = (doc) => {
+const ensureTurkishPdfFont = (doc, pdfFonts) => {
   const fontList = typeof doc.getFontList === 'function' ? doc.getFontList() : {};
   if (fontList?.[PDF_FONT_FAMILY]) {
     return;
   }
 
-  const vfs = getPdfVfs();
+  const vfs = getPdfVfs(pdfFonts);
   const regular = vfs['Roboto-Regular.ttf'];
   const bold = vfs['Roboto-Medium.ttf'] || vfs['Roboto-Bold.ttf'];
 
@@ -1127,7 +1188,7 @@ const formatTierPricingForReport = (tierPricing = []) => {
   return rows.length ? rows.join('\n') : '-';
 };
 
-const renderStandardPdfTableReport = ({ doc, title, generatedAtLabel, totalRecords, columns, bodyRows, fileName }) => {
+const renderStandardPdfTableReport = ({ doc, autoTable, pdfFonts, title, generatedAtLabel, totalRecords, columns, bodyRows, fileName }) => {
   const pageWidth = doc.internal.pageSize.getWidth();
   const marginX = 28;
   const marginY = 24;
@@ -1135,7 +1196,7 @@ const renderStandardPdfTableReport = ({ doc, title, generatedAtLabel, totalRecor
   if (typeof doc.setCharSpace === 'function') {
     doc.setCharSpace(0);
   }
-  ensureTurkishPdfFont(doc);
+  ensureTurkishPdfFont(doc, pdfFonts);
   doc.setFont(PDF_FONT_FAMILY, 'normal');
 
   autoTable(doc, {
@@ -1608,6 +1669,7 @@ const getAllowedProcurementUnits = (item) => {
 
 const normalizeSupplierProduct = (item, productMap, index = 0, source = 'api') => {
   const product = productMap.get(item.productId);
+  const supplierProductId = String(item.id || item.supplierProductId || item.supplierProductMappingId || '').trim();
 
   const orderUnit = (item.orderUnit || product?.orderUnit || 'adet');
   const unitsPerPack = Number(item.unitsPerPack || product?.unitsPerPack || 1);
@@ -1633,7 +1695,8 @@ const normalizeSupplierProduct = (item, productMap, index = 0, source = 'api') =
     || 'adet');
 
   return {
-    id: item.id,
+    id: supplierProductId,
+    supplierProductId,
     source,
     productId: item.productId,
     productName: item.productName || product?.name || '-',
@@ -2396,6 +2459,10 @@ export default function SupplierProducts({ initialView = 'compare' }) {
   const bulkLogisticsRequestIdRef = useRef(0);
   const loadDataRequestIdRef = useRef(0);
   const productSupplierLookupRef = useRef(new Set());
+  const suggestionSupplierLookupRef = useRef(new Map());
+  const suggestionSupplierLookupSignatureRef = useRef('');
+  const suggestionSupplierLookupRequestRef = useRef(0);
+  const [suggestionLookupRevision, setSuggestionLookupRevision] = useState(0);
   const supplierCatalogLookupRef = useRef(new Set());
   const selectProductForComparison = useCallback((productId) => {
     const normalizedProductId = toEntityKey(productId);
@@ -2620,6 +2687,60 @@ export default function SupplierProducts({ initialView = 'compare' }) {
       return syncPreferredByProduct(Array.from(byId.values()));
     });
   }, [products]);
+
+  const fetchSuggestionSupplierProductRows = useCallback(async (suggestionItem = {}) => {
+    const supplierProductId = String(suggestionItem?.supplierProductId || '').trim();
+    const productId = toEntityKey(suggestionItem?.productId);
+    const supplierId = String(suggestionItem?.supplierId || '').trim();
+
+    const filterRows = (rows = [], mode = '') => (Array.isArray(rows) ? rows : []).filter((row) => {
+      const rowSupplierProductId = String(row?.id || row?.supplierProductId || row?.supplierProductMappingId || '').trim();
+      const rowProductId = toEntityKey(row?.productId);
+      const rowSupplierId = String(row?.supplierId || '').trim();
+      if (row?.isActive === false) return false;
+      if (mode === 'supplierProduct') return supplierProductId && rowSupplierProductId === supplierProductId;
+      if (mode === 'productSupplier') return productId && supplierId && rowProductId === productId && rowSupplierId === supplierId;
+      return productId && rowProductId === productId;
+    });
+
+    if (supplierProductId) {
+      const rows = await procurementService.listSupplierProducts({
+        supplierProductId,
+        page: 1,
+        limit: 1,
+        isActive: true,
+        forceRefresh: true,
+      });
+      const exactRows = filterRows(rows, 'supplierProduct');
+      if (exactRows.length) return exactRows;
+    }
+
+    if (productId && supplierId) {
+      const rows = await procurementService.listSupplierProducts({
+        productId,
+        supplierId,
+        page: 1,
+        limit: SUPPLIER_PRODUCTS_PAGE_LIMIT,
+        isActive: true,
+        forceRefresh: true,
+      });
+      const exactRows = filterRows(rows, 'productSupplier');
+      if (exactRows.length) return exactRows;
+    }
+
+    if (productId) {
+      const rows = await procurementService.listSupplierProducts({
+        productId,
+        page: 1,
+        limit: SUPPLIER_PRODUCTS_PAGE_LIMIT,
+        isActive: true,
+        forceRefresh: true,
+      });
+      return filterRows(rows, 'product');
+    }
+
+    return [];
+  }, []);
 
   useEffect(() => {
     const productId = toEntityKey(selectedProductId);
@@ -3386,6 +3507,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     try {
       setCatalogPdfExporting(true);
       await new Promise((resolve) => setTimeout(resolve, 0));
+      const { jsPDF, autoTable, pdfFonts } = await loadCatalogPdfModules();
 
       const exportSupplierName = activeCatalogSupplier?.name || 'tedarikci';
       const generatedAtLabel = new Date().toLocaleString('tr-TR');
@@ -3397,7 +3519,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
         || 'tedarikci';
 
       const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-      ensureTurkishPdfFont(doc);
+      ensureTurkishPdfFont(doc, pdfFonts);
 
       const columns = [
         { header: 'Ürün', width: 178, align: 'left' },
@@ -3434,6 +3556,8 @@ export default function SupplierProducts({ initialView = 'compare' }) {
 
       renderStandardPdfTableReport({
         doc,
+        autoTable,
+        pdfFonts,
         title: 'Tedarikçi Kataloğu',
         generatedAtLabel,
         totalRecords: data.length,
@@ -4648,7 +4772,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
       setToast({
         type: 'error',
         title: 'Satın Alma',
-        message: 'Bu tedarikçi-ürün eşleşmesi henüz sisteme kaydedilmemiş. Önce eşleşmeyi kaydedip tekrar deneyin.',
+        message: 'Bu öneriye bağlı taslak bulunamadı. Önce ürün için aktif bir tedarikçi eşleşmesi oluşturun.',
       });
       return false;
     }
@@ -5257,39 +5381,13 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     const signatureSeed = handoff?.createdAt
       || location.state?.purchaseSuggestionFlow?.createdAt
       || `${location.key}:${intent}:${handoffId}:${incomingItems.map((item) => `${item.suggestionId || item.id || item.productId}:${item.supplierId || ''}`).join('|')}`;
-    const lookupProductIds = Array.from(new Set(
-      incomingItems
-        .filter((item) => isValidSuggestionQuantity(item))
-        .map((item) => toEntityKey(item?.productId))
-        .filter(Boolean)
-    ));
-    const missingLookupProductIds = lookupProductIds.filter((productId) => (
-      !(groupedByProduct.get(productId) || []).length
-      && !productSupplierLookupRef.current.has(productId)
-    ));
-
-    if (missingLookupProductIds.length) {
-      missingLookupProductIds.forEach((productId) => productSupplierLookupRef.current.add(productId));
-      Promise.all(missingLookupProductIds.map((productId) => procurementService.listSupplierProducts({
-        productId,
-        page: 1,
-        limit: SUPPLIER_PRODUCTS_PAGE_LIMIT,
-        forceRefresh: true,
-      }).catch(() => [])))
-        .then((results) => {
-          mergeSupplierProductRows(results.flat());
-        })
-        .catch(() => {
-          // Handoff fallback below will show the existing user-facing error.
-        });
-      return;
+    if (suggestionSupplierLookupSignatureRef.current !== signatureSeed) {
+      suggestionSupplierLookupSignatureRef.current = signatureSeed;
+      suggestionSupplierLookupRef.current = new Map();
+      suggestionSupplierLookupRequestRef.current += 1;
     }
-
-    if (suggestionAutoOpenSignatureRef.current === signatureSeed) return;
-    suggestionAutoOpenSignatureRef.current = signatureSeed;
-
     if (!incomingItems.length) {
-      setToast({ type: 'error', title: 'Satın Alma', message: 'Öneriden gelen ürün bilgisi bulunamadı.' });
+      setToast({ type: 'error', title: 'Taslak Açılamadı', message: 'Öneriye bağlı ürün bilgisi bulunamadı. Öneri listesinden yeniden açmayı deneyin.' });
       clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
       return;
     }
@@ -5298,16 +5396,74 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     const candidateItems = intent === 'bulk'
       ? incomingItems.filter((item) => isValidSuggestionQuantity(item))
       : incomingItems;
+    const locallyResolvedSelections = candidateItems.map((item) => ({
+      suggestion: item,
+      row: resolveSuggestionRow(item, rows, products, supplierMap),
+    }));
+    const unresolvedApiEntries = locallyResolvedSelections.filter((entry) => !isApiSupplierProductRow(entry.row));
+    const lookupStore = suggestionSupplierLookupRef.current;
+    const pendingLookups = unresolvedApiEntries.filter((entry) => lookupStore.get(getSuggestionLookupKey(entry.suggestion))?.status === 'pending');
+    const lookupsToStart = unresolvedApiEntries.filter((entry) => {
+      const status = lookupStore.get(getSuggestionLookupKey(entry.suggestion))?.status || '';
+      return status !== 'pending' && status !== 'not_found' && status !== 'error';
+    });
+
+    if (lookupsToStart.length) {
+      const requestId = suggestionSupplierLookupRequestRef.current + 1;
+      suggestionSupplierLookupRequestRef.current = requestId;
+      setToast({ type: 'info', title: 'Taslak Hazırlanıyor', message: 'Taslak verisi yükleniyor, lütfen bekleyin.' });
+      lookupsToStart.forEach((entry) => {
+        lookupStore.set(getSuggestionLookupKey(entry.suggestion), { status: 'pending' });
+      });
+      setSuggestionLookupRevision((value) => value + 1);
+
+      Promise.all(lookupsToStart.map(async (entry) => {
+        const key = getSuggestionLookupKey(entry.suggestion);
+        try {
+          const fetchedRows = await fetchSuggestionSupplierProductRows(entry.suggestion);
+          lookupStore.set(key, { status: fetchedRows.length ? 'resolved' : 'not_found' });
+          return fetchedRows;
+        } catch (error) {
+          lookupStore.set(key, { status: 'error', error });
+          return [];
+        }
+      }))
+        .then((results) => {
+          if (requestId !== suggestionSupplierLookupRequestRef.current) return;
+          const mergedRows = results.flat();
+          if (mergedRows.length) {
+            mergeSupplierProductRows(mergedRows);
+          }
+          suggestionAutoOpenSignatureRef.current = '';
+          setSuggestionLookupRevision((value) => value + 1);
+        });
+      return;
+    }
+
+    if (pendingLookups.length) return;
+
+    if (suggestionAutoOpenSignatureRef.current === signatureSeed) return;
+    suggestionAutoOpenSignatureRef.current = signatureSeed;
+
     const resolvedSelections = candidateItems
       .map((item) => ({
         suggestion: item,
         row: resolveSuggestionRow(item, rows, products, supplierMap),
       }))
-      .filter((entry) => entry.row);
+      .filter((entry) => (
+        isApiSupplierProductRow(entry.row)
+      ));
 
     if (!resolvedSelections.length) {
-      setToast({ type: 'error', title: 'Satın Alma', message: 'Öneriden gelen ürün bilgisi bulunamadı.' });
-      clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: false });
+      const hasLookupError = candidateItems.some((item) => suggestionSupplierLookupRef.current.get(getSuggestionLookupKey(item))?.status === 'error');
+      setToast({
+        type: 'error',
+        title: 'Taslak Açılamadı',
+        message: hasLookupError
+          ? 'Taslak verisi şu anda alınamadı. Lütfen öneri listesinden tekrar deneyin.'
+          : getSuggestionResolveFailureMessage(candidateItems[0], products, supplierMap),
+      });
+      clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
       suggestionAutoOpenSignatureRef.current = '';
       return;
     }
@@ -5376,6 +5532,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     }
   }, [
     clearPurchaseSuggestionNavigationContext,
+    fetchSuggestionSupplierProductRows,
     isCatalogPage,
     isLoading,
     isRowsLoading,
@@ -5387,6 +5544,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     products,
     rows,
     searchParams,
+    suggestionLookupRevision,
     supplierMap,
   ]);
 

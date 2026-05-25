@@ -386,6 +386,69 @@
   box-shadow: none;
 }
 
+.table-pagination--compact {
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 0 0 10px 10px;
+  background: #ffffff;
+}
+
+.table-pagination--compact .table-pagination-summary {
+  gap: 5px;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.table-pagination--compact .table-pagination-total {
+  color: #94a3b8;
+}
+
+.table-pagination--compact .table-pagination-actions {
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.table-pagination--compact .table-page-input {
+  width: 40px;
+  max-width: 40px;
+  flex: 0 0 40px;
+  height: 28px;
+  border-radius: 7px;
+  padding: 0 6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.table-pagination--compact .table-pagination-actions .ghost-button,
+.table-pagination--compact .table-pagination-actions .primary-button {
+  min-height: 28px;
+  height: 28px;
+  min-width: 0;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.table-pagination--compact .table-pagination-actions .ghost-button,
+.table-pagination--compact .table-pagination-actions .primary-button {
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #475569;
+}
+
+.table-pagination--compact .table-pagination-actions .ghost-button:hover:not(:disabled),
+.table-pagination--compact .table-pagination-actions .primary-button:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1f2937;
+}
+
+.table-pagination--compact .table-pagination-actions .primary-button {
+  color: #3730a3;
+  border-color: #c7d2fe;
+}
+
 @media (max-width: 640px) {
   .table-pagination {
     flex-direction: column;
@@ -402,6 +465,14 @@
 
   .table-pagination-actions > * {
     flex: 1;
+  }
+
+  .table-pagination--compact .table-pagination-actions {
+    flex-wrap: wrap;
+  }
+
+  .table-pagination--compact .table-pagination-actions > * {
+    flex: 0 0 auto;
   }
 }
 

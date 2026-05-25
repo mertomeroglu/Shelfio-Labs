@@ -4,6 +4,7 @@
   Boxes,
   BrainCircuit,
   ClipboardList,
+  Clock,
   Megaphone,
   ChevronDown,
   LayoutDashboard,
@@ -52,6 +53,7 @@ export default function Sidebar({ isOpen, onClose, settings, effectivePermission
       { to: '/eslesmeler', label: 'Eşleşmeler', icon: Link2, permission: 'supplier:view' },
       { to: '/lokasyon-yonetimi', label: 'Lokasyon Yönetimi', icon: Monitor, permission: 'section:view' },
       { to: '/stok-islemleri', label: 'Stok İşlemleri', icon: Boxes, permission: 'stock:view' },
+      { to: '/skt-takibi', label: 'SKT Takibi', icon: Clock, permission: 'stock:view' },
     ],
     []
   );

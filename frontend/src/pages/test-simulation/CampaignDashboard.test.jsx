@@ -1,7 +1,7 @@
 ﻿import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Settings from '../system-settings/Settings.jsx';
+import CampaignManagement from '../campaign-management/CampaignManagement.jsx';
 
 const mockSettingsGet = vi.fn();
 const mockSettingsUpdate = vi.fn();
@@ -9,8 +9,10 @@ const mockGetLoginActivities = vi.fn();
 const mockGetAuditLogs = vi.fn();
 const mockGetDeveloperLogs = vi.fn();
 const mockCategoryList = vi.fn();
+const mockCategoryLabelList = vi.fn();
 const mockDashboard = vi.fn();
 const mockPricingAnalysis = vi.fn();
+const mockCampaignSuggestions = vi.fn();
 const mockPurchaseSuggestions = vi.fn();
 const mockProductList = vi.fn();
 const mockUserList = vi.fn();
@@ -34,7 +36,10 @@ vi.mock('../../services/settingsService.js', () => ({
 }));
 
 vi.mock('../../services/categoryService.js', () => ({
-  categoryService: { list: (...args) => mockCategoryList(...args) },
+  categoryService: {
+    list: (...args) => mockCategoryList(...args),
+    listLabels: (...args) => mockCategoryLabelList(...args),
+  },
 }));
 
 vi.mock('../../services/productService.js', () => ({
@@ -47,6 +52,10 @@ vi.mock('../../services/reportService.js', () => ({
 
 vi.mock('../../services/pricingAnalysisService.js', () => ({
   pricingAnalysisService: { getAnalysis: (...args) => mockPricingAnalysis(...args) },
+}));
+
+vi.mock('../../services/campaignAnalysisService.js', () => ({
+  campaignAnalysisService: { getSuggestions: (...args) => mockCampaignSuggestions(...args) },
 }));
 
 vi.mock('../../services/procurementService.js', () => ({
@@ -67,7 +76,7 @@ vi.mock('../../services/customerAdminService.js', () => ({
 const renderCampaignPage = () => render(
   <MemoryRouter initialEntries={['/kampanya-yonetimi']}>
     <Routes>
-      <Route path="/kampanya-yonetimi" element={<Settings />} />
+      <Route path="/kampanya-yonetimi" element={<CampaignManagement />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -84,6 +93,7 @@ describe('CampaignDashboard', () => {
     mockGetAuditLogs.mockResolvedValue([]);
     mockGetDeveloperLogs.mockResolvedValue([]);
     mockCategoryList.mockResolvedValue([{ id: 'c1', name: 'Sut' }]);
+    mockCategoryLabelList.mockResolvedValue([]);
     mockProductList.mockResolvedValue([
       { id: 'p1', name: 'Milk', categoryId: 'c1', categoryName: 'Sut', brand: 'Mis', currentStock: 60, avgDailySales: 0.5, currentPrice: 100, cost: 65, daysToExpiry: 3 },
       { id: 'p2', name: 'Cheese', categoryId: 'c1', categoryName: 'Sut', brand: 'Mis', currentStock: 55, avgDailySales: 1, currentPrice: 120, cost: 70, daysToExpiry: 12 },
@@ -104,6 +114,34 @@ describe('CampaignDashboard', () => {
         competitorMismatch: [],
       },
     });
+    mockCampaignSuggestions.mockResolvedValue({
+      rows: [],
+      eligibleProductCount: 3,
+      suggestions: Array.from({ length: 5 }, (_, index) => ({
+        id: `test-campaign-suggestion-${index + 1}`,
+        title: `Kampanya Önerisi ${index + 1}`,
+        type: 'product',
+        sourceModule: 'product',
+        moduleLabel: 'Ürün Bazlı',
+        recommendationType: 'discount_opportunity',
+        priority: index === 0 ? 'high' : 'medium',
+        affectedProductCount: 1,
+        productIds: ['p1'],
+        recommendedDiscount: 10 + index,
+        reason: 'Satış ve stok sinyali kampanya için uygun.',
+        suggestedAction: 'Kampanya oluştur',
+      })),
+      suppressedSuggestions: [
+        {
+          id: 'suppressed-test-campaign-suggestion',
+          title: 'Bastırılmış öneri',
+          type: 'product',
+          sourceModule: 'product',
+          isSuppressed: true,
+          affectedProductCount: 0,
+        },
+      ],
+    });
     mockPurchaseSuggestions.mockResolvedValue([{ id: 's1', productId: 'p1', productName: 'Milk', currentStock: 45, avgDailySales: 1 }]);
   });
 
@@ -111,24 +149,56 @@ describe('CampaignDashboard', () => {
     renderCampaignPage();
 
     expect(await screen.findByText('Ana Sayfa Karar Özeti')).toBeInTheDocument();
-    expect((await screen.findAllByText('Önerilen Kampanyalar')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('Kampanya Öneri Adayları')).length).toBeGreaterThan(0);
     expect((await screen.findAllByRole('button', { name: /Kampanya Oluştur/i })).length).toBeGreaterThan(0);
-    expect((await screen.findAllByRole('button', { name: /Detay/i })).length).toBeGreaterThanOrEqual(5);
+    const actionMenus = await screen.findAllByRole('button', { name: /Diğer aksiyonlar/i });
+    expect(actionMenus.length).toBeGreaterThanOrEqual(5);
+    await userEvent.click(actionMenus[0]);
+    expect(await screen.findByRole('menuitem', { name: /Detay/i })).toBeInTheDocument();
   });
 
-  test('tabs are actionable and can switch to Genel view', async () => {
+  test('tabs are actionable and can switch to product view', async () => {
     const user = userEvent.setup();
     renderCampaignPage();
 
-    const genelTab = await screen.findByRole('tab', { name: /Genel/i });
-    await user.click(genelTab);
+    const productTab = await screen.findByRole('tab', { name: /Ürün Bazlı/i });
+    await user.click(productTab);
 
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /Genel/i })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('tab', { name: /Ürün Bazlı/i })).toHaveAttribute('aria-selected', 'true');
     });
   });
 
-  test('assigns a gift card to a customer from the gift card tab', async () => {
+  test('keeps campaign drafts isolated between category, product and brand tabs', async () => {
+    const user = userEvent.setup();
+    renderCampaignPage();
+
+    await user.click(await screen.findByRole('tab', { name: /Kategori Bazlı/i }));
+    await user.type(await screen.findByLabelText(/Kampanya Adı/i), 'Hafta Sonu Kategori İndirimi');
+    await user.clear(screen.getByLabelText(/İndirim Oranı/i));
+    await user.type(screen.getByLabelText(/İndirim Oranı/i), '20');
+    await user.type(screen.getByLabelText(/Başlangıç Tarihi/i), '2026-06-01');
+    await user.type(screen.getByLabelText(/Bitiş Tarihi/i), '2026-06-07');
+
+    await user.click(screen.getByRole('tab', { name: /Ürün Bazlı/i }));
+    expect(screen.getByLabelText(/Kampanya Adı/i)).toHaveValue('');
+    expect(screen.getByLabelText(/İndirim Oranı/i)).toHaveValue(null);
+    await user.type(screen.getByLabelText(/Kampanya Adı/i), 'Ürün Taslağı');
+
+    await user.click(screen.getByRole('tab', { name: /Marka Bazlı/i }));
+    expect(screen.getByLabelText(/Kampanya Adı/i)).toHaveValue('');
+
+    await user.click(screen.getByRole('tab', { name: /Kategori Bazlı/i }));
+    expect(screen.getByLabelText(/Kampanya Adı/i)).toHaveValue('Hafta Sonu Kategori İndirimi');
+    expect(screen.getByLabelText(/İndirim Oranı/i)).toHaveValue(20);
+    expect(screen.getByLabelText(/Başlangıç Tarihi/i)).toHaveValue('2026-06-01');
+    expect(screen.getByLabelText(/Bitiş Tarihi/i)).toHaveValue('2026-06-07');
+
+    await user.click(screen.getByRole('tab', { name: /Ürün Bazlı/i }));
+    expect(screen.getByLabelText(/Kampanya Adı/i)).toHaveValue('Ürün Taslağı');
+  });
+
+  test('keeps the gift card tab on its separate draft flow', async () => {
     const user = userEvent.setup();
     mockSettingsGet.mockResolvedValueOnce({
       updatedAt: '2026-04-17T10:00:00.000Z',
@@ -145,14 +215,8 @@ describe('CampaignDashboard', () => {
     const giftCardTab = await screen.findByRole('tab', { name: /Hediye Kartı/i });
     await user.click(giftCardTab);
 
-    expect(await screen.findByRole('option', { name: /Zeynep Şahin/i })).toBeInTheDocument();
-
-    await user.selectOptions(screen.getByLabelText('Hediye Kartı'), 'GC100');
-    await user.selectOptions(screen.getByLabelText('Müşteri Seç'), 'cust-1');
-    await user.click(screen.getByRole('button', { name: /Müşteriye Ata/i }));
-
-    await waitFor(() => {
-      expect(mockAssignGiftCard).toHaveBeenCalledWith('cust-1', { code: 'GC100' });
-    });
+    expect(await screen.findByText('Yeni Hediye Kartı')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Kart Adı/i)).toHaveValue('');
+    expect(screen.queryByLabelText(/Kampanya Adı/i)).not.toBeInTheDocument();
   });
 });

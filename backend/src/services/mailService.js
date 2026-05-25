@@ -173,19 +173,24 @@ const buildInlineLogoAttachment = () => {
   };
 };
 
+const withLogoAttachment = (attachments = []) => {
+  const safeAttachments = Array.isArray(attachments) ? attachments : [];
+  if (safeAttachments.some((item) => item?.cid === MAIL_LOGO_CID)) {
+    return safeAttachments;
+  }
+
+  const logoAttachment = buildInlineLogoAttachment();
+  return logoAttachment ? [...safeAttachments, logoAttachment] : safeAttachments;
+};
+
 const withInlineLogoAttachment = (message = {}) => {
   const html = String(message.html || '');
   if (!html.includes(`cid:${MAIL_LOGO_CID}`)) {
     return message;
   }
 
-  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-  if (attachments.some((item) => item?.cid === MAIL_LOGO_CID)) {
-    return message;
-  }
-
-  const logoAttachment = buildInlineLogoAttachment();
-  if (!logoAttachment) {
+  const attachments = withLogoAttachment(message.attachments);
+  if (!attachments.some((item) => item?.cid === MAIL_LOGO_CID)) {
     return {
       ...message,
       html: html.replace(
@@ -198,7 +203,7 @@ const withInlineLogoAttachment = (message = {}) => {
 
   return {
     ...message,
-    attachments: [...attachments, logoAttachment],
+    attachments,
   };
 };
 
@@ -349,13 +354,7 @@ export const mailService = {
   previewTemplate(type = 'test', payload = {}) {
     const withPreviewAttachmentInfo = (content) => ({
       ...content,
-      attachments: [{
-        filename: 'shelfio-logo.png',
-        cid: MAIL_LOGO_CID,
-        path: MAIL_LOGO_PATH,
-        inline: true,
-        exists: fs.existsSync(MAIL_LOGO_PATH),
-      }],
+      attachments: withLogoAttachment(),
     });
     const normalizedType = String(type || 'test').trim().toLowerCase();
     if (normalizedType === 'support-ticket') {
@@ -425,7 +424,7 @@ export const mailService = {
       to: toList(config.supportMailTo),
       subject: 'Yeni Destek Talebi',
       replyTo: requesterEmail || config.supportMailReplyTo || undefined,
-      attachments,
+      attachments: withLogoAttachment(attachments),
       ...content,
     };
 
@@ -438,6 +437,7 @@ export const mailService = {
     const message = {
       from: buildFromValue(),
       to: [String(to || '').trim()].filter(Boolean),
+      attachments: withLogoAttachment(),
       subject: 'Shelfio Şifre Sıfırlama',
       ...content,
     };
@@ -452,6 +452,7 @@ export const mailService = {
       to: toList(config.supportMailTo),
       subject: 'SMTP Test Maili',
       replyTo: config.supportMailReplyTo || undefined,
+      attachments: withLogoAttachment(),
       ...content,
     };
 
@@ -471,6 +472,7 @@ export const mailService = {
       to: toList(config.supportMailTo),
       subject: 'Sistem Hata Bildirimi',
       replyTo: config.supportMailReplyTo || undefined,
+      attachments: withLogoAttachment(),
       ...content,
     };
     return sendMail(message, { context: 'system-error' });

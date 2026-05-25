@@ -89,7 +89,38 @@ const STOCK_ENTRY_WAITING_STATUSES = new Set(['stock_entry_pending']);
 const COMPLETED_PURCHASE_ORDER_STATUSES = new Set(['completed', 'archived']);
 
 const DASHBOARD_REFRESH_TIMEOUT_MS = 15000;
+const DASHBOARD_MONEY_COMPACT_THRESHOLD = 10000000;
+const DASHBOARD_MONEY_LARGE_THRESHOLD = 1000000;
 let dashboardCache = null;
+
+const formatDashboardMoney = (value) => {
+  const amount = Number(value);
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+
+  if (Math.abs(safeAmount) < DASHBOARD_MONEY_COMPACT_THRESHOLD) {
+    return formatCurrency(safeAmount);
+  }
+
+  const millionValue = safeAmount / 1000000;
+  const digits = Math.abs(millionValue) >= 10 ? 1 : 2;
+  return `₺${new Intl.NumberFormat('tr-TR', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(millionValue)} Mn`;
+};
+
+const getDashboardMoneyValueClassName = (value) => {
+  const amount = Math.abs(Number(value) || 0);
+  const classes = ['kpi-value', 'kpi-money-value'];
+
+  if (amount >= DASHBOARD_MONEY_COMPACT_THRESHOLD) {
+    classes.push('kpi-money-value-compact');
+  } else if (amount >= DASHBOARD_MONEY_LARGE_THRESHOLD) {
+    classes.push('kpi-money-value-large');
+  }
+
+  return classes.join(' ');
+};
 
 const withTimeout = (promise, timeoutMs, controller) => new Promise((resolve, reject) => {
   const timeoutId = window.setTimeout(() => {
@@ -849,8 +880,8 @@ export default function Dashboard() {
       <div className="kpi-grid">
         <div className="kpi-card primary"><div className="kpi-icon"><ShoppingCart size={24} /></div><div className="kpi-content"><span className="kpi-label">Günlük Satış</span><strong className="kpi-value">{overview.todaySalesCount || 0}</strong><span className={`kpi-trend ${salesCountTrend.tone}`.trim()}>{salesCountTrend.icon ? React.createElement(salesCountTrend.icon, { size: 12 }) : null}{salesCountTrend.icon ? ' ' : ''}{salesCountTrend.label}</span></div></div>
         <div className="kpi-card warning"><div className="kpi-icon"><AlertTriangle size={24} /></div><div className="kpi-content"><span className="kpi-label">Kritik Stok</span><strong className="kpi-value">{overview.criticalCount || 0}</strong><span className="kpi-hint">Acil aksiyon bekliyor</span></div></div>
-        <div className="kpi-card success"><div className="kpi-icon"><span className="kpi-currency-symbol">₺</span></div><div className="kpi-content"><span className="kpi-label">Günlük Ciro</span><strong className="kpi-value">{formatCurrency(overview.todaySalesRevenue || 0)}</strong><span className={`kpi-trend ${salesRevenueTrend.tone}`.trim()}>{salesRevenueTrend.icon ? React.createElement(salesRevenueTrend.icon, { size: 12 }) : null}{salesRevenueTrend.icon ? ' ' : ''}{salesRevenueTrend.label}</span></div></div>
-        <div className="kpi-card purple kpi-card-stock-value"><div className="kpi-icon"><Package size={24} /></div><div className="kpi-content"><span className="kpi-label">Toplam Stok Değeri</span><strong className="kpi-value">{formatCurrency(overview.totalStockValue || 0)}</strong><span className="kpi-hint">{overview.totalStockQuantity || 0} Birim Ürün</span></div></div>
+        <div className="kpi-card success kpi-card-money"><div className="kpi-icon"><span className="kpi-currency-symbol">₺</span></div><div className="kpi-content"><span className="kpi-label">Günlük Ciro</span><strong className={getDashboardMoneyValueClassName(overview.todaySalesRevenue)} title={formatCurrency(overview.todaySalesRevenue || 0)}>{formatDashboardMoney(overview.todaySalesRevenue || 0)}</strong><span className={`kpi-trend ${salesRevenueTrend.tone}`.trim()}>{salesRevenueTrend.icon ? React.createElement(salesRevenueTrend.icon, { size: 12 }) : null}{salesRevenueTrend.icon ? ' ' : ''}{salesRevenueTrend.label}</span></div></div>
+        <div className="kpi-card purple kpi-card-stock-value kpi-card-money"><div className="kpi-icon"><Package size={24} /></div><div className="kpi-content"><span className="kpi-label">Toplam Stok Değeri</span><strong className={`${getDashboardMoneyValueClassName(overview.totalStockValue)} kpi-money-value-full`} title={formatCurrency(overview.totalStockValue || 0)}>{formatCurrency(overview.totalStockValue || 0)}</strong><span className="kpi-hint">{overview.totalStockQuantity || 0} Birim Ürün</span></div></div>
         <div className="kpi-card orange"><div className="kpi-icon"><Activity size={24} /></div><div className="kpi-content"><span className="kpi-label">Günlük İşlem</span><strong className="kpi-value">{overview.todaySummary?.last24hOperationCount ?? overview.todaySummary?.movementCount ?? 0}</strong><span className="kpi-hint">Son 24 saat işlem</span></div></div>
         <div className="kpi-card blue"><div className="kpi-icon"><ClipboardList size={24} /></div><div className="kpi-content"><span className="kpi-label">Açık Görevler</span><strong className="kpi-value">{Number(overview.openTaskCount ?? operationalDistribution.openTasks ?? 0)}</strong><span className="kpi-hint">Operasyonel görevler</span></div></div>
         <div className="kpi-card slate"><div className="kpi-icon"><ShieldAlert size={24} /></div><div className="kpi-content"><span className="kpi-label">Erişim Talepleri</span><strong className="kpi-value">{accessAuditReport?.find((r) => r.metrik === 'Bekleyen Talepler')?.deger || 0}</strong><span className="kpi-hint">Onay bekleyen</span></div></div>

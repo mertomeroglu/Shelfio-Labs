@@ -91,6 +91,77 @@ test('campaign suggestions use precedence so one product gets one primary sugges
   assert.ok(result.suppressedSuggestions.some((item) => item.blockingReasons.includes('lower_precedence_overlap')));
 });
 
+test('campaign suggestions hard-suppress expired products before candidate selection', () => {
+  const result = buildEnhancedSuggestionsFromRows([
+    baseRow({
+      productId: 'expired-1',
+      productName: 'Expired Milk',
+      totalStock: 120,
+      avgDailySales: 0.4,
+      daysToExpiry: -2,
+      suggestedDiscount: 18,
+      riskScore: 99,
+      trendDirection: 'down',
+    }),
+    baseRow({
+      productId: 'valid-near-1',
+      productName: 'Valid Near Expiry',
+      totalStock: 80,
+      avgDailySales: 0.7,
+      daysToExpiry: 2,
+      riskScore: 90,
+    }),
+  ]);
+
+  assert.equal(result.suggestions.some((item) => item.productIds.includes('expired-1')), false);
+  assert.equal(result.suggestions.some((item) => item.id === 'near-expiry' && item.productIds.includes('valid-near-1')), true);
+  assert.equal(result.suppressedSuggestions.some((item) => (
+    item.productIds.includes('expired-1')
+    && item.recommendationType === 'expired_product'
+    && item.blockingReasons.includes('expired_product')
+    && item.blockingReasons.includes('expired_product_disposal_required')
+  )), true);
+  assert.equal(result.suppressedSuggestions.some((item) => (
+    item.productIds.includes('expired-1')
+    && ['near_expiry', 'overstock', 'slow_moving', 'discount_opportunity', 'demand_down', 'margin_watch'].includes(item.recommendationType)
+  )), false);
+});
+
+test('campaign suggestions keep today-last-day products eligible for SKT flow', () => {
+  const result = buildEnhancedSuggestionsFromRows([
+    baseRow({
+      productId: 'today-1',
+      productName: 'Today Last Day',
+      totalStock: 70,
+      avgDailySales: 0.8,
+      daysToExpiry: 0,
+      riskScore: 92,
+    }),
+  ]);
+
+  assert.equal(result.suggestions.length, 1);
+  assert.equal(result.suggestions[0].id, 'near-expiry');
+  assert.equal(result.suggestions[0].productIds.includes('today-1'), true);
+  assert.equal(result.suggestions[0].minDaysToExpiry, 0);
+});
+
+test('campaign suggestions keep future near-expiry products eligible', () => {
+  const result = buildEnhancedSuggestionsFromRows([
+    baseRow({
+      productId: 'future-near-1',
+      productName: 'Future Near Expiry',
+      totalStock: 75,
+      avgDailySales: 0.8,
+      daysToExpiry: 8,
+      riskScore: 85,
+    }),
+  ]);
+
+  assert.equal(result.suggestions.length, 1);
+  assert.equal(result.suggestions[0].id, 'near-expiry');
+  assert.equal(result.suggestions[0].productIds.includes('future-near-1'), true);
+});
+
 test('campaign suggestions return explicit scope payload and keep margin-watch non-discount', () => {
   const result = buildEnhancedSuggestionsFromRows([
     baseRow({ productId: 'margin-1', productName: 'Margin One', totalStock: 24, avgDailySales: 3, currentPrice: 100, purchasePrice: 94, riskScore: 40 }),
@@ -109,4 +180,17 @@ test('campaign suggestions return explicit scope payload and keep margin-watch n
   assert.equal(Boolean(discount.scopeName), true);
   assert.deepEqual(discount.blockingReasons, []);
   assert.equal(discount.isSuppressed, false);
+});
+
+test('campaign suggestions do not assign automatic suggestions to category or brand modules', () => {
+  const result = buildEnhancedSuggestionsFromRows([
+    baseRow({ productId: 'category-scope-1', totalStock: 120, avgDailySales: 0.6, riskScore: 88, categoryId: 'cat-x', categoryName: 'Category X' }),
+    baseRow({ productId: 'category-scope-2', totalStock: 110, avgDailySales: 0.7, riskScore: 86, categoryId: 'cat-x', categoryName: 'Category X' }),
+    baseRow({ productId: 'brand-scope-1', totalStock: 90, avgDailySales: 0.8, riskScore: 82, brand: 'Brand X' }),
+  ]);
+
+  const modules = result.suggestions.map((item) => item.primaryModule);
+  assert.equal(modules.includes('category'), false);
+  assert.equal(modules.includes('brand'), false);
+  assert.equal(result.suggestions.every((item) => item.type !== 'category' && item.type !== 'brand'), true);
 });

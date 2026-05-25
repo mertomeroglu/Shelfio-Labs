@@ -18,7 +18,9 @@ router.get('/categories', requirePermission(PERMISSIONS.POS_VIEW), posController
 router.get('/categories/:categoryId/products', requirePermission(PERMISSIONS.POS_VIEW), posController.getProductsByCategory);
 router.get('/products/search', requirePermission(PERMISSIONS.POS_VIEW), posController.searchProducts);
 router.get('/products/by-barcode/:barcode', requirePermission(PERMISSIONS.POS_VIEW), posController.findByBarcode);
+router.get('/sales/automatic/availability', requirePermission(PERMISSIONS.SETTINGS_UPDATE), posController.getAutomaticSaleAvailability);
 router.post('/sales/automatic', requirePermission(PERMISSIONS.SETTINGS_UPDATE), posController.createAutomaticSale);
+router.get('/sales/automatic/recent', requirePermission(PERMISSIONS.SETTINGS_UPDATE), posController.getAutomaticPanelTransactions);
 router.post('/sales', requirePermission(PERMISSIONS.POS_SALE), posController.completeSale);
 router.post('/returns', requirePermission(PERMISSIONS.POS_RETURN), posController.processReturn);
 router.get('/sales/today', requirePermission(PERMISSIONS.POS_VIEW), posController.getTodaySales);
@@ -26,5 +28,7 @@ router.get('/sales/all', requirePermission(PERMISSIONS.POS_VIEW), posController.
 router.get('/sales/reference/:ref', requirePermission(PERMISSIONS.POS_VIEW), posController.getSaleByReference);
 router.get('/sales/:id', requirePermission(PERMISSIONS.POS_VIEW), posController.getSaleById);
 router.get('/report/daily', requirePermission(PERMISSIONS.POS_VIEW), posController.getDailyReport);
+router.get('/day-end', requirePermission(PERMISSIONS.POS_VIEW), posController.listDayEndClosings);
+router.post('/day-end/close', requirePermission(PERMISSIONS.POS_DESK_MANAGE), posController.closeDayEnd);
 
 export default router;

@@ -62,7 +62,43 @@ let state = {
   error: '',
   remainingMs: null,
   returnAccumulator: 0,
+  recentTransactions: [],
 };
+
+const AUTO_SALE_DENSITY_RUNTIME = {
+  low: { minDelay: 14000, maxDelay: 20000, salesPerTick: 1 },
+  medium: { minDelay: 5000, maxDelay: 8000, salesPerTick: 1 },
+  high: { minDelay: 1200, maxDelay: 2500, salesPerTick: 2 },
+};
+
+const normalizeAutoSaleTransaction = (record = {}) => ({
+  referenceNo: record.referenceNo || '',
+  type: record.type || 'sale',
+  totalAmount: roundMoney(record.totalAmount || 0),
+  deskCode: record.deskCode || '',
+  paymentMethod: record.paymentMethod || '',
+  createdAt: record.createdAt || new Date().toISOString(),
+  itemCount: Array.isArray(record.items) ? record.items.reduce((sum, item) => sum + Math.max(0, Number(item?.quantity || 0)), 0) : 0,
+});
+
+const mergeRecentTransactions = (current = [], nextRows = []) => {
+  const byReference = new Map();
+  [...nextRows, ...current].forEach((row) => {
+    const normalized = normalizeAutoSaleTransaction(row);
+    if (!normalized.referenceNo || byReference.has(normalized.referenceNo)) return;
+    byReference.set(normalized.referenceNo, normalized);
+  });
+  return Array.from(byReference.values())
+    .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+    .slice(0, 5);
+};
+
+const getErrorMessage = (error) => (
+  error?.payload?.message
+  || error?.response?.message
+  || error?.message
+  || 'Otomatik satis olusturulamadi.'
+);
 
 const readStoredState = () => {
   if (typeof window === 'undefined') return;
@@ -76,9 +112,10 @@ const readStoredState = () => {
       active: parsed.active === true && (!endsAtMs || endsAtMs > Date.now()),
       config: normalizeConfig(parsed.config),
       summary: { ...DEFAULT_AUTO_SALE_SUMMARY, ...(parsed.summary || {}) },
-      error: parsed.error || '',
+      error: '',
       remainingMs: endsAtMs ? Math.max(0, endsAtMs - Date.now()) : null,
       returnAccumulator: Number(parsed.returnAccumulator || 0),
+      recentTransactions: Array.isArray(parsed.recentTransactions) ? parsed.recentTransactions.slice(0, 5) : [],
     };
     if (parsed.active === true && endsAtMs && endsAtMs <= Date.now()) {
       state.active = false;
@@ -96,8 +133,8 @@ const persist = () => {
       active: state.active,
       config: state.config,
       summary: state.summary,
-      error: state.error,
       returnAccumulator: state.returnAccumulator,
+      recentTransactions: state.recentTransactions,
     }));
   } catch {
     // ignore storage errors
@@ -145,6 +182,10 @@ const clearTimers = () => {
 
 const validateAutoSaleConfig = (config = state.config) => {
   const normalized = normalizeConfig(config);
+  const hasBlankMinAmount = String(normalized.minAmount ?? '').trim() === '';
+  const hasBlankMaxAmount = String(normalized.maxAmount ?? '').trim() === '';
+  const hasBlankMinProductCount = String(normalized.minProductCount ?? '').trim() === '';
+  const hasBlankMaxProductCount = String(normalized.maxProductCount ?? '').trim() === '';
   const minAmount = Number(normalized.minAmount);
   const maxAmount = Number(normalized.maxAmount);
   const minProductCount = Number(normalized.minProductCount);
@@ -153,6 +194,9 @@ const validateAutoSaleConfig = (config = state.config) => {
   if (!Array.isArray(normalized.deskCodes) || normalized.deskCodes.length === 0) {
     return 'En az bir kasa seçilmelidir.';
   }
+  if (hasBlankMinAmount || hasBlankMaxAmount) {
+    return 'Minimum ve maksimum tutar boş bırakılamaz.';
+  }
   if (!Number.isFinite(minAmount) || !Number.isFinite(maxAmount)) {
     return 'Minimum ve maksimum tutar boş bırakılamaz.';
   }
@@ -160,7 +204,10 @@ const validateAutoSaleConfig = (config = state.config) => {
     return 'Satış tutarları sıfırdan büyük olmalıdır.';
   }
   if (minAmount > maxAmount) {
-    return 'Minimum tutar maksimum tutardan büyük olamaz.';
+    return 'Minimum tutar, maksimum tutardan büyük olamaz.';
+  }
+  if (hasBlankMinProductCount || hasBlankMaxProductCount) {
+    return 'Minimum ve maksimum ürün çeşidi boş bırakılamaz.';
   }
   if (!Number.isFinite(minProductCount) || !Number.isFinite(maxProductCount) || minProductCount < 1 || maxProductCount < 1) {
     return 'Ürün çeşidi sayısı en az 1 olmalıdır.';
@@ -204,7 +251,8 @@ const scheduleNext = () => {
     return;
   }
 
-  const density = AUTO_SALE_DENSITY_OPTIONS.find((item) => item.value === state.config.density) || AUTO_SALE_DENSITY_OPTIONS[1];
+  const densityOption = AUTO_SALE_DENSITY_OPTIONS.find((item) => item.value === state.config.density) || AUTO_SALE_DENSITY_OPTIONS[1];
+  const density = { ...densityOption, ...(AUTO_SALE_DENSITY_RUNTIME[densityOption.value] || {}) };
   const delay = density.minDelay + Math.floor(Math.random() * (density.maxDelay - density.minDelay + 1));
   const safeDelay = endsAtMs ? Math.min(delay, Math.max(0, endsAtMs - Date.now())) : delay;
 
@@ -225,39 +273,54 @@ const createTick = async () => {
   runningTick = true;
   const config = normalizeConfig(state.config);
   const deskCodes = Array.isArray(config.deskCodes) ? config.deskCodes : [];
-  const deskCode = deskCodes[Math.floor(Math.random() * deskCodes.length)];
+  const densityOption = AUTO_SALE_DENSITY_OPTIONS.find((item) => item.value === config.density) || AUTO_SALE_DENSITY_OPTIONS[1];
+  const density = { ...densityOption, ...(AUTO_SALE_DENSITY_RUNTIME[densityOption.value] || {}) };
+  const saleCount = Math.max(1, Math.min(Number(density.salesPerTick || 1), Math.max(1, deskCodes.length), 3));
+  const selectedDeskCodes = [...deskCodes].sort(() => Math.random() - 0.5).slice(0, saleCount);
 
   try {
-    const response = await posService.createAutomaticSale({
-      deskCode,
-      minAmount: roundMoney(config.minAmount),
-      maxAmount: roundMoney(config.maxAmount),
-      minProductCount: Math.max(1, Math.floor(Number(config.minProductCount || 1))),
-      maxProductCount: Math.max(1, Math.floor(Number(config.maxProductCount || 1))),
-      returnRate: Math.max(0, Math.min(Number(config.returnRate || 0), 100)) / 100,
-      forceReturn: false,
-      source: AUTO_SALE_SOURCE,
-    });
-    const sale = response?.data || response;
-    const saleAmount = Number(sale?.totalAmount ?? 0);
-    const saleTime = sale?.createdAt || new Date().toISOString();
+    const createdSales = [];
+    const createdTransactions = [];
+
+    for (const deskCode of selectedDeskCodes) {
+      const response = await posService.createAutomaticSale({
+        deskCode,
+        minAmount: roundMoney(config.minAmount),
+        maxAmount: roundMoney(config.maxAmount),
+        minProductCount: Math.max(1, Math.floor(Number(config.minProductCount || 1))),
+        maxProductCount: Math.max(1, Math.floor(Number(config.maxProductCount || 1))),
+        returnRate: Math.max(0, Math.min(Number(config.returnRate || 0), 100)) / 100,
+        forceReturn: false,
+        source: AUTO_SALE_SOURCE,
+      });
+      const sale = response?.data || response;
+      createdSales.push(sale);
+      createdTransactions.push(sale);
+      if (sale?.automaticReturnRecord) {
+        createdTransactions.push(sale.automaticReturnRecord);
+      }
+    }
+
+    const saleAmount = createdSales.reduce((sum, sale) => sum + Number(sale?.totalAmount ?? 0), 0);
+    const saleTime = createdSales[createdSales.length - 1]?.createdAt || new Date().toISOString();
     commit({
       error: '',
       summary: {
         ...state.summary,
-        totalCount: Number(state.summary.totalCount || 0) + 1,
+        totalCount: Number(state.summary.totalCount || 0) + createdSales.length,
         totalAmount: roundMoney(Number(state.summary.totalAmount || 0) + saleAmount),
         lastSaleAt: saleTime,
         activeDeskCodes: deskCodes,
-        returnedCount: Number(state.summary.returnedCount || 0) + (sale?.automaticReturnCreated ? 1 : 0),
+        returnedCount: Number(state.summary.returnedCount || 0) + createdSales.filter((sale) => sale?.automaticReturnCreated).length,
       },
       returnAccumulator: state.returnAccumulator,
+      recentTransactions: mergeRecentTransactions(state.recentTransactions, createdTransactions),
     });
     runningTick = false;
     scheduleNext();
   } catch (error) {
     runningTick = false;
-    commit({ error: error?.message || 'Otomatik satış oluşturulamadı.' });
+    commit({ error: getErrorMessage(error) });
     autoSaleRunner.stop({ keepError: true });
   }
 };
@@ -279,6 +342,22 @@ export const autoSaleRunner = {
   },
   updateConfig(nextConfig) {
     commit({ config: normalizeConfig(nextConfig), error: '' });
+  },
+  clearError() {
+    if (!state.error) return;
+    commit({ error: '' });
+  },
+  async refreshRecentTransactions() {
+    try {
+      const response = await posService.getAutomaticPanelTransactions(5);
+      const rows = Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
+      commit({
+        recentTransactions: mergeRecentTransactions([], rows),
+        ...(rows.length ? { error: '' } : {}),
+      });
+    } catch {
+      // Recent transaction history is supportive; do not stop the runner.
+    }
   },
   validate: validateAutoSaleConfig,
   start(config) {
@@ -304,6 +383,7 @@ export const autoSaleRunner = {
       },
     });
     scheduleCountdown();
+    void this.refreshRecentTransactions();
     void createTick();
     return '';
   },
@@ -327,6 +407,7 @@ export const autoSaleRunner = {
       return;
     }
     scheduleCountdown();
+    void this.refreshRecentTransactions();
     scheduleNext();
   },
 };

@@ -45,6 +45,11 @@ const normalizeStock = (item = {}) => {
 
   return {
     ...item,
+    categoryId: item.categoryId || item.category_id || null,
+    categoryCode: item.categoryCode || item.category_code || item.category?.code || '',
+    categoryName: item.categoryName || item.category?.name || '',
+    etiket: item.etiket || item.labelName || '',
+    sktPolicy: item.sktPolicy || null,
     storageType: item.storageType || 'Ortam',
     totalStock: Number(item.totalStock ?? item.quantity ?? item.onHand ?? 0),
     quantity: Number(item.quantity ?? item.totalStock ?? item.onHand ?? 0),
@@ -145,6 +150,7 @@ export const stockService = {
     );
   },
   getMovementSummary: (params = {}) => api.get(`/stock/movements/summary${buildQueryString(params)}`),
+  getSktPolicyManualReview: (params = {}) => api.get(`/stock/skt-policy/manual-review${buildQueryString(params)}`),
   getExpiredBatchWarnings: async (params = {}) => {
     const { fetchAll = true, ...queryParams } = params || {};
     if (fetchAll !== true) {

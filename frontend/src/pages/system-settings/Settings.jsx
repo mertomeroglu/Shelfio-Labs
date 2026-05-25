@@ -1,5 +1,5 @@
-import SettingsCampaignShell from '../_shared/settings-campaign-shell/SettingsCampaignShell.jsx';
+import SystemSettingsShell from './SystemSettingsShell.jsx';
 
 export default function Settings() {
-  return <SettingsCampaignShell pageMode="settings" />;
+  return <SystemSettingsShell />;
 }

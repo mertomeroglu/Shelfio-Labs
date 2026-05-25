@@ -24,6 +24,8 @@ const uniq = (rows = []) => [...new Set(rows.map((value) => String(value || '').
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SALES_LOOKBACK_DAYS = 30;
 const DISCOUNT_RECOMMENDATION_TYPES = new Set(['slow-moving', 'near-expiry', 'overstock', 'discount-opportunity', 'demand-down']);
+const MANUAL_ONLY_CAMPAIGN_SUGGESTION_TYPES = new Set(['category', 'brand']);
+const EXPIRED_PRODUCT_BLOCKING_REASONS = Object.freeze(['expired_product', 'expired_product_disposal_required']);
 const SUGGESTION_PRECEDENCE = Object.freeze({
   'near-expiry': 100,
   overstock: 80,
@@ -38,12 +40,31 @@ const normalizeCampaignText = (value, fallback = '') => normalizeTurkishText(Str
   .replace(/\burun\b/gi, 'ürün')
   .replace(/\bürün\b/gi, 'ürün')
   .replace(/\bicin\b/gi, 'için')
+  .replace(/\bkisa\b/gi, 'kısa')
+  .replace(/\bsureli\b/gi, 'süreli')
+  .replace(/\btaslagi\b/gi, 'taslağı')
+  .replace(/\bolustur\b/gi, 'oluştur')
+  .replace(/\bolusturma\b/gi, 'oluşturma')
+  .replace(/\bonce\b/gi, 'önce')
+  .replace(/\bkapsamli\b/gi, 'kapsamlı')
+  .replace(/\bstogu\b/gi, 'stoğu')
+  .replace(/\bguvenli\b/gi, 'güvenli')
+  .replace(/\bkontrollu\b/gi, 'kontrollü')
+  .replace(/\bkorumali\b/gi, 'korumalı')
+  .replace(/\bkosullarini\b/gi, 'koşullarını')
   .replace(/\bindirim kampanyasi\b/gi, 'indirim kampanyası')
   .replace(/\bsatis\b/gi, 'satış')
   .replace(/\bhizi\b/gi, 'hızı')
   .replace(/\bdusuk\b/gi, 'düşük')
   .replace(/\byuksek\b/gi, 'yüksek')
   .replace(/\bgore\b/gi, 'göre')
+  .replace(/\bgercek\b/gi, 'gerçek')
+  .replace(/\byakin\b/gi, 'yakın')
+  .replace(/\bgun\b/gi, 'gün')
+  .replace(/\bcakismasi\b/gi, 'çakışması')
+  .replace(/\bonceliklendirildi\b/gi, 'önceliklendirildi')
+  .replace(/\bgecen\b/gi, 'geçen')
+  .replace(/\bkontrolunden\b/gi, 'kontrolünden')
   .replace(/\s+/g, ' ')
   .trim();
 
@@ -140,13 +161,20 @@ const getStockGuardrail = (row = {}) => {
 const campaignMatchesRow = (campaign = {}, row = {}) => {
   const productId = String(row.productId || '').trim();
   const categoryId = String(row.categoryId || '').trim();
+  const categoryLabelId = String(row.labelId || row.tagId || row.selectedTagId || row.categoryLabelId || '').trim();
+  const categoryLabelName = normalizeKey(row.etiket || row.categoryLabelName || row.labelName || row.tag || '');
   const brand = normalizeKey(row.brand);
   const targetProducts = safeArray(campaign.targetProductIds).map(String);
   const targetCategories = safeArray(campaign.targetCategoryIds).map(String);
+  const targetCategoryLabelIds = safeArray(campaign.targetCategoryLabelIds).map(String);
+  const targetCategoryLabels = safeArray(campaign.targetCategoryLabels).map(normalizeKey);
   const targetBrands = safeArray(campaign.targetBrands).map(normalizeKey);
-  const hasExplicitScope = targetProducts.length || targetCategories.length || targetBrands.length;
+  const hasExplicitScope = targetProducts.length || targetCategories.length || targetCategoryLabelIds.length || targetBrands.length;
+  const labelMatched = targetCategoryLabelIds.length
+    ? (categoryLabelId && targetCategoryLabelIds.includes(categoryLabelId)) || (categoryLabelName && targetCategoryLabels.includes(categoryLabelName))
+    : true;
   if (targetProducts.includes(productId)) return true;
-  if (categoryId && targetCategories.includes(categoryId)) return true;
+  if (categoryId && targetCategories.includes(categoryId) && labelMatched) return true;
   if (brand && targetBrands.includes(brand)) return true;
   return !hasExplicitScope && !['product', 'category', 'brand'].includes(String(campaign.type || '').toLowerCase());
 };
@@ -240,14 +268,15 @@ const enrichRowWithGuardrails = (row = {}, { activeCampaigns = [], procurementCo
 });
 
 const getSuggestionModule = (id, type = 'product') => {
-  if (id === 'near-expiry') return 'expiry';
+  if (id === 'near-expiry' || id === 'expired-product') return 'expiry';
   if (id === 'slow-moving' || id === 'demand-down') return 'sales';
-  if (id === 'overstock') return type === 'category' ? 'category' : 'product';
-  if (id === 'margin-watch') return type === 'brand' ? 'brand' : 'product';
-  return type === 'category' || type === 'brand' ? type : 'product';
+  return 'product';
 };
 
 const resolveScope = (rows = [], type = 'product') => {
+  if (MANUAL_ONLY_CAMPAIGN_SUGGESTION_TYPES.has(String(type || '').toLowerCase())) {
+    type = 'product';
+  }
   if (type === 'category') {
     const categoryIds = uniq(rows.map((row) => row.categoryId));
     const categoryNames = uniq(rows.map((row) => row.category));
@@ -295,9 +324,13 @@ const createSuppressedSuggestion = ({ id, row, blockingReasons = [], sourceMetri
   categoryIds: row.categoryId ? [row.categoryId] : [],
   categoryNames: row.category && row.category !== '-' ? [row.category] : [],
   brandNames: row.brand && row.brand !== '-' ? [row.brand] : [],
-  reasonCodes: ['campaign_guardrail_suppressed'],
+  reasonCodes: id === 'expired-product'
+    ? ['campaign_guardrail_suppressed', 'expired_product', 'expired_product_disposal_required']
+    : ['campaign_guardrail_suppressed'],
   blockingReasons: uniq(blockingReasons),
-  suggestedAction: 'Kampanya olusturma; stok, aktif kampanya veya tedarik durumunu kontrol et.',
+  suggestedAction: id === 'expired-product'
+    ? 'Kampanya oluşturma; SKT geçmiş ürün için imha / iade değerlendirmesi yap.'
+    : 'Kampanya oluşturma; stok, aktif kampanya veya tedarik durumunu kontrol et.',
   recommendedDiscount: 0,
   recommendedDiscountRate: 0,
   riskLevel: 'blocked',
@@ -311,6 +344,9 @@ const createSuppressedSuggestion = ({ id, row, blockingReasons = [], sourceMetri
 
 const getRowBlockingReasons = (row = {}, suggestionId) => {
   const reasons = [];
+  if (row.daysToExpiry != null && toNumber(row.daysToExpiry, 0) < 0) {
+    reasons.push(...EXPIRED_PRODUCT_BLOCKING_REASONS);
+  }
   if (row.activeCampaignConflict) reasons.push('active_campaign_conflict');
   if (DISCOUNT_RECOMMENDATION_TYPES.has(suggestionId)) {
     if (!row.stockGuardrail?.discountEligible) reasons.push(...safeArray(row.stockGuardrail?.blockingReasons));
@@ -336,11 +372,6 @@ const filterRowsForSuggestion = ({ id, rows = [], assignedProductIds = new Set()
     }
     return true;
   });
-
-const chooseOverstockScopeType = (rows = []) => {
-  const categories = uniq(rows.map((row) => row.categoryId || row.category));
-  return categories.length === 1 && rows.length >= 2 ? 'category' : 'product';
-};
 
 const buildEnhancedSuggestion = ({
   id,
@@ -385,7 +416,7 @@ const buildEnhancedSuggestion = ({
     module: primaryModule,
     priority,
     riskLevel: priority,
-    suggestedAction: suggestedAction || 'Kampanya taslagi olusturulmadan once stok, marj ve tedarik guardrail sonucunu kontrol et.',
+    suggestedAction: normalizeCampaignText(suggestedAction || 'Kampanya taslağı oluşturulmadan önce stok, marj ve tedarik guardrail sonucunu kontrol et.'),
     recommendedDiscount: clamp(Math.round(recommendedDiscount), 0, 80),
     recommendedDiscountRate: clamp(Math.round(recommendedDiscount), 0, 80),
     reasonCodes: uniq(reasonCodes),
@@ -422,24 +453,34 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
     .map(normalizeCampaignRow)
     .filter((row) => row.productId)
     .map((row) => enrichRowWithGuardrails(row, context));
+  const eligibleSourceRows = sourceRows.filter((row) => {
+    if (row.daysToExpiry == null || row.daysToExpiry >= 0) return true;
+    suppressed.push(createSuppressedSuggestion({
+      id: 'expired-product',
+      row,
+      blockingReasons: EXPIRED_PRODUCT_BLOCKING_REASONS,
+      sourceMetrics: buildRowSourceMetrics(row),
+    }));
+    return false;
+  });
 
-  const slowRowsRaw = sourceRows
+  const slowRowsRaw = eligibleSourceRows
     .filter((row) => row.salesVelocity <= 1.2 && row.stockLevel > 0)
     .sort((a, b) => b.riskScore - a.riskScore)
     .slice(0, 12);
-  const expiryRowsRaw = sourceRows
-    .filter((row) => row.daysToExpiry != null && row.daysToExpiry <= 14 && row.stockLevel > 0)
+  const expiryRowsRaw = eligibleSourceRows
+    .filter((row) => row.daysToExpiry != null && row.daysToExpiry >= 0 && row.daysToExpiry <= 14 && row.stockLevel > 0)
     .sort((a, b) => a.daysToExpiry - b.daysToExpiry || b.riskScore - a.riskScore)
     .slice(0, 12);
-  const overstockRowsRaw = sourceRows
+  const overstockRowsRaw = eligibleSourceRows
     .filter((row) => row.stockLevel >= Math.max(20, row.salesVelocity * 21))
     .sort((a, b) => b.stockLevel - a.stockLevel)
     .slice(0, 12);
-  const lowMarginRowsRaw = sourceRows
+  const lowMarginRowsRaw = eligibleSourceRows
     .filter((row) => row.currentMarginPercent != null && row.currentMarginPercent < 12 && row.stockLevel > 0)
     .sort((a, b) => a.currentMarginPercent - b.currentMarginPercent)
     .slice(0, 8);
-  const discountOpportunityRowsRaw = sourceRows
+  const discountOpportunityRowsRaw = eligibleSourceRows
     .filter((row) => (
       row.suggestedDiscount >= 8
       && row.currentMarginPercent != null
@@ -448,7 +489,7 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
     ))
     .sort((a, b) => b.suggestedDiscount - a.suggestedDiscount || b.currentMarginPercent - a.currentMarginPercent)
     .slice(0, 10);
-  const demandDownRowsRaw = sourceRows
+  const demandDownRowsRaw = eligibleSourceRows
     .filter((row) => (
       row.stockLevel > 0
       && (
@@ -459,7 +500,6 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
     ))
     .sort((a, b) => b.riskScore - a.riskScore)
     .slice(0, 10);
-
   const candidateSpecs = [
     {
       id: 'near-expiry',
@@ -474,24 +514,23 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
         reasonCodes: ['near_expiry', 'expiry_pressure', 'stock_guardrail_passed'],
         suggestedAction: expiryRows.some((row) => row.stockGuardrail?.isLowStock)
           ? 'Kisa sureli, kontrollu SKT aksiyonu planla; agresif indirim uygulama.'
-          : 'SKT baskisi olan urunler icin kisa sureli kampanya taslagi olustur.',
+          : 'SKT baskısı olan ürünler için kısa süreli kampanya taslağı oluştur.',
       }),
     },
     {
       id: 'overstock',
       rows: overstockRowsRaw,
       build: (overstockRows) => {
-        const type = chooseOverstockScopeType(overstockRows);
         return buildEnhancedSuggestion({
           id: 'overstock',
           title: `${overstockRows.length} urun icin stok eritme kampanyasi`,
           reason: 'Stok seviyesi mevcut satis hizina gore yuksek ve tedarik/stok guardrail kontrolunden gecti.',
           rows: overstockRows,
           recommendedDiscount: 14,
-          type,
+          type: 'product',
           priority: 'medium',
-          reasonCodes: ['overstock', type === 'category' ? 'category_scope' : 'product_scope', 'stock_guardrail_passed'],
-          suggestedAction: type === 'category' ? 'Kategori kapsamli stok eritme kampanyasi taslagi olustur.' : 'Urun bazli stok eritme aksiyonu taslagi olustur.',
+          reasonCodes: ['overstock', 'product_scope', 'stock_guardrail_passed'],
+          suggestedAction: 'Ürün bazlı stok eritme aksiyonu taslağı oluştur.',
         });
       },
     },
@@ -506,7 +545,7 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
         recommendedDiscount: 16,
         priority: slowRows.some((row) => row.riskLevel === 'critical' || row.riskLevel === 'high') ? 'high' : 'medium',
         reasonCodes: ['slow_moving', 'demand_down', 'stock_guardrail_passed'],
-        suggestedAction: 'Yavas satan ve stogu guvenli urunler icin kontrollu indirim kampanyasi taslagi olustur.',
+        suggestedAction: 'Yavaş satan ve stoğu güvenli ürünler için kontrollü indirim kampanyası taslağı oluştur.',
       }),
     },
     {
@@ -542,13 +581,13 @@ const buildEnhancedSuggestionsFromRows = (rows = [], context = {}) => {
       rows: lowMarginRowsRaw,
       build: (lowMarginRows) => buildEnhancedSuggestion({
         id: 'margin-watch',
-        title: `${lowMarginRows.length} dusuk marjli urunde korumali izleme`,
+        title: `${lowMarginRows.length} düşük marjlı üründe korumalı izleme`,
         reason: 'Marj seviyesi indirim icin riskli; dogrudan indirim yerine fiyat/maliyet izleme sinyali uretildi.',
         rows: lowMarginRows,
         recommendedDiscount: 0,
         priority: 'medium',
         reasonCodes: ['margin_watch', 'discount_not_recommended', 'margin_protection'],
-        suggestedAction: 'Indirim olusturma; fiyat, maliyet ve tedarik kosullarini kontrol et.',
+        suggestedAction: 'İndirim oluşturma; fiyat, maliyet ve tedarik koşullarını kontrol et.',
       }),
     },
   ].sort((left, right) => (SUGGESTION_PRECEDENCE[right.id] || 0) - (SUGGESTION_PRECEDENCE[left.id] || 0));
@@ -724,17 +763,24 @@ const buildSimulationProductWhere = (payload = {}) => {
   };
   const productIds = uniq([...safeArray(payload.productIds), ...safeArray(payload.targetProductIds)]);
   const categoryIds = uniq([...safeArray(payload.categoryIds), ...safeArray(payload.targetCategoryIds)]);
+  const categoryLabelIds = uniq([...safeArray(payload.categoryLabelIds), ...safeArray(payload.targetCategoryLabelIds)]);
+  const categoryLabels = uniq([...safeArray(payload.categoryLabels), ...safeArray(payload.targetCategoryLabels)]);
   const brands = uniq([...safeArray(payload.brands), ...safeArray(payload.targetBrands), payload.targetBrand]);
 
   if (type === 'product' && productIds.length) {
     where.id = { in: productIds };
   } else if (type === 'category' && categoryIds.length) {
     where.categoryId = { in: categoryIds };
+    if (categoryLabels.length) {
+      where.OR = [
+        ...categoryLabels.map((label) => ({ etiket: { equals: label, mode: 'insensitive' } })),
+      ];
+    }
   } else if (type === 'brand' && brands.length) {
     where.OR = brands.map((brand) => ({ brand: { equals: brand, mode: 'insensitive' } }));
   }
 
-  return { where, type, productIds, categoryIds, brands };
+  return { where, type, productIds, categoryIds, categoryLabelIds, brands };
 };
 
 const buildSalesMetricsByProduct = (sales = []) => {
@@ -921,14 +967,19 @@ export const campaignAnalysisService = {
       listActiveCampaignDefinitions({ settings }).catch(() => []),
       buildProcurementContext(),
     ]);
-    const responseLimit = Math.min(1000, Math.max(50, toNumber(query.limit, 500)));
+    const isFullPayload = query.full === true || query.full === 'true';
+    const defaultLimit = isFullPayload ? 500 : 80;
+    const minimumLimit = isFullPayload ? 50 : 10;
+    const maximumLimit = isFullPayload ? 1000 : 200;
+    const responseLimit = Math.min(maximumLimit, Math.max(minimumLimit, toNumber(query.limit, defaultLimit)));
     const normalizedRows = safeArray(analysis.rows).map(normalizeCampaignRow);
     const eligibleProductCount = toNumber(analysis?.summary?.totalAnalyzedProducts, normalizedRows.length);
     const rows = normalizedRows
       .map((row) => enrichRowWithGuardrails(row, { activeCampaigns, procurementContext }))
       .sort((left, right) => toNumber(right.riskScore, 0) - toNumber(left.riskScore, 0))
       .slice(0, responseLimit);
-    const suggestionResult = buildEnhancedSuggestionsFromRows(analysis.rows, { activeCampaigns, procurementContext });
+    const suggestionSourceRows = isFullPayload ? analysis.rows : rows;
+    const suggestionResult = buildEnhancedSuggestionsFromRows(suggestionSourceRows, { activeCampaigns, procurementContext });
     return {
       generatedAt: new Date().toISOString(),
       source: 'backend_analysis_engine',

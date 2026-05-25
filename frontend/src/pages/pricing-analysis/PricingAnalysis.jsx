@@ -1,6 +1,6 @@
-﻿import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, BadgePercent, BarChart3, Boxes, Calculator, CheckCircle2, Clock3, Filter, Layers, RefreshCw, Search, ShieldCheck, ShieldAlert, Sparkles, TrendingUp, X } from 'lucide-react';
+﻿import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AlertTriangle, BadgePercent, BarChart3, Boxes, Calculator, CheckCircle2, Clock3, Filter, Layers, MoreHorizontal, RefreshCw, Search, ShieldCheck, ShieldAlert, Sparkles, TrendingUp, X } from 'lucide-react';
 import { ResponsiveContainer, BarChart as RBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip } from 'recharts';
 import PageHeader from '../../components/PageHeader';
 import FilterBar from '../../components/FilterBar';
@@ -33,6 +33,8 @@ import {
   toggleSelectedIds,
 } from './utils/pricingRecommendationsUtils';
 import { isCatalogUnlistedProduct } from '../../utils/productListing.js';
+import { usePricingFilters } from './hooks/usePricingFilters.js';
+import PricingTablePagination from './components/PricingTablePagination.jsx';
 
 const currency = new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' });
 
@@ -41,18 +43,78 @@ const FILTER_DEFAULTS = {
   sktStatus: '',
   salesSpeed: '',
   hasSuggestion: '',
+  primaryAction: '',
+  categoryId: '',
+  supplierId: '',
+  campaignEligibility: '',
+  conflict: '',
+  blockingReason: '',
+  activeCampaignConflict: '',
+  guardrail: '',
+};
+
+const SKT_STATUS_FILTER_VALUES = new Set(['safe', 'soon', 'critical']);
+
+const normalizeSktStatusFilterValue = (value) => {
+  const key = normalizeTextKey(value).replace(/[_\s-]+/g, '-');
+  if (!key || ['all', 'tum', 'tum-durumlar', 'tüm-durumlar'].includes(key)) return '';
+  if (['safe', 'normal', 'ok', 'guvenli', 'güvenli'].includes(key)) return 'safe';
+  if (['soon', 'near', 'upcoming', 'yaklasiyor', 'yaklaşıyor', 'high'].includes(key)) return 'soon';
+  if (['critical', 'kritik', 'expired', 'past-due', 'overdue'].includes(key)) return 'critical';
+  return SKT_STATUS_FILTER_VALUES.has(key) ? key : '';
+};
+
+const isAllSktStatusesSelected = (value) => {
+  if (!Array.isArray(value)) return false;
+  const selected = new Set(value.map(normalizeSktStatusFilterValue).filter(Boolean));
+  return SKT_STATUS_FILTER_VALUES.size > 0 && selected.size === SKT_STATUS_FILTER_VALUES.size;
+};
+
+const normalizeSktStatusFilter = (value) => {
+  if (Array.isArray(value)) {
+    if (!value.length || isAllSktStatusesSelected(value)) return '';
+    return value.map(normalizeSktStatusFilterValue).filter(Boolean);
+  }
+  return normalizeSktStatusFilterValue(value);
+};
+
+const rowMatchesSktStatusFilter = (row, filterValue) => {
+  const normalizedFilter = normalizeSktStatusFilter(filterValue);
+  if (!normalizedFilter || (Array.isArray(normalizedFilter) && normalizedFilter.length === 0)) return true;
+
+  const rowStatus = normalizeSktKey(row?.expirationRisk || row?.sktStatus || row?.expiryRisk || row?.expirationStatus, '');
+  if (!rowStatus) return false;
+  if (Array.isArray(normalizedFilter)) return normalizedFilter.includes(rowStatus);
+  return rowStatus === normalizedFilter;
+};
+
+const PRICING_ACTION_TYPES = {
+  DISCOUNT: 'discount_action',
+  WATCH: 'watch_only',
+  HOLD: 'hold_price',
+  ORDER: 'order_priority',
+  CAMPAIGN: 'campaign_candidate',
+};
+
+const PRICING_ACTION_LABELS = {
+  [PRICING_ACTION_TYPES.DISCOUNT]: 'Aksiyon Gerekli',
+  [PRICING_ACTION_TYPES.WATCH]: 'İzlenmeli',
+  [PRICING_ACTION_TYPES.HOLD]: 'Fiyatı Koru',
+  [PRICING_ACTION_TYPES.ORDER]: 'Sipariş Baskısı',
+  [PRICING_ACTION_TYPES.CAMPAIGN]: 'Kampanya Adayı',
 };
 
 const PRESET_OPTIONS = [
-  { id: PRICE_PRESETS.nearExpiry, label: 'SKT Yaklaşanlar', ariaLabel: 'SKT Yaklasanlar' },
-  { id: PRICE_PRESETS.slowSelling, label: 'Yavaş Satış', ariaLabel: 'Yavas Satis' },
-  { id: PRICE_PRESETS.overstocked, label: 'Aşırı Stok', ariaLabel: 'Asiri Stok' },
-  { id: PRICE_PRESETS.highMargin, label: 'Yüksek Marj Potansiyeli', ariaLabel: 'Yuksek Marj Potansiyeli' },
+  { id: PRICE_PRESETS.nearExpiry, label: 'SKT Yaklaşanlar', ariaLabel: 'SKT Yaklaşanlar' },
+  { id: PRICE_PRESETS.slowSelling, label: 'Yavaş Satış', ariaLabel: 'Yavaş Satış' },
+  { id: PRICE_PRESETS.overstocked, label: 'Aşırı Stok', ariaLabel: 'Aşırı Stok' },
+  { id: PRICE_PRESETS.campaignEligible, label: 'Kampanyaya Alınabilir', ariaLabel: 'Kampanyaya Alınabilir' },
+  { id: PRICE_PRESETS.conflicted, label: 'Çakışmalı', ariaLabel: 'Çakışmalı' },
+  { id: PRICE_PRESETS.blocked, label: 'Bloklanan Öneriler', ariaLabel: 'Bloklanan Öneriler' },
 ];
 
 const BULK_ACTIONS = {
   APPLY_DISCOUNT: 'apply-discount',
-  ADD_CAMPAIGN: 'add-campaign',
   KEEP_PRICE: 'keep-price',
 };
 
@@ -68,11 +130,13 @@ const BULK_OPERATION_OPTIONS = [
   { value: 'fixed', label: 'Fiyatı sabit değere çek' },
 ];
 
+const PRICING_DECISION_ARCHIVE_STORAGE_KEY = 'shelfio.pricingAnalysis.decisionArchive.v1';
+
 const BULK_ROUNDING_OPTIONS = [
   { value: 'none', label: 'Küsuratı koru' },
   { value: 'x99', label: 'x,99 ile bitir' },
   { value: 'integer', label: 'En yakın tam sayıya yuvarla' },
-  { value: 'half', label: 'En yakın 0,50’ye yuvarla' },
+  { value: 'half', label: "En yakın 0,50'ye yuvarla" },
 ];
 
 const getProductPrice = (product) => normalizePrice(getProductDisplayPrice(product));
@@ -153,6 +217,10 @@ const formatTechnicalSourceLabel = (value, fallback = '-') => {
     default_policy: 'Varsayılan politika',
     sell_price_recommendation: 'Satış fiyatı önerisi',
     bulk_price_update: 'Toplu fiyat güncellemesi',
+    single_price_approval: 'Tekil fiyat onayı',
+    sell_price_advisor_modal: 'Ne Kadara Satmalıyım?',
+    bulk_price_update_modal: 'Toplu fiyat güncelleme',
+    price_action_rollback: 'Fiyat geri alma',
     update: 'Ürün güncellemesi',
     actual: 'Gerçek kayıt',
     estimated: 'Tahmini değer',
@@ -165,6 +233,13 @@ const USER_FACING_TECHNICAL_REPLACEMENTS = [
   [/\blogisticsTariffs\b/g, 'lojistik tarifeler'],
   [/\bdefaultPolicy\b/g, 'varsayılan politika'],
   [/\bdefault_policy\b/gi, 'varsayılan politika'],
+  [/\bexpiry[_\s-]*signal[_\s-]*ignored\b/gi, 'SKT sinyali dikkate alınmadı'],
+  [/\bweak[_\s-]*demand\b/gi, 'Talep zayıf'],
+  [/\bweak[_\s-]*replenishment\b/gi, 'Zayıf tedarik desteği'],
+  [/\boverstock[_\s-]*risk\b/gi, 'Stok seviyesi yüksek'],
+  [/\bactive[_\s-]*temporary[_\s-]*price[_\s-]*action\b/gi, 'Aktif geçici fiyat uygulaması'],
+  [/\bno[_\s-]*active[_\s-]*campaign[_\s-]*conflict\b/gi, 'Kampanya çakışması yok'],
+  [/\bmargin[_\s-]*guardrail[_\s-]*(passed|ok)\b/gi, 'Marj sınırı uygun'],
   [/\bambient\b/gi, 'Ortam'],
   [/\bchilled\b/gi, 'Soğuk'],
   [/\bfrozen\b/gi, 'Donuk'],
@@ -179,6 +254,17 @@ const formatUserFacingTechnicalText = (value, fallback = '-') => {
     text = text.replace(pattern, replacement);
   });
   return text
+    .replace(/\bregular\b/gi, 'satış')
+    .replace(/Efektif birim maliyet/gi, 'Tahmini birim maliyet')
+    .replace(/Hedef marj/gi, 'Hedef kârlılık')
+    .replace(/Beklenen marj/gi, 'Beklenen kârlılık')
+    .replace(/Beklenen brüt kâr/gi, 'Tahmini brüt kâr')
+    .replace(/Lojistik maliyeti/gi, 'Taşıma payı')
+    .replace(/Operasyonel maliyet/gi, 'Mağaza operasyon payı')
+    .replace(/Fire \/ SKT risk etkisi/gi, 'Fire ve SKT risk payı')
+    .replace(/\bpurchasePrice\/cost\b/gi, 'ürün alış maliyeti')
+    .replace(/\bpurchasePrice\b/gi, 'ürün alış maliyeti')
+    .replace(/\bcost\b/gi, 'maliyet')
     .replace(/\s*[•|]\s*/g, ' · ')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -206,7 +292,7 @@ const formatCalculationComponentDetail = (row = {}, calculation = null) => {
 
   if (labelKey.includes('lojistik')) {
     const logisticsLabel = sourceLabel || 'Lojistik tarife';
-    return `${logisticsLabel} · ${caseCount} koli / ${totalUnits} birim`;
+    return `${logisticsLabel} · yaklaşık ${caseCount} koli, toplam ${totalUnits} birim üzerinden`;
   }
   if (labelKey.includes('operasyon')) {
     return 'Operasyon varsayımı · koli elleçleme dahil';
@@ -287,6 +373,11 @@ const normalizeSktKey = (value, daysToExpiry) => {
 
 const normalizeActionKey = (value, fallback) => {
   const key = normalizeTextKey(value);
+  if (['discount_action', 'aksiyon gerekli', 'action required'].includes(key)) return PRICING_ACTION_TYPES.DISCOUNT;
+  if (['watch_only', 'izlenmeli', 'watch only', 'monitor'].includes(key)) return PRICING_ACTION_TYPES.WATCH;
+  if (['hold_price', 'fiyati koru', 'fiyatı koru', 'price hold'].includes(key)) return PRICING_ACTION_TYPES.HOLD;
+  if (['order_priority', 'siparis baskisi', 'sipariş baskısı', 'order priority'].includes(key)) return PRICING_ACTION_TYPES.ORDER;
+  if (['campaign_candidate', 'kampanya adayi', 'kampanya adayı', 'campaign candidate'].includes(key)) return PRICING_ACTION_TYPES.CAMPAIGN;
   if (['urgent', 'acil', 'critical', 'kritik', 'acil indirim'].includes(key)) return 'urgent';
   if (['discount', 'indirim', 'markdown', 'price decrease', 'fiyat dusur', 'fiyat düşür'].includes(key)) return 'discount';
   if (['keep', 'koru', 'fiyat koruma', 'protect', 'no change'].includes(key)) return 'keep';
@@ -294,6 +385,68 @@ const normalizeActionKey = (value, fallback) => {
   if (['none', 'no action', 'aksiyon yok'].includes(key)) return 'none';
   return fallback;
 };
+
+const TEMPORARY_PRICE_DURATION_BY_RISK = {
+  critical: 3,
+  high: 7,
+  medium: 14,
+  low: 21,
+};
+
+const getTemporaryPriceDurationDays = (riskLevel) => TEMPORARY_PRICE_DURATION_BY_RISK[normalizeRiskKey(riskLevel)] || TEMPORARY_PRICE_DURATION_BY_RISK.medium;
+
+const addDaysIso = (date, days) => {
+  const base = date instanceof Date ? date : new Date(date || Date.now());
+  return new Date(base.getTime() + Number(days || 0) * 24 * 60 * 60 * 1000).toISOString();
+};
+
+const formatDateShort = (value) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const getTemporaryPriceValidity = (row = {}, referenceDate = new Date()) => {
+  const durationDays = Number(row.durationDays || getTemporaryPriceDurationDays(row.riskLevel));
+  const endAt = row.endAt || row.revertAt || addDaysIso(row.appliedAt || referenceDate, durationDays);
+  return { durationDays, endAt };
+};
+
+const getArchivedDecisionStatus = (row = {}) => {
+  const status = String(row.archiveStatus || row.activeTemporaryPriceAction?.status || row.temporaryPriceActionStatus || row.status || '').toLowerCase('tr-TR');
+  const endAt = row.endAt ? new Date(row.endAt) : null;
+  if (status === 'reverted') return { label: 'Geri alındı', tone: 'success' };
+  if (status === 'replaced') return { label: 'Yerine yenisi geçti', tone: 'warning' };
+  if (status === 'cancelled' || status === 'dismissed') return { label: row.archiveStatusLabel || 'Kapatıldı', tone: 'neutral' };
+  if (status === 'expired' || (endAt && !Number.isNaN(endAt.getTime()) && endAt.getTime() <= Date.now())) return { label: 'Süresi doldu', tone: 'warning' };
+  if (status === 'active') return { label: 'Uygulandı', tone: 'primary' };
+  return { label: row.archiveStatusLabel || 'Uygulandı', tone: 'success' };
+};
+
+const formatPriceActionDate = (value) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' });
+};
+
+const formatPriceActionTypeLabel = (value) => {
+  const key = normalizeTextKey(value).replace(/\s+/g, '_');
+  if (key === 'bulk_price_update') return 'Toplu fiyat güncelleme';
+  if (key === 'single_price_approval') return 'Tekil fiyat onayı';
+  return formatTechnicalSourceLabel(value, 'Fiyat işlemi');
+};
+
+const formatPriceActionStatusLabel = (action = {}) => {
+  const status = String(action.status || '').trim();
+  if (status === 'rolled_back') return { label: 'Geri alındı', tone: 'success' };
+  if (status === 'partial_rollback') return { label: 'Kısmen geri alındı', tone: 'warning' };
+  if (status === 'rollback_skipped') return { label: 'Geri alınamaz', tone: 'danger' };
+  return { label: 'Uygulandı', tone: 'primary' };
+};
+
+const isRollbackDisabled = (action = {}) => ['rolled_back', 'partial_rollback', 'rollback_skipped'].includes(String(action.status || ''));
 
 const hasCanonicalRecommendationPayload = (row = {}) => Boolean(
   row.discountSuggestion
@@ -309,38 +462,60 @@ const getBlockingReasons = (row = {}, discountSuggestion = {}) => [
   ...(Array.isArray(discountSuggestion.blockingReasons) ? discountSuggestion.blockingReasons : []),
 ].filter(Boolean);
 
+const hasActiveCampaignConflict = (row = {}) => Boolean(row.activeCampaignConflict || row.activeCampaignFlag || row.hasActiveDiscount);
+
 const buildSystemActionModel = ({ merged = {}, fallbackActionType = 'keep', suggestedDiscount = 0 }) => {
   const discountSuggestion = merged.discountSuggestion && typeof merged.discountSuggestion === 'object' ? merged.discountSuggestion : {};
   const orderSuggestion = merged.orderSuggestion && typeof merged.orderSuggestion === 'object' ? merged.orderSuggestion : {};
   const blockingReasons = getBlockingReasons(merged, discountSuggestion);
   const isSuppressed = Boolean(merged.isSuppressed || discountSuggestion.isSuppressed || blockingReasons.length);
+  const primaryAction = normalizeActionKey(
+    merged.primaryAction || discountSuggestion.primaryAction,
+    '',
+  );
+
+  if (primaryAction === PRICING_ACTION_TYPES.DISCOUNT) {
+    return { actionType: PRICING_ACTION_TYPES.DISCOUNT, actionLabel: PRICING_ACTION_LABELS[primaryAction], tone: 'warning', campaignEligible: true, campaignLabel: 'Fiyat aksiyonu gerekli' };
+  }
+  if (primaryAction === PRICING_ACTION_TYPES.ORDER) {
+    return { actionType: PRICING_ACTION_TYPES.ORDER, actionLabel: PRICING_ACTION_LABELS[primaryAction], tone: 'danger', campaignEligible: false, campaignLabel: 'Önce sipariş aksiyonu' };
+  }
+  if (primaryAction === PRICING_ACTION_TYPES.CAMPAIGN) {
+    return { actionType: PRICING_ACTION_TYPES.CAMPAIGN, actionLabel: PRICING_ACTION_LABELS[primaryAction], tone: 'primary', campaignEligible: true, campaignLabel: 'Kampanyaya alınabilir' };
+  }
+  if (primaryAction === PRICING_ACTION_TYPES.WATCH) {
+    return { actionType: PRICING_ACTION_TYPES.WATCH, actionLabel: PRICING_ACTION_LABELS[primaryAction], tone: 'neutral', campaignEligible: false, campaignLabel: 'Fiyat değişikliği yok' };
+  }
+  if (primaryAction === PRICING_ACTION_TYPES.HOLD) {
+    return { actionType: PRICING_ACTION_TYPES.HOLD, actionLabel: PRICING_ACTION_LABELS[primaryAction], tone: 'success', campaignEligible: false, campaignLabel: 'Kampanya gerekmiyor' };
+  }
 
   if (isSuppressed) {
     if (blockingReasons.includes('active_campaign_conflict')) {
-      return { actionType: 'keep', actionLabel: 'Kampanya Aktif', tone: 'neutral', campaignEligible: false, campaignLabel: 'Taslak gerekmez' };
+      return { actionType: PRICING_ACTION_TYPES.WATCH, actionLabel: 'Kampanya Aktif', tone: 'neutral', campaignEligible: false, campaignLabel: 'Taslak gerekmez' };
     }
     if (blockingReasons.some((reason) => reason.includes('margin') || reason.includes('cost'))) {
-      return { actionType: 'keep', actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya uygun değil' };
+      return { actionType: PRICING_ACTION_TYPES.HOLD, actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya alınamaz' };
     }
     if (blockingReasons.some((reason) => reason.includes('stock') || reason.includes('replenishment') || reason.includes('lead_time') || reason.includes('receipt'))) {
-      return { actionType: 'urgent', actionLabel: 'Sipariş Önceliği Ver', tone: 'danger', campaignEligible: false, campaignLabel: 'Önce stok güvenceye alınmalı' };
+      return { actionType: PRICING_ACTION_TYPES.ORDER, actionLabel: PRICING_ACTION_LABELS[PRICING_ACTION_TYPES.ORDER], tone: 'danger', campaignEligible: false, campaignLabel: 'Önce stok güvenceye alınmalı' };
     }
-    return { actionType: 'keep', actionLabel: 'Temkinli İzle', tone: 'warning', campaignEligible: false, campaignLabel: 'Guardrail kontrolü var' };
+    return { actionType: PRICING_ACTION_TYPES.WATCH, actionLabel: PRICING_ACTION_LABELS[PRICING_ACTION_TYPES.WATCH], tone: 'warning', campaignEligible: false, campaignLabel: 'Kontrol kuralı var' };
   }
 
   if (discountSuggestion.hasSuggestion || suggestedDiscount > 0) {
-    return { actionType: 'discount', actionLabel: 'İndirim Öner', tone: 'warning', campaignEligible: true, campaignLabel: 'Kampanyaya uygun' };
+    return { actionType: PRICING_ACTION_TYPES.DISCOUNT, actionLabel: PRICING_ACTION_LABELS[PRICING_ACTION_TYPES.DISCOUNT], tone: 'warning', campaignEligible: true, campaignLabel: 'Fiyat aksiyonu gerekli' };
   }
   if (orderSuggestion.hasSuggestion) {
-    return { actionType: 'urgent', actionLabel: 'Sipariş Önceliği Ver', tone: 'danger', campaignEligible: false, campaignLabel: 'Önce sipariş aksiyonu' };
+    return { actionType: PRICING_ACTION_TYPES.ORDER, actionLabel: PRICING_ACTION_LABELS[PRICING_ACTION_TYPES.ORDER], tone: 'danger', campaignEligible: false, campaignLabel: 'Önce sipariş aksiyonu' };
   }
   if (merged.marginGuardrailFlag || merged.marginGuardrail?.blocksDiscount) {
-    return { actionType: 'keep', actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya uygun değil' };
+    return { actionType: PRICING_ACTION_TYPES.HOLD, actionLabel: 'Marjı Koru', tone: 'warning', campaignEligible: false, campaignLabel: 'Kampanyaya alınamaz' };
   }
   if (fallbackActionType === 'increase') {
     return { actionType: 'increase', actionLabel: 'Fiyatı Gözden Geçir', tone: 'primary', campaignEligible: false, campaignLabel: 'Kampanya değil fiyat aksiyonu' };
   }
-  return { actionType: 'keep', actionLabel: 'Fiyatı Koru', tone: 'success', campaignEligible: false, campaignLabel: 'Kampanya gerekmiyor' };
+  return { actionType: PRICING_ACTION_TYPES.HOLD, actionLabel: PRICING_ACTION_LABELS[PRICING_ACTION_TYPES.HOLD], tone: 'success', campaignEligible: false, campaignLabel: 'Kampanya gerekmiyor' };
 };
 
 const appendAnalysisRows = (target, rows, sourceSection) => {
@@ -419,6 +594,8 @@ const mapProductToPricingSignal = (product, index) => {
     id,
     productId: product?.productId || id,
     productName: getProductName(product),
+    categoryId: String(product?.categoryId || product?.productCategoryId || product?.category?.id || '').trim(),
+    supplierId: String(product?.supplierId || product?.supplier?.id || '').trim(),
     category: getProductCategoryName(product),
     supplierName: product?.supplierName || product?.supplier?.name || '-',
     sku: product?.sku || product?.barcode || '-',
@@ -483,7 +660,7 @@ const normalizePricingActionRow = (sourceRow, index) => {
   );
   const simulationAction = getActionModel({
     currentPrice,
-    actionType: suggestedDiscount > 0 ? (systemAction.actionType === 'urgent' ? 'urgent' : 'discount') : systemAction.actionType,
+    actionType: suggestedDiscount > 0 ? PRICING_ACTION_TYPES.DISCOUNT : systemAction.actionType,
     actionPercent: suggestedDiscount,
     suggestedPrice: getFirstValue(merged, ['suggestedPrice', 'newPrice'], discountSuggestion.newPrice),
   });
@@ -499,6 +676,8 @@ const normalizePricingActionRow = (sourceRow, index) => {
     id,
     productId: merged.productId || id,
     productName: hasText(merged.productName || merged.name) ? String(merged.productName || merged.name).trim() : 'Bilinmeyen ürün',
+    categoryId: String(merged.categoryId || merged.productCategoryId || merged.category?.id || '').trim(),
+    supplierId: String(merged.supplierId || merged.supplier?.id || '').trim(),
     sku: hasText(merged.sku || merged.barcode) ? String(merged.sku || merged.barcode).trim() : '-',
     supplierName: hasText(merged.supplierName || merged.supplier?.name) ? String(merged.supplierName || merged.supplier?.name).trim() : 'Tedarikçi bilgisi yok',
     categoryName: hasText(merged.categoryName || merged.category || merged.category?.name) ? String(merged.categoryName || merged.category || merged.category?.name).trim() : 'Kategori yok',
@@ -508,7 +687,9 @@ const normalizePricingActionRow = (sourceRow, index) => {
     suggestedPrice: simulationAction.suggestedPrice,
     suggestedDiscount: simulationAction.actionPercent,
     simulatedDiscount: simulationAction.actionPercent,
+    primaryAction: systemAction.actionType,
     actionType: systemAction.actionType,
+    sourceRecommendationKey: String(merged.sourceRecommendationKey || '').trim(),
     actionLabel: systemAction.actionLabel,
     actionTone: systemAction.tone,
     actionPercent: suggestedDiscount,
@@ -516,13 +697,21 @@ const normalizePricingActionRow = (sourceRow, index) => {
     priceChangePercent: simulationAction.priceChangePercent,
     campaignEligible: systemAction.campaignEligible,
     campaignLabel: systemAction.campaignLabel,
+    activeTemporaryPriceAction: merged.activeTemporaryPriceAction || merged.temporaryPriceAction || null,
+    hasActiveTemporaryPriceAction: Boolean(merged.hasActiveTemporaryPriceAction || merged.activeTemporaryPriceAction || merged.temporaryPriceAction),
+    temporaryPriceActionStatus: merged.temporaryPriceActionStatus || merged.activeTemporaryPriceAction?.status || merged.temporaryPriceAction?.status || '',
     blockingReasons: getBlockingReasons(merged, discountSuggestion),
     reasonCodes: Array.isArray(merged.reasonCodes) ? merged.reasonCodes : (Array.isArray(discountSuggestion.reasonCodes) ? discountSuggestion.reasonCodes : []),
     isSuppressed: Boolean(merged.isSuppressed || discountSuggestion.isSuppressed),
+    suppressionReason: merged.suppressionReason || discountSuggestion.suppressionReason || '',
+    activeCampaignConflict: merged.activeCampaignConflict || discountSuggestion.activeCampaignConflict || null,
     activeCampaignFlag: Boolean(merged.activeCampaignFlag || discountSuggestion.activeCampaignFlag || merged.hasActiveDiscount),
     lowStockGuardrailFlag: Boolean(merged.lowStockGuardrailFlag || discountSuggestion.lowStockGuardrailFlag),
     marginGuardrailFlag: Boolean(merged.marginGuardrailFlag || discountSuggestion.marginGuardrailFlag),
     replenishmentSupportFlag: Boolean(merged.replenishmentSupportFlag || discountSuggestion.replenishmentSupportFlag),
+    stockGuardrail: merged.stockGuardrail || discountSuggestion.stockGuardrail || null,
+    procurementGuardrail: merged.procurementGuardrail || discountSuggestion.procurementGuardrail || null,
+    marginGuardrail: merged.marginGuardrail || discountSuggestion.marginGuardrail || null,
     sourceMetrics: merged.sourceMetrics || discountSuggestion.sourceMetrics || {},
     sold7: toSafeNumber(getFirstValue(merged, ['sold7', 'salesLast7Days'], discountSuggestion.sourceMetrics?.sold7), 0),
     sold30: toSafeNumber(getFirstValue(merged, ['sold30', 'salesLast30Days'], discountSuggestion.sourceMetrics?.sold30), 0),
@@ -643,11 +832,11 @@ const classifyBulkMarginRisk = ({ nextRegularPrice, campaignEffectiveAfter, cost
   const campaignLoss = cost > 0 && campaignEffectiveAfter !== null && campaignEffectiveAfter < cost;
   const campaignLowMargin = !campaignLoss && campaignMarginAfter !== null && campaignMarginAfter >= 0 && campaignMarginAfter < SIMPLE_MARGIN_THRESHOLD;
 
-  let riskReason = 'Regular fiyat marjı sağlıklı';
-  if (campaignLoss) riskReason = 'Aktif kampanya fiyatı maliyet altında';
-  else if (campaignLowMargin) riskReason = 'Kampanya etkisiyle düşük marj';
-  else if (regularLoss) riskReason = 'Yeni regular fiyat maliyet altında';
-  else if (regularLowMargin) riskReason = `Yeni regular fiyat %${SIMPLE_MARGIN_THRESHOLD} marj eşiğinin altında`;
+  let riskReason = 'Satış fiyatı kârlılık açısından uygun görünüyor';
+  if (campaignLoss) riskReason = 'Aktif kampanya zarar riski oluşturuyor';
+  else if (campaignLowMargin) riskReason = 'Aktif kampanya kârlılığı zayıflatıyor';
+  else if (regularLoss) riskReason = 'Yeni satış fiyatı alış maliyetinin altında kalıyor';
+  else if (regularLowMargin) riskReason = `Yeni satış fiyatı güvenli kârlılık sınırının altında kalıyor`;
 
   return {
     regularMarginAfter,
@@ -668,15 +857,15 @@ const buildBulkMarginWarningText = (summary) => {
   if (!summary.marginRiskCount) return '';
   if (summary.campaignRiskCount > 0 && summary.regularRiskCount === 0) {
     if (summary.campaignLossCount > 0) {
-      return `${summary.campaignRiskCount} üründe aktif kampanya nedeniyle efektif fiyat maliyet altında kalıyor. Regular fiyat güncellemesi ayrı hesaplandı; risk aktif kampanyalı fiyattan kaynaklanıyor.`;
+      return `${summary.campaignRiskCount} üründe aktif kampanya fiyatı alış maliyetinin altına düşüyor. Satış fiyatı güncellemesi ayrı hesaplandı; risk kampanya fiyatından kaynaklanıyor.`;
     }
-    return `${summary.campaignRiskCount} üründe aktif kampanya nedeniyle efektif fiyat %${SIMPLE_MARGIN_THRESHOLD} marj eşiğinin altında kalıyor. Regular fiyat güncellemesi ayrı hesaplandı.`;
+    return `${summary.campaignRiskCount} üründe aktif kampanya güvenli kârlılık sınırının altında kalıyor. Satış fiyatı güncellemesi ayrı hesaplandı.`;
   }
   if (summary.regularRiskCount > 0 && summary.campaignRiskCount > 0) {
-    return `${summary.regularRiskCount} üründe regular fiyat, ${summary.campaignRiskCount} üründe aktif kampanya kaynaklı marj riski var.`;
+    return `${summary.regularRiskCount} üründe yeni satış fiyatı, ${summary.campaignRiskCount} üründe aktif kampanya kârlılık riski taşıyor.`;
   }
-  if (summary.regularLossCount > 0) return `${summary.regularRiskCount} üründe yeni regular fiyat maliyet altında kalıyor.`;
-  return `${summary.regularRiskCount} üründe yeni regular fiyat %${SIMPLE_MARGIN_THRESHOLD} marj eşiğinin altında kalıyor.`;
+  if (summary.regularLossCount > 0) return `${summary.regularRiskCount} üründe yeni satış fiyatı alış maliyetinin altında kalıyor.`;
+  return `${summary.regularRiskCount} üründe yeni satış fiyatı güvenli kârlılık sınırının altında kalıyor.`;
 };
 
 const ActionSparkline = ({ values = [] }) => {
@@ -778,7 +967,7 @@ const getActionModel = ({ currentPrice, actionType, actionPercent, suggestedPric
   const percent = clampPercent(actionPercent);
   const normalizedSuggested = normalizePrice(suggestedPrice);
 
-  if (['urgent', 'discount'].includes(actionType) && percent > 0 && current > 0) {
+  if (['urgent', 'discount', PRICING_ACTION_TYPES.DISCOUNT].includes(actionType) && percent > 0 && current > 0) {
     const nextPrice = normalizePrice(current * (1 - percent / 100));
     return {
       actionType,
@@ -786,7 +975,7 @@ const getActionModel = ({ currentPrice, actionType, actionPercent, suggestedPric
       actionPercent: percent,
       suggestedPrice: nextPrice,
       priceChangePercent: -percent,
-      simulationText: `${formatCurrency(current)} -> ${formatCurrency(nextPrice)} (${formatPercent(percent)} indirim)`,
+      simulationText: `${formatCurrency(current)} → ${formatCurrency(nextPrice)} (${formatPercent(percent)} indirim)`,
     };
   }
 
@@ -798,19 +987,187 @@ const getActionModel = ({ currentPrice, actionType, actionPercent, suggestedPric
       actionPercent: percent,
       suggestedPrice: nextPrice,
       priceChangePercent: percent,
-      simulationText: `${formatCurrency(current)} -> ${formatCurrency(nextPrice)} (${formatPercent(percent)} zam)`,
+      simulationText: `${formatCurrency(current)} → ${formatCurrency(nextPrice)} (${formatPercent(percent)} zam)`,
     };
   }
 
   const nextPrice = normalizedSuggested > 0 ? normalizedSuggested : current;
+  const stableActionType = actionType === 'none' ? 'none' : actionType || PRICING_ACTION_TYPES.HOLD;
   return {
-    actionType: actionType === 'none' ? 'none' : 'keep',
-    actionLabel: actionType === 'none' ? 'Aksiyon yok' : 'Fiyat koruma',
+    actionType: stableActionType,
+    actionLabel: actionType === 'none' ? 'Aksiyon yok' : (PRICING_ACTION_LABELS[stableActionType] || 'Fiyat koruma'),
     actionPercent: 0,
     suggestedPrice: nextPrice,
     priceChangePercent: 0,
     simulationText: nextPrice > 0 ? `${formatCurrency(nextPrice)} korunur` : 'Fiyat verisi yok',
   };
+};
+
+const TECHNICAL_REASON_LABELS = {
+  active_campaign_conflict: 'Aktif kampanya çakışması',
+  low_margin: 'Düşük marj',
+  price_at_or_below_cost: 'Fiyat maliyet sınırında',
+  weak_demand: 'Zayıf talep',
+  weak_replenishment: 'Zayıf tedarik desteği',
+  overstock_risk: 'Fazla stok riski',
+  overstock: 'Fazla stok riski',
+  stock_level_high: 'Stok seviyesi yüksek',
+  expiry_risk: 'SKT riski',
+  near_expiry: 'SKT riski',
+  expiry_signal_ignored: 'SKT sinyali dikkate alınmadı',
+  critical_stock: 'Kritik stok',
+  near_critical_fast_moving: 'Hızlı satış ve düşük stok',
+  low_stock_coverage: 'Stok karşılama süresi düşük',
+  replenishment_pipeline_missing: 'Tedarik hattı zayıf',
+  long_lead_time: 'Tedarik süresi uzun',
+  goods_receipt_pending_not_secured: 'Mal kabul güvenceye alınmamış',
+  active_temporary_price_action: 'Aktif geçici fiyat uygulaması',
+  order_priority_guardrail: 'Önce sipariş aksiyonu gerekli',
+  stock_guardrail_blocked: 'Stok kontrol kuralı',
+  replenishment_guardrail_blocked: 'Tedarik kontrol kuralı',
+  margin_guardrail_blocked: 'Marj kontrol kuralı',
+  margin_guardrail_passed: 'Marj sınırı uygun',
+  slow_sales: 'Zayıf talep',
+  weak_sales_velocity: 'Talep zayıf',
+  demand_down: 'Talep düşüşte',
+  no_active_campaign_conflict: 'Kampanya çakışması yok',
+  no_data: 'Veri yetersiz',
+  guardrail: 'Kontrol kuralı',
+  simulation: 'Etki simülasyonu',
+};
+
+const normalizeReasonCodeLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const key = raw.toLocaleLowerCase('tr-TR').replace(/\s+/g, '_');
+  if (TECHNICAL_REASON_LABELS[key]) return TECHNICAL_REASON_LABELS[key];
+  return formatUserFacingTechnicalText(raw.replaceAll('_', ' '), 'Veri yetersiz');
+};
+
+const buildDecisionReasons = (row = {}, limit = 2) => {
+  const reasons = [
+    ...(Array.isArray(row.blockingReasons) ? row.blockingReasons : []),
+    ...(Array.isArray(row.reasonCodes) ? row.reasonCodes : []),
+  ].map(normalizeReasonCodeLabel).filter(Boolean);
+
+  if (row.hasActiveDiscount || row.activeCampaignFlag) reasons.push('Aktif kampanya var');
+  if (row.marginGuardrailFlag || row.marginGuardrail?.blocksDiscount) reasons.push('Marj düşük');
+  if (row.lowStockGuardrailFlag || row.stockGuardrail?.blocksDiscount) reasons.push('Stok kontrolü gerekli');
+  if (row.expirationRisk === 'critical' || row.expirationRisk === 'soon') reasons.push('SKT riski yüksek');
+  if (row.salesSpeedKey === 'slow' && Number(row.stockLevel || 0) >= 40) reasons.push('Talep zayıf, stok yüksek');
+
+  if (!reasons.length) {
+    const text = normalizeRecommendationReasonText(row.recommendationReason || row.reasonSummary || row.reason || '');
+    if (text) reasons.push(text.split(/[.!?]/).map((item) => item.trim()).filter(Boolean)[0]);
+  }
+
+  const seen = new Set();
+  return reasons
+    .map((item) => String(item || '').trim())
+    .filter((item) => {
+      const key = normalizeTextKey(item);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+};
+
+const getDecisionActionLabel = (row = {}) => {
+  if (row.hasActiveDiscount || row.activeCampaignFlag || getBlockingReasons(row).includes('active_campaign_conflict')) return 'Kampanya aktif';
+  if ([PRICING_ACTION_TYPES.DISCOUNT, 'discount', 'urgent'].includes(row.actionType)) return 'İndirim öner';
+  if (row.actionType === 'increase') return 'Fiyat artır';
+  if (row.actionType === PRICING_ACTION_TYPES.HOLD) return 'Fiyat koru';
+  if ([PRICING_ACTION_TYPES.ORDER, PRICING_ACTION_TYPES.WATCH, 'none'].includes(row.actionType)) return 'İşlem önerilmez';
+  return row.suggestedDiscount > 0 ? 'İndirim öner' : 'Fiyat koru';
+};
+
+const getDecisionRisk = (row = {}) => {
+  const risk = normalizeRiskKey(row.riskLevel, 'medium');
+  if (risk === 'critical' || risk === 'high') return { key: 'high', label: 'Yüksek', tone: 'danger' };
+  if (risk === 'medium') return { key: 'medium', label: 'Orta', tone: 'warning' };
+  return { key: 'low', label: 'Düşük', tone: 'success' };
+};
+
+const getPriceChangeLabel = (row = {}) => {
+  const change = toSafeNumber(row.priceChangePercent, NaN);
+  if (!Number.isFinite(change) || change === 0) return '%0';
+  const sign = change > 0 ? '+' : '';
+  return `${sign}${formatPercent(change)}`;
+};
+
+const getPricingDecisionKey = (row = {}) => {
+  const backendKey = String(row.sourceRecommendationKey || '').trim();
+  if (backendKey) return backendKey;
+  return [
+    row.productId || row.product?.id || row.id || '',
+    row.actionType || '',
+    normalizePrice(row.currentPrice),
+    normalizePrice(row.suggestedPrice),
+  ].map((part) => String(part ?? '').trim()).join('|');
+};
+
+const getPricingDecisionProductKey = (row = {}) => String(row.productId || row.id || row.product?.id || '').trim();
+
+const ACTIVE_TEMPORARY_PRICE_STATUSES = new Set(['active']);
+
+const hasActiveTemporaryPriceAction = (row = {}) => {
+  const action = row.activeTemporaryPriceAction || row.temporaryPriceAction || null;
+  const status = String(action?.status || row.temporaryPriceActionStatus || '').trim().toLowerCase('tr-TR');
+  return Boolean(row.hasActiveTemporaryPriceAction || (action && (!status || ACTIVE_TEMPORARY_PRICE_STATUSES.has(status))));
+};
+
+const isActivePricingDecision = (row = {}) => {
+  if (row.isLocallyApplied) return false;
+  if (hasActiveTemporaryPriceAction(row)) return false;
+  return true;
+};
+
+const readPricingDecisionArchive = () => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(PRICING_DECISION_ARCHIVE_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writePricingDecisionArchive = (archive = {}) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(PRICING_DECISION_ARCHIVE_STORAGE_KEY, JSON.stringify(archive));
+  } catch {
+    // Session storage may be unavailable; the in-memory state still drives the current view.
+  }
+};
+
+const hasApplicablePriceDelta = (row = {}) => {
+  const currentPrice = normalizePrice(row.currentPrice);
+  const suggestedPrice = normalizePrice(row.suggestedPrice);
+  if (!currentPrice || !suggestedPrice) return false;
+  return Math.round(currentPrice * 100) !== Math.round(suggestedPrice * 100);
+};
+
+const canApplyPricingDecision = (row = {}) => (
+  row.actionType === PRICING_ACTION_TYPES.DISCOUNT && !hasActiveTemporaryPriceAction(row) && hasApplicablePriceDelta(row)
+);
+
+const getPassiveDecisionActionText = (row = {}) => {
+  if (hasActiveTemporaryPriceAction(row)) return 'Aktif uygulama var';
+  if (row.actionType === PRICING_ACTION_TYPES.WATCH) return 'Takipte';
+  if (row.actionType === PRICING_ACTION_TYPES.HOLD) return 'Fiyatı Koru';
+  if (row.actionType === PRICING_ACTION_TYPES.ORDER) return 'Sipariş baskısı';
+  if (row.actionType === PRICING_ACTION_TYPES.CAMPAIGN) return 'Kampanya adayı';
+  if (!normalizePrice(row.suggestedPrice)) return 'Önerilen fiyat yok';
+  if (!hasApplicablePriceDelta(row)) return 'Fiyat değişikliği yok';
+  return 'Aksiyon yok';
+};
+
+const getPassiveDecisionHelpText = (row = {}) => {
+  if (canApplyPricingDecision(row) || row.isLocallyApplied) return '';
+  if (row.actionType === PRICING_ACTION_TYPES.DISCOUNT) return 'Bu kayıt şu an uygulanamaz';
+  return 'Bu kayıt bilgilendirme amaçlıdır';
 };
 
 const validatePricingActionRow = (row) => {
@@ -829,7 +1186,7 @@ const enrichPricingActionRowForTable = (row, simulationDiscounts = {}) => {
   const simulatedDiscount = clampPercent(simulationDiscounts[row.id] ?? row.suggestedDiscount);
   const simulatedAction = getActionModel({
     currentPrice: row.currentPrice,
-    actionType: simulatedDiscount > 0 ? (row.actionType === 'urgent' ? 'urgent' : 'discount') : row.actionType,
+    actionType: simulatedDiscount > 0 ? PRICING_ACTION_TYPES.DISCOUNT : row.actionType,
     actionPercent: simulatedDiscount,
     suggestedPrice: row.suggestedPrice,
   });
@@ -933,14 +1290,342 @@ const PricingChartTooltip = ({ active, payload, label }) => {
   );
 };
 
+function PricingActionDetailModal({
+  row,
+  detail,
+  isLoading,
+  isApplying = false,
+  onClose,
+  onApply,
+  onSkip,
+}) {
+  if (!row) return null;
+
+  const currentMargin = Number.isFinite(row.currentMarginPercent) ? formatPercent(row.currentMarginPercent) : 'Hesaplanamadı';
+  const nextMargin = Number.isFinite(row.estimatedMarginPercent) ? formatPercent(row.estimatedMarginPercent) : 'Hesaplanamadı';
+  const risk = getDecisionRisk(row);
+  const reasons = buildDecisionReasons(row, 8);
+  const guardrailReasons = [
+    ...(Array.isArray(row.blockingReasons) ? row.blockingReasons : []),
+    ...(Array.isArray(row.marginGuardrail?.blockingReasons) ? row.marginGuardrail.blockingReasons : []),
+    ...(Array.isArray(row.stockGuardrail?.blockingReasons) ? row.stockGuardrail.blockingReasons : []),
+    ...(Array.isArray(row.procurementGuardrail?.blockingReasons) ? row.procurementGuardrail.blockingReasons : []),
+  ].map(normalizeReasonCodeLabel).filter(Boolean);
+  const uniqueGuardrailReasons = [...new Set(guardrailReasons)];
+  const profitClass = Number.isFinite(row.impact?.profitImpact) && row.impact.profitImpact < 0 ? 'is-negative' : 'is-positive';
+  const priceHistory = Array.isArray(detail?.priceHistory) ? detail.priceHistory.slice(0, 3) : [];
+  const actionLabel = getDecisionActionLabel(row);
+  const criticalStockValue = toSafeNumber(row.criticalStock, NaN);
+  const activeCampaignLabel = row.campaignName || row.activeCampaignName || row.activeCampaign?.name || (row.hasActiveDiscount || row.activeCampaignFlag ? 'Var' : 'Yok');
+  const campaignConflictLabel = getBlockingReasons(row).includes('active_campaign_conflict') || row.activeCampaignConflict ? 'Var' : 'Yok';
+  const costRiskLabel = getBlockingReasons(row).includes('price_at_or_below_cost') ? 'Var' : 'Yok';
+  const marginLimitLabel = row.marginGuardrailFlag || row.marginGuardrail?.blocksDiscount ? 'Kontrol gerekli' : 'Marj sınırı uygun';
+  const guardrailSummary = uniqueGuardrailReasons.length
+    ? uniqueGuardrailReasons.map(normalizeReasonCodeLabel)
+    : ['Kontrol kuralı engeli yok'];
+  const priceHistoryCount = Number(detail?.priceHistoryCount || row.priceHistoryCount || 0);
+  const lastManualPriceChange = row.lastManualPriceChangeAt || row.lastManualPriceChangeDate || detail?.lastManualPriceChangeAt || detail?.lastManualPriceChangeDate;
+  const stateBadgeClass = (value) => {
+    const normalized = String(value || '').toLocaleLowerCase('tr-TR');
+    if (normalized.includes('var') || normalized.includes('kontrol')) return 'is-warning';
+    if (normalized.includes('yok') || normalized.includes('uygun')) return 'is-muted';
+    return 'is-neutral';
+  };
+  const renderStateBadge = (value) => (
+    <span className={`pricing-detail-state-badge ${stateBadgeClass(value)}`}>{value}</span>
+  );
+
+  return (
+    <div className="pricing-modal-backdrop" role="presentation">
+      <section className="pricing-bulk-modal pricing-action-detail-modal" role="dialog" aria-modal="true" aria-labelledby="pricing-action-detail-title">
+        <header className="pricing-bulk-modal-head pricing-action-detail-head">
+          <div className="pricing-action-detail-titlemark">
+            <div className="pricing-action-detail-icon" aria-hidden="true"><Boxes size={18} /></div>
+            <div className="pricing-action-detail-titlecopy">
+              <h2 id="pricing-action-detail-title">{row.productName || 'Ürün detayı'}</h2>
+              <p><span>SKU: {row.sku || '-'}</span><span>{row.category || row.categoryName || '-'}</span></p>
+            </div>
+          </div>
+          <button type="button" className="ghost-button pricing-modal-close" onClick={onClose} aria-label="Kapat"><X size={18} /></button>
+        </header>
+
+        <div className="pricing-bulk-modal-body pricing-action-detail-body">
+          {isLoading ? <div className="pricing-detail-loading">Detay bilgileri yükleniyor...</div> : null}
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Fiyat Özeti</h3></div>
+            <div className="pricing-detail-metrics pricing-detail-metrics--price">
+              <div><span>Mevcut satış fiyatı</span><strong>{formatCurrency(row.currentPrice)}</strong></div>
+              <div><span>Alış fiyatı</span><strong>{formatCurrency(row.cost)}</strong></div>
+              <div><span>Önerilen fiyat</span><strong>{formatCurrency(row.suggestedPrice)}</strong></div>
+              <div><span>Değişim</span><strong>{getPriceChangeLabel(row)}</strong></div>
+              <div><span>Marj önce</span><strong>{currentMargin}</strong></div>
+              <div><span>Marj sonra</span><strong>{nextMargin}</strong></div>
+            </div>
+          </section>
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Talep ve Stok Özeti</h3></div>
+            <div className="pricing-detail-metrics">
+              <div><span>7 gün satış</span><strong>{toSafeNumber(row.sold7, 0)}</strong></div>
+              <div><span>30 gün satış</span><strong>{toSafeNumber(row.sold30, 0)}</strong></div>
+              <div><span>Mevcut stok</span><strong>{Math.round(toSafeNumber(row.stockLevel, 0))}</strong></div>
+              <div><span>Kritik stok</span><strong>{Number.isFinite(criticalStockValue) ? Math.round(criticalStockValue) : 'Kayıt yok'}</strong></div>
+              <div><span>SKT durumu</span><strong>{toSktLabel(row.expirationRisk)}</strong></div>
+              <div><span>Stok riski</span><StatusBadge tone={risk.tone}>{risk.label}</StatusBadge></div>
+            </div>
+          </section>
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Kampanya ve Kural Kontrolleri</h3></div>
+            <div className="pricing-detail-checks">
+              <div><span>Aktif kampanya</span><strong>{renderStateBadge(activeCampaignLabel)}</strong></div>
+              <div><span>Kampanya çakışması</span><strong>{renderStateBadge(campaignConflictLabel)}</strong></div>
+              <div><span>Maliyet altı riski</span><strong>{renderStateBadge(costRiskLabel)}</strong></div>
+              <div><span>Marj sınırı</span><strong>{renderStateBadge(marginLimitLabel)}</strong></div>
+            </div>
+            <div className="pricing-detail-reason-list">
+              {guardrailSummary.map((item) => <span key={item}>{item}</span>)}
+            </div>
+          </section>
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Sistem Gerekçesi</h3></div>
+            <ul className="pricing-detail-bullets">
+              {(reasons.length ? reasons : ['Veri yetersiz olduğu için güvenli öneri üretildi.']).map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </section>
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Operasyonel Etki</h3></div>
+            <div className="pricing-detail-metrics">
+              <div><span>Kar etkisi</span><strong className={profitClass}>{Number.isFinite(row.impact?.profitImpact) ? formatSignedCurrency(row.impact.profitImpact) : 'Veri yok'}</strong></div>
+              <div><span>Satış etkisi tahmini</span><strong>{Number.isFinite(row.impact?.estimatedSalesIncreasePct) ? `${formatPercent(row.impact.estimatedSalesIncreasePct)}` : 'Veri yok'}</strong></div>
+              <div><span>Stok eritme etkisi</span><strong>{Number.isFinite(row.impact?.depletionDays) ? `${row.impact.depletionDays} gün` : 'Veri yok'}</strong></div>
+              <div><span>Öneri</span><strong>{actionLabel}</strong></div>
+            </div>
+          </section>
+
+          <section className="pricing-detail-section">
+            <div className="pricing-detail-section-head"><h3>Geçmiş / Ek Bilgi</h3></div>
+            <div className="pricing-detail-metrics">
+              <div><span>FDT</span><strong>{row.lastPriceChangeDate ? String(row.lastPriceChangeDate).slice(0, 10) : 'Kayıt yok'}</strong></div>
+              <div><span>Fiyat geçmişi</span><strong>{priceHistoryCount ? `${priceHistoryCount} kayıt` : 'Kayıt yok'}</strong></div>
+              <div><span>Son kampanya</span><strong>{row.campaignName || row.activeCampaignName || 'Yok'}</strong></div>
+              <div><span>Son manuel fiyat müdahalesi</span><strong>{lastManualPriceChange ? String(lastManualPriceChange).slice(0, 10) : 'Kayıt yok'}</strong></div>
+            </div>
+            {priceHistory.length ? (
+              <div className="pricing-detail-history">
+                {priceHistory.map((item, index) => (
+                  <span key={`${item.id || item.createdAt || index}`}>{String(item.createdAt || item.date || '').slice(0, 10) || '-'} · {formatCurrency(item.salePrice || item.price || item.newPrice || 0)}</span>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        </div>
+
+        <footer className="pricing-bulk-modal-foot pricing-action-detail-foot">
+          <button type="button" className="ghost-button pricing-detail-close-button" onClick={onClose}>Kapat</button>
+          <div className="pricing-action-detail-foot-actions">
+            <button type="button" className="ghost-button pricing-detail-skip-button" onClick={() => onSkip(row)}>Pas geç</button>
+            <button type="button" className="primary-button pricing-detail-apply-button" onClick={() => onApply(row)} disabled={isApplying}>
+              {isApplying ? 'Uygulanıyor...' : 'Uygula'}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function PriceActionHistoryPanel({
+  actions = [],
+  isLoading = false,
+  rollbackPendingId = '',
+  onRollback,
+}) {
+  return (
+    <section className="pricing-recent-actions" aria-label="Son fiyat işlemleri">
+      <div className="pricing-recent-actions-head">
+        <div>
+          <h3>Son İşlemler</h3>
+          <p>Bu ekrandan yapılan son 3 fiyat değişikliğini buradan geri alabilirsiniz.</p>
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="pricing-recent-actions-empty">Son fiyat işlemleri yükleniyor...</div>
+      ) : actions.length ? (
+        <div className="pricing-recent-actions-list">
+          {actions.slice(0, 3).map((action) => {
+            const status = formatPriceActionStatusLabel(action);
+            const rollbackDisabled = isRollbackDisabled(action) || rollbackPendingId === action.id;
+            return (
+              <article key={action.id} className="pricing-recent-action-card">
+                <div className="pricing-recent-action-main">
+                  <div>
+                    <strong>{formatPriceActionTypeLabel(action.type)}</strong>
+                    <span>{formatPriceActionDate(action.createdAt)} · {action.scopeLabel || action.scope?.label || 'Kapsam bilgisi yok'}</span>
+                  </div>
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                </div>
+                <div className="pricing-recent-action-meta">
+                  <span>{Number(action.affectedProductCount || 0)} ürün</span>
+                  <span>{action.priceSummary || 'Fiyat özeti yok'}</span>
+                  <span>{action.actorName || 'Sistem kullanıcısı'}</span>
+                </div>
+                {action.rollbackSummary ? <p className="pricing-recent-action-note">{action.rollbackSummary}</p> : null}
+                <button
+                  type="button"
+                  className="ghost-button pricing-recent-rollback"
+                  onClick={() => onRollback?.(action)}
+                  disabled={rollbackDisabled}
+                >
+                  {rollbackPendingId === action.id ? 'Geri alınıyor...' : 'Geri Al'}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="pricing-recent-actions-empty">Henüz bu modallardan yapılmış fiyat işlemi yok.</div>
+      )}
+    </section>
+  );
+}
+
+function PricingRowMoreActions({
+  rowId,
+  isOpen,
+  onToggle,
+  onClose,
+  onDetail,
+  onSkip,
+}) {
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuPlacement, setMenuPlacement] = useState({ style: null, direction: 'down' });
+  const menuId = `pricing-row-more-menu-${String(rowId || '').replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
+  const updateMenuPosition = useCallback(() => {
+    if (!buttonRef.current || typeof window === 'undefined') return;
+
+    const buttonRect = buttonRef.current.getBoundingClientRect();
+    const menuRect = menuRef.current?.getBoundingClientRect();
+    const gutter = 8;
+    const offset = 6;
+    const menuWidth = Math.max(menuRect?.width || 132, buttonRect.width);
+    const menuHeight = menuRect?.height || 78;
+    const belowSpace = window.innerHeight - buttonRect.bottom - gutter;
+    const aboveSpace = buttonRect.top - gutter;
+    const shouldOpenUp = belowSpace < menuHeight && aboveSpace > belowSpace;
+    const top = shouldOpenUp
+      ? Math.max(gutter, buttonRect.top - menuHeight - offset)
+      : Math.min(window.innerHeight - menuHeight - gutter, buttonRect.bottom + offset);
+    const left = Math.min(
+      Math.max(gutter, buttonRect.right - menuWidth),
+      Math.max(gutter, window.innerWidth - menuWidth - gutter),
+    );
+
+    setMenuPlacement({
+      direction: shouldOpenUp ? 'up' : 'down',
+      style: {
+        position: 'fixed',
+        top: `${top}px`,
+        left: `${left}px`,
+        minWidth: `${menuWidth}px`,
+      },
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuPlacement({ style: null, direction: 'down' });
+      return undefined;
+    }
+
+    updateMenuPosition();
+    const frameId = window.requestAnimationFrame(updateMenuPosition);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isOpen, updateMenuPosition]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      onClose?.();
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose, updateMenuPosition]);
+
+  const menu = isOpen && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        ref={menuRef}
+        className={`pricing-row-more-menu pricing-row-more-menu--${menuPlacement.direction}`}
+        id={menuId}
+        role="menu"
+        style={menuPlacement.style || { position: 'fixed', visibility: 'hidden' }}
+      >
+        <button type="button" role="menuitem" onClick={onDetail}>
+          Detay
+        </button>
+        <button type="button" role="menuitem" className="is-danger-soft" onClick={onSkip}>
+          Pas geç
+        </button>
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return (
+    <div className="pricing-row-more">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="ghost-button pricing-row-more-button"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? menuId : undefined}
+        onClick={onToggle}
+      >
+        <MoreHorizontal size={15} />
+        Diğer
+      </button>
+      {menu}
+    </div>
+  );
+}
+
 function BulkPriceUpdateModal({
   isOpen,
   products = [],
+  productsLoading = false,
   categories = [],
   labels = [],
   onClose,
   onApply,
   isApplying = false,
+  recentActions = [],
+  recentActionsLoading = false,
+  rollbackPendingId = '',
+  onRollbackPriceAction,
 }) {
   const [scope, setScope] = useState('category');
   const [form, setForm] = useState({
@@ -1183,6 +1868,31 @@ function BulkPriceUpdateModal({
     return '';
   }, [form.acknowledged, form.adjustmentValue, form.selectedProductIds.length, previewSummary, scope]);
 
+  const scopeDescriptor = useMemo(() => {
+    if (scope === 'category') {
+      const tagLabel = categoryTags.find((item) => String(item.value) === String(form.tag))?.label || form.tag;
+      return {
+        type: 'category',
+        categoryId: selectedCategory?.id || null,
+        tag: form.tag || null,
+        label: [selectedCategory?.name || 'Kategori', tagLabel].filter(Boolean).join(' / '),
+      };
+    }
+    if (scope === 'products') {
+      return {
+        type: 'products',
+        productIds: form.selectedProductIds,
+        label: `${form.selectedProductIds.length} seçili ürün`,
+      };
+    }
+    return {
+      type: 'priceRange',
+      minPrice: form.minPrice || null,
+      maxPrice: form.maxPrice || null,
+      label: `${form.minPrice || '0'} TL - ${form.maxPrice || 'üst sınır yok'} fiyat aralığı`,
+    };
+  }, [categoryTags, form.maxPrice, form.minPrice, form.selectedProductIds, form.tag, scope, selectedCategory]);
+
   const toggleSelectedProduct = (productId) => {
     setForm((current) => {
       if (current.selectedProductIds.includes(productId)) return current;
@@ -1204,7 +1914,7 @@ function BulkPriceUpdateModal({
   const handleApply = () => {
     if (!form.acknowledged) return;
     if (validation) return;
-    onApply(previewRows.map((row) => ({ product: row, nextPrice: row.nextPrice })));
+    onApply(previewRows.map((row) => ({ product: row, nextPrice: row.nextPrice })), scopeDescriptor);
   };
 
   if (!isOpen) return null;
@@ -1216,7 +1926,7 @@ function BulkPriceUpdateModal({
           <div className="mod-card-icon mod-icon-indigo"><Calculator size={20} /></div>
           <div>
             <h2 id="pricing-bulk-title">Toplu Fiyat Güncelleme</h2>
-            <p>Kategori, ürün grubu veya seçili ürünler bazında toplu fiyat artışı / indirimi uygulayın.</p>
+            <p>Kategori, etiket, fiyat aralığı veya seçili ürünler için satış fiyatını güvenli şekilde güncelleyin.</p>
           </div>
           <button type="button" className="ghost-button pricing-modal-close" onClick={onClose} aria-label="Kapat"><X size={18} /></button>
         </header>
@@ -1237,7 +1947,7 @@ function BulkPriceUpdateModal({
                 <div className="pricing-bulk-form-grid">
                   <label className="field-group"><span>Kategori</span><select value={form.categoryId} onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value, tag: '' }))}><option value="">Kategori seçin</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
                   <label className="field-group"><span>Alt kategori / etiket</span><select value={form.tag} onChange={(event) => setForm((current) => ({ ...current, tag: event.target.value }))}><option value="">Tüm etiketler</option>{categoryTags.map((tag) => <option key={tag.value} value={tag.value}>{tag.label}</option>)}</select></label>
-                  <div className="pricing-bulk-count"><Layers size={16} /> {affectedProducts.length} ürün etkilenecek</div>
+                  <div className="pricing-bulk-count"><Layers size={16} /> {productsLoading ? 'Ürünler yükleniyor...' : `${affectedProducts.length} ürün önizlemeye dahil`}</div>
                 </div>
               ) : null}
 
@@ -1260,14 +1970,14 @@ function BulkPriceUpdateModal({
                     {isProductSearchOpen ? (
                       <div className="pricing-bulk-product-popover" role="listbox" aria-label="Ürün seçimi">
                         {normalizeTextKey(form.productSearch).length < 2 ? (
-                          <div className="pricing-bulk-product-search-empty">Ürün adı, SKU veya barkod yazarak arama yapın.</div>
+                          <div className="pricing-bulk-product-search-empty">{productsLoading ? 'Ürünler yükleniyor...' : 'Ürün adı, SKU veya barkod yazarak arama yapın.'}</div>
                         ) : availableProductSearchRows.length ? (
                           <div className="pricing-bulk-product-list">
                             {availableProductSearchRows.map((product) => (
                               <button key={product.id} type="button" onClick={() => toggleSelectedProduct(product.id)}>
                                 <span>
                                   <strong>{product.productName}</strong>
-                                  <small>{product.sku || product.barcode || 'SKU yok'} • {product.categoryName} • Regular {formatCurrency(product.currentRegularPrice)}{product.campaignEffectivePrice !== null ? ` • Kampanyalı ${formatCurrency(product.campaignEffectivePrice)}` : ''}</small>
+                                  <small>{product.sku || product.barcode || 'SKU yok'} • {product.categoryName} • Satış fiyatı {formatCurrency(product.currentRegularPrice)}{product.campaignEffectivePrice !== null ? ` • Kampanyalı ${formatCurrency(product.campaignEffectivePrice)}` : ''}</small>
                                 </span>
                                 <CheckCircle2 size={16} />
                               </button>
@@ -1288,7 +1998,7 @@ function BulkPriceUpdateModal({
                 <div className="pricing-bulk-form-grid">
                   <label className="field-group"><span>Minimum fiyat</span><input type="number" min="0" step="0.01" value={form.minPrice} onChange={(event) => setForm((current) => ({ ...current, minPrice: event.target.value }))} /></label>
                   <label className="field-group"><span>Maksimum fiyat</span><input type="number" min="0" step="0.01" value={form.maxPrice} onChange={(event) => setForm((current) => ({ ...current, maxPrice: event.target.value }))} /></label>
-                  <div className="pricing-bulk-count"><Search size={16} /> {affectedProducts.length} ürün aralıkta</div>
+                  <div className="pricing-bulk-count"><Search size={16} /> {productsLoading ? 'Ürünler yükleniyor...' : `${affectedProducts.length} ürün aralıkta`}</div>
                 </div>
               ) : null}
             </div>
@@ -1297,8 +2007,8 @@ function BulkPriceUpdateModal({
               <h3>Uygulama Türü</h3>
               <div className="pricing-bulk-form-grid">
                 <label className="field-group"><span>İşlem</span><select value={form.operation} onChange={(event) => setForm((current) => ({ ...current, operation: event.target.value }))}>{BULK_OPERATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-                <label className="field-group"><span>Tip</span><select value={form.adjustmentType} disabled={form.operation === 'fixed'} onChange={(event) => setForm((current) => ({ ...current, adjustmentType: event.target.value }))}><option value="percent">Yüzde</option><option value="amount">Tutar</option></select></label>
-                <label className="field-group"><span>{form.operation === 'fixed' ? 'Sabit fiyat' : 'Değer'}</span><input type="number" min="0" step="0.01" value={form.adjustmentValue} onChange={(event) => setForm((current) => ({ ...current, adjustmentValue: event.target.value }))} /></label>
+                <label className="field-group"><span>Değişim türü</span><select value={form.adjustmentType} disabled={form.operation === 'fixed'} onChange={(event) => setForm((current) => ({ ...current, adjustmentType: event.target.value }))}><option value="percent">Yüzde</option><option value="amount">Tutar</option></select></label>
+                <label className="field-group"><span>{form.operation === 'fixed' ? 'Yeni satış fiyatı' : 'Değişim değeri'}</span><input type="number" min="0" step="0.01" value={form.adjustmentValue} onChange={(event) => setForm((current) => ({ ...current, adjustmentValue: event.target.value }))} /></label>
                 <label className="field-group"><span>Küsurat kuralı</span><select value={form.roundingRule} onChange={(event) => setForm((current) => ({ ...current, roundingRule: event.target.value }))}>{BULK_ROUNDING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               </div>
             </div>
@@ -1316,7 +2026,7 @@ function BulkPriceUpdateModal({
                     <div key={product.id} className="pricing-bulk-selected-item">
                       <span>
                         <strong>{product.productName}</strong>
-                        <small>{product.sku || product.barcode || 'SKU yok'} • {product.categoryName} • Regular {formatCurrency(product.currentRegularPrice)}{product.campaignEffectivePrice !== null ? ` • Kampanyalı ${formatCurrency(product.campaignEffectivePrice)}` : ''}</small>
+                        <small>{product.sku || product.barcode || 'SKU yok'} • {product.categoryName} • Satış fiyatı {formatCurrency(product.currentRegularPrice)}{product.campaignEffectivePrice !== null ? ` • Kampanyalı ${formatCurrency(product.campaignEffectivePrice)}` : ''}</small>
                       </span>
                       <button type="button" className="ghost-button" onClick={() => removeSelectedProduct(product.id)} aria-label={`${product.productName} ürününü kaldır`}>
                         <X size={14} />
@@ -1334,32 +2044,32 @@ function BulkPriceUpdateModal({
             <div className="pricing-bulk-preview-head">
               <div>
                 <h3>Önizleme</h3>
-                <p>Seçili kapsam ve fiyat kurallarına göre sonuç otomatik hesaplanır.</p>
+                <p>Uygulamadan önce etkilenecek ürünleri, yeni fiyatı ve kârlılık riskini kontrol edin.</p>
               </div>
             </div>
             {previewState.tone === 'ready' ? (
               <>
                 <div className="pricing-bulk-preview-stats">
                   <div><span>Etkilenecek ürün</span><strong>{previewSummary.count}</strong></div>
-                  <div><span>Regular mevcut ort.</span><strong>{formatCurrency(previewSummary.avgBefore)}</strong></div>
-                  <div><span>Yeni regular ort.</span><strong>{formatCurrency(previewSummary.avgAfter)}</strong></div>
-                  <div><span>Regular risk</span><strong>{previewSummary.regularRiskCount}</strong></div>
-                  <div><span>Kampanya riski</span><strong>{previewSummary.campaignRiskCount}</strong></div>
-                  <div><span>Negatif marj</span><strong>{previewSummary.negativeMarginCount}</strong></div>
+                  <div><span>Mevcut ortalama satış fiyatı</span><strong>{formatCurrency(previewSummary.avgBefore)}</strong></div>
+                  <div><span>Yeni ortalama satış fiyatı</span><strong>{formatCurrency(previewSummary.avgAfter)}</strong></div>
+                  <div><span>Kârlılık riski taşıyan ürün</span><strong>{previewSummary.regularRiskCount}</strong></div>
+                  <div><span>Kampanya çakışma riski</span><strong>{previewSummary.campaignRiskCount}</strong></div>
+                  <div><span>Zarar riski olan ürün</span><strong>{previewSummary.negativeMarginCount}</strong></div>
                 </div>
                 {previewSummary.marginRiskCount > 0 ? <div className="pricing-bulk-warning"><AlertTriangle size={16} /> {marginWarningText}</div> : null}
-                <div className="pricing-bulk-warning pricing-bulk-warning--info"><AlertTriangle size={16} /> Marj hesabı basit maliyet/fiyat oranına göre yapılır; lojistik, fire ve KDV dahil değildir. Maliyet hesabı purchasePrice/cost alanından yapılır.</div>
+                <div className="pricing-bulk-warning pricing-bulk-warning--info"><AlertTriangle size={16} /> Bu ön izleme ürün alış maliyetini baz alır. Kargo, fire ve KDV etkileri bu toplu kontrolde ayrıca hesaplanmaz.</div>
                 <div className="pricing-bulk-preview-sample-head">
                   <strong>Örnek ürünler</strong>
-                  <span>Regular fiyat, kampanyalı efektif fiyat ve risk nedeni ayrı gösterilir</span>
+                  <span>Satış fiyatı, varsa kampanya fiyatı ve risk nedeni ayrı gösterilir</span>
                 </div>
                 <div className="pricing-bulk-preview-list">
                   {previewExamples.map((row) => (
                     <div key={row.id}>
                       <strong>{row.productName}</strong>
-                      <span>Regular: {formatCurrency(row.currentRegularPrice)} → {formatCurrency(row.nextRegularPrice)}</span>
+                      <span>Satış fiyatı: {formatCurrency(row.currentRegularPrice)} → {formatCurrency(row.nextRegularPrice)}</span>
                       <span>{row.hasActiveCampaign ? `Kampanyalı: ${formatCurrency(row.campaignEffectivePrice || 0)} → ${formatCurrency(row.campaignEffectiveAfter || row.campaignEffectivePrice || 0)}` : 'Kampanya yok'}</span>
-                      <span>Maliyet: {formatCurrency(row.purchasePrice)} • Regular marj: {row.regularMarginAfter === null ? '-' : formatPercent(row.regularMarginAfter)}{row.campaignMarginAfter === null ? '' : ` • Kampanya marjı: ${formatPercent(row.campaignMarginAfter)}`}</span>
+                      <span>Alış maliyeti: {formatCurrency(row.purchasePrice)} • Satış kârlılığı: {row.regularMarginAfter === null ? '-' : formatPercent(row.regularMarginAfter)}{row.campaignMarginAfter === null ? '' : ` • Kampanya kârlılığı: ${formatPercent(row.campaignMarginAfter)}`}</span>
                       <span className={row.hasMarginRisk ? 'is-negative' : 'is-positive'}>{row.riskReason}</span>
                       <span className={row.delta < 0 ? 'is-negative' : 'is-positive'}>
                         {row.delta < 0 ? '' : '+'}{formatCurrency(row.delta)} ({row.pct < 0 ? '' : '+'}{formatPercent(row.pct)})
@@ -1374,13 +2084,21 @@ function BulkPriceUpdateModal({
               <div className="pricing-bulk-preview-empty">{previewState.message}</div>
             )}
           </div>
+
+          <label className="pricing-bulk-ack pricing-bulk-ack-section">
+            <input type="checkbox" checked={form.acknowledged} onChange={(event) => setForm((current) => ({ ...current, acknowledged: event.target.checked }))} />
+            <span>Bu fiyat güncellemesinin fiyat geçmişine kaydedileceğini ve son işlemler alanından güvenli şekilde geri alınabileceğini onaylıyorum.</span>
+          </label>
+
+          <PriceActionHistoryPanel
+            actions={recentActions}
+            isLoading={recentActionsLoading}
+            rollbackPendingId={rollbackPendingId}
+            onRollback={onRollbackPriceAction}
+          />
         </div>
 
         <footer className="pricing-bulk-modal-foot">
-          <label className="pricing-bulk-ack">
-            <input type="checkbox" checked={form.acknowledged} onChange={(event) => setForm((current) => ({ ...current, acknowledged: event.target.checked }))} />
-            <span>Fiyat güncellemesinin ürün fiyat geçmişine işleneceğini ve geri alma işleminin manuel takip gerektireceğini onaylıyorum.</span>
-          </label>
           <div className="pricing-bulk-foot-actions pricing-sell-price-foot-actions">
             <button type="button" className="ghost-button" onClick={onClose}>Vazgeç</button>
             <button type="button" className="primary-button" onClick={handleApply} disabled={isApplying || !form.acknowledged || Boolean(validation)}>
@@ -1396,12 +2114,17 @@ function BulkPriceUpdateModal({
 function SellPriceAdvisorModal({
   isOpen,
   rows = [],
+  rowsLoading = false,
   onClose,
   onCalculate,
   onApprove,
   calculation,
   isLoading,
   isApproving,
+  recentActions = [],
+  recentActionsLoading = false,
+  rollbackPendingId = '',
+  onRollbackPriceAction,
 }) {
   const [productId, setProductId] = useState('');
   const [targetMarginPct, setTargetMarginPct] = useState(22);
@@ -1456,25 +2179,25 @@ function SellPriceAdvisorModal({
     },
     {
       key: 'effective-cost',
-      label: 'Efektif birim maliyet',
+      label: 'Tahmini birim maliyet',
       value: currency.format(visibleCalculation.costs?.totalEffectiveUnitCost || visibleCalculation.costs?.totalEstimatedCost || 0),
       tone: 'is-success',
     },
     {
       key: 'difference',
-      label: 'Mevcut fiyat farkı',
+      label: 'Mevcut fiyata göre fark',
       value: `${difference >= 0 ? '+' : ''}${currency.format(difference)}`,
       tone: 'is-neutral',
     },
     {
       key: 'expected-margin',
-      label: 'Beklenen marj',
+      label: 'Beklenen kârlılık',
       value: `%${Number(visibleCalculation.recommendation?.expectedMarginPct || 0).toFixed(2)}`,
       tone: 'is-warning',
     },
     {
       key: 'profit',
-      label: 'Beklenen brüt kâr',
+      label: 'Tahmini brüt kâr',
       value: currency.format(visibleCalculation.recommendation?.expectedProfit || 0),
       tone: 'is-success',
     },
@@ -1487,7 +2210,7 @@ function SellPriceAdvisorModal({
           <div className="mod-card-icon mod-icon-cyan"><BadgePercent size={20} /></div>
           <div>
             <h2 id="sell-price-title">Ne Kadara Satmalıyım?</h2>
-            <p>Alış maliyeti, lojistik, KDV ve risk etkisini birlikte okuyup uygulanabilir satış fiyatını hesaplayın.</p>
+            <p>Ürün maliyeti, taşıma, vergi ve stok riskini birlikte değerlendirerek önerilen satış fiyatını hesaplayın.</p>
           </div>
           <button type="button" className="ghost-button pricing-modal-close" onClick={onClose} aria-label="Kapat"><X size={18} /></button>
         </header>
@@ -1498,7 +2221,7 @@ function SellPriceAdvisorModal({
               <div className="pricing-bulk-panel pricing-sell-price-panel">
                 <div className="pricing-sell-price-panel-head">
                   <h3>Ürün ve hedef</h3>
-                  <p>Ürünü seçin, hedef brüt marjı girin ve fiyat önerisini oluşturun.</p>
+                  <p>Ürünü seçin, hedef kârlılığı girin ve uygulanabilir fiyat önerisini oluşturun.</p>
                 </div>
                 <div className="pricing-bulk-form-grid pricing-sell-price-form-grid">
                   <label className="field-group pricing-sell-price-search-shell">
@@ -1549,13 +2272,13 @@ function SellPriceAdvisorModal({
                             })}
                           </div>
                         ) : (
-                          <div className="pricing-bulk-product-search-empty pricing-sell-price-search-empty">Eşleşme bulunamadı.</div>
+                          <div className="pricing-bulk-product-search-empty pricing-sell-price-search-empty">{rowsLoading ? 'Ürünler yükleniyor...' : 'Eşleşme bulunamadı.'}</div>
                         )}
                       </div>
                     ) : null}
                   </label>
                   <label className="field-group">
-                    <span>Hedef marj (%)</span>
+                    <span>Hedef kârlılık (%)</span>
                     <input type="number" min="1" max="70" value={targetMarginPct} onChange={(event) => setTargetMarginPct(event.target.value)} />
                   </label>
                 </div>
@@ -1575,7 +2298,7 @@ function SellPriceAdvisorModal({
               <div className="pricing-bulk-panel pricing-sell-price-panel pricing-sell-price-result-panel">
                 <div className="pricing-sell-price-panel-head">
                   <h3>Hesap sonucu</h3>
-                  <p>Önerilen fiyat, maliyet etkisi ve beklenen kârlılık.</p>
+                  <p>Önerilen satış fiyatı, maliyet etkisi ve beklenen kazanç.</p>
                 </div>
                 {!visibleCalculation ? (
                   <div className="pricing-bulk-preview-empty pricing-sell-price-empty">
@@ -1594,11 +2317,11 @@ function SellPriceAdvisorModal({
                         <strong>{currency.format(visibleCalculation.current?.salePrice || 0)}</strong>
                       </div>
                       <div>
-                        <span>Hedef marj</span>
+                        <span>Hedef kârlılık</span>
                         <strong>%{Number(visibleCalculation.recommendation?.targetMarginPct || 0).toFixed(0)}</strong>
                       </div>
                       <div>
-                        <span>Son FDT</span>
+                        <span>Son fiyat değişim tarihi</span>
                         <strong>{visibleCalculation.priceHistory?.lastPriceChangeDate || visibleCalculation.current?.lastPriceChangeDate || '-'}</strong>
                       </div>
                     </div>
@@ -1614,7 +2337,7 @@ function SellPriceAdvisorModal({
                       {(visibleCalculation.calculationSummary || []).map((line) => <div key={line}>{formatUserFacingTechnicalText(line, '-')}</div>)}
                     </div>
                     <div className="pricing-sell-price-foot-note">
-                      Bu öneri alış maliyeti, lojistik, operasyon ve risk bileşenleriyle hesaplandı. KDV dahil normal satış fiyatı standardı korunur; kampanya fiyatı güncellenmez.
+                      Bu öneri ürün alış maliyeti, taşıma, operasyon ve stok riskiyle hesaplanır. Kampanya fiyatı değiştirilmez; yalnızca ana satış fiyatı için öneri verir.
                     </div>
                   </>
                 )}
@@ -1625,16 +2348,16 @@ function SellPriceAdvisorModal({
               <div className="pricing-bulk-panel pricing-sell-price-panel pricing-sell-price-side-panel">
                 <div className="pricing-sell-price-panel-head">
                   <h3>Hesap girdileri</h3>
-                  <p>Seçili ürün için kullanılan maliyet ve risk kaynakları.</p>
+                  <p>Fiyat önerisinde kullanılan maliyet, taşıma ve risk bilgileri.</p>
                 </div>
                 {!visibleCalculation ? (
-                  <div className="pricing-sell-price-input-empty">Hesaplama sonrası alış, lojistik, operasyon ve risk bileşenleri burada açılır.</div>
+                  <div className="pricing-sell-price-input-empty">Hesaplama sonrası alış maliyeti, taşıma, operasyon ve risk detayları burada gösterilir.</div>
                 ) : (
                   <>
                     <div className="pricing-sell-price-input-grid">
                       <div><span>SKU</span><strong>{visibleCalculation.product?.sku || '-'}</strong></div>
                       <div><span>Barkod</span><strong>{visibleCalculation.product?.barcode || '-'}</strong></div>
-                      <div><span>Birim / koli</span><strong>{visibleCalculation.product?.unit || 'adet'} / {visibleCalculation.product?.casePack || visibleCalculation.costs?.unitsPerCase || 1}</strong></div>
+                      <div><span>Satış birimi / koli içi</span><strong>{visibleCalculation.product?.unit || 'adet'} / {visibleCalculation.product?.casePack || visibleCalculation.costs?.unitsPerCase || 1}</strong></div>
                       <div><span>Saklama</span><strong>{formatCalculationStorageLabel(visibleCalculation.product?.storageType)}</strong></div>
                       <div><span>Kategori</span><strong>{visibleCalculation.product?.categoryName || '-'}</strong></div>
                       <div><span>KDV standardı</span><strong>%{Number(visibleCalculation.costs?.vatRatePct || 0).toFixed(0)}</strong></div>
@@ -1652,7 +2375,7 @@ function SellPriceAdvisorModal({
                     </div>
                     {visibleCalculation.campaign?.isActive ? (
                       <div className="pricing-sell-price-alert">
-                        Aktif kampanya: {visibleCalculation.campaign.name} · kampanya fiyatı {currency.format(visibleCalculation.campaign.campaignPrice || 0)}. Bu ekran normal satış fiyatını önerir.
+                        Aktif kampanya: {visibleCalculation.campaign.name} · kampanya fiyatı {currency.format(visibleCalculation.campaign.campaignPrice || 0)}. Bu ekran kampanyayı değiştirmez, ana satış fiyatı için öneri verir.
                       </div>
                     ) : null}
                   </>
@@ -1660,11 +2383,18 @@ function SellPriceAdvisorModal({
               </div>
             </div>
           </div>
+          <div className="pricing-sell-price-foot-note pricing-sell-price-body-note">
+            Hesaplama ürün alış maliyeti, taşıma, KDV ve operasyon varsayımlarını kullanır.
+          </div>
+
+          <PriceActionHistoryPanel
+            actions={recentActions}
+            isLoading={recentActionsLoading}
+            rollbackPendingId={rollbackPendingId}
+            onRollback={onRollbackPriceAction}
+          />
         </div>
         <footer className="pricing-bulk-modal-foot pricing-sell-price-modal-foot">
-          <div className="pricing-sell-price-foot-note">
-            Hesaplama, alış maliyeti, lojistik, KDV ve operasyon varsayımlarını kullanır.
-          </div>
           <div className="pricing-bulk-foot-actions pricing-sell-price-foot-actions">
             <button type="button" className="ghost-button" onClick={onClose}>Kapat</button>
             <button
@@ -1687,31 +2417,62 @@ function SellPriceAdvisorModal({
 }
 
 function PricingAnalysis() {
-  const navigate = useNavigate();
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [filters, setFilters] = useState(FILTER_DEFAULTS);
-  const [selectedPreset, setSelectedPreset] = useState('');
   const [expandedRowId, setExpandedRowId] = useState('');
+  const [openActionMenuId, setOpenActionMenuId] = useState('');
   const [rowDetails, setRowDetails] = useState({});
   const [rowDetailLoadingId, setRowDetailLoadingId] = useState('');
   const [simulationDiscounts, setSimulationDiscounts] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
+  const [tablePage, setTablePage] = useState(1);
+  const {
+    filters,
+    setFilters,
+    selectedPreset,
+    criticalFilterActive,
+    setCriticalFilterActive,
+    activeFilterCount,
+    handlePresetClick,
+    handleCardFilter,
+    resetFilters,
+  } = usePricingFilters({
+    defaults: FILTER_DEFAULTS,
+    actionTypes: PRICING_ACTION_TYPES,
+    applyPreset: applyPricePreset,
+    onPresetChange: () => {
+      setSelectedIds([]);
+      setOpenActionMenuId('');
+    },
+    onCardFilterChange: () => {
+      setOpenActionMenuId('');
+    },
+    onReset: () => {
+      setSelectedIds([]);
+      setTablePage(1);
+      setOpenActionMenuId('');
+    },
+  });
   const [bulkDiscountRate, setBulkDiscountRate] = useState(20);
   const [toast, setToast] = useState({ type: '', message: '' });
   const [products, setProducts] = useState([]);
+  const [productsLoaded, setProductsLoaded] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(false);
   const [categories, setCategories] = useState([]);
   const [categoryLabels, setCategoryLabels] = useState([]);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkApplying, setBulkApplying] = useState(false);
+  const [rowApplyPendingId, setRowApplyPendingId] = useState('');
   const [isSellPriceModalOpen, setIsSellPriceModalOpen] = useState(false);
   const [sellPriceCalculation, setSellPriceCalculation] = useState(null);
   const [sellPriceLoading, setSellPriceLoading] = useState(false);
   const [sellPriceApproving, setSellPriceApproving] = useState(false);
-  const [criticalFilterActive, setCriticalFilterActive] = useState(false);
+  const [recentPriceActions, setRecentPriceActions] = useState([]);
+  const [recentPriceActionsLoading, setRecentPriceActionsLoading] = useState(false);
+  const [rollbackPendingId, setRollbackPendingId] = useState('');
+  const [locallyAppliedDecisions, setLocallyAppliedDecisions] = useState(() => readPricingDecisionArchive());
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [tablePage, setTablePage] = useState(1);
   const [tableMeta, setTableMeta] = useState(null);
   const rowsPerPage = 10;
 
@@ -1720,26 +2481,61 @@ function PricingAnalysis() {
     else setLoading(true);
     setError('');
     try {
-      const analysisParams = {
+      const baseAnalysisParams = {
         universe: 'listed_active',
         categoryId: filters.categoryId,
         supplierId: filters.supplierId,
         riskLevel: filters.risk,
-        sktStatus: filters.sktStatus,
+        sktStatus: normalizeSktStatusFilter(filters.sktStatus) || undefined,
         salesSpeed: filters.salesSpeed,
+        primaryAction: filters.primaryAction || undefined,
         discountOnly: filters.hasSuggestion === true ? 'true' : undefined,
-        page: tablePage,
-        limit: rowsPerPage,
+        campaignEligibility: filters.campaignEligibility || undefined,
+        conflict: filters.conflict || undefined,
+        blockingReason: filters.blockingReason || undefined,
+        activeCampaignConflict: filters.activeCampaignConflict || undefined,
+        guardrail: filters.guardrail || undefined,
+        pricePreset: selectedPreset || undefined,
         sort: 'risk_desc',
       };
-      if (forceRefresh) analysisParams.forceRefresh = true;
-      const [summaryResponse, rowsResponse, categoryResponse, productResponse, labelResponse] = await Promise.allSettled([
-        pricingAnalysisService.getSummary(analysisParams, { signal }),
-        pricingAnalysisService.getRows(analysisParams, { signal }),
+      const summaryParams = { ...baseAnalysisParams };
+      const rowsParams = {
+        ...baseAnalysisParams,
+        excludeActiveTemporary: 'true',
+        page: tablePage,
+        limit: rowsPerPage,
+      };
+      summaryParams.excludeActiveTemporary = rowsParams.excludeActiveTemporary;
+      if (forceRefresh) {
+        summaryParams.forceRefresh = true;
+        rowsParams.forceRefresh = true;
+      }
+      if (typeof pricingAnalysisService.getSummary !== 'function' || typeof pricingAnalysisService.getRows !== 'function') {
+        const legacyResponse = await pricingAnalysisService.getAnalysis(rowsParams, { signal });
+        if (signal?.aborted) return;
+        const legacyRows = collectPricingRows(legacyResponse);
+        setAnalysis({ ...legacyResponse, rows: legacyRows });
+        setTableMeta({ total: legacyRows.length, totalPages: Math.max(1, Math.ceil(legacyRows.length / rowsPerPage)), page: 1, limit: rowsPerPage });
+        setCategories([]);
+        setProducts([]);
+        setCategoryLabels([]);
+        return;
+      }
+      const requestGroup = [
         categoryService.list({ forceRefresh }),
-        productService.list({ universe: 'listed_active', includeUnlisted: false, fetchAll: true, forceRefresh }),
         categoryService.listLabels({ forceRefresh }),
-      ]);
+      ];
+      const [summaryResponse, rowsResponse, categoryResponse, labelResponse] = forceRefresh
+        ? [
+            { status: 'fulfilled', value: await pricingAnalysisService.getSummary(summaryParams, { signal }) },
+            { status: 'fulfilled', value: await pricingAnalysisService.getRows({ ...rowsParams, forceRefresh: undefined }, { signal }) },
+            ...(await Promise.allSettled(requestGroup)),
+          ]
+        : await Promise.allSettled([
+            pricingAnalysisService.getSummary(summaryParams, { signal }),
+            pricingAnalysisService.getRows(rowsParams, { signal }),
+            ...requestGroup,
+          ]);
       if (signal?.aborted) return;
       if (summaryResponse.status === 'rejected') throw summaryResponse.reason;
       if (rowsResponse.status === 'rejected') throw rowsResponse.reason;
@@ -1748,7 +2544,6 @@ function PricingAnalysis() {
       setAnalysis({ ...summaryResponse.value, rows: rowList });
       setTableMeta(rowResult.pagination);
       setCategories(categoryResponse.status === 'fulfilled' && Array.isArray(categoryResponse.value) ? categoryResponse.value : []);
-      setProducts(productResponse.status === 'fulfilled' && Array.isArray(productResponse.value) ? productResponse.value : []);
       setCategoryLabels(labelResponse.status === 'fulfilled' && Array.isArray(labelResponse.value) ? labelResponse.value : []);
     } catch (loadError) {
       if (loadError?.name === 'AbortError' || signal?.aborted) return;
@@ -1759,13 +2554,111 @@ function PricingAnalysis() {
         setIsRefreshing(false);
       }
     }
-  }, [filters, tablePage]);
+  }, [filters, selectedPreset, tablePage]);
+
+  const loadPricingProducts = useCallback(async ({ forceRefresh = false } = {}) => {
+    if (productsLoading) return;
+    if (productsLoaded && !forceRefresh) return;
+    setProductsLoading(true);
+    try {
+      const productRows = await productService.list({
+        universe: 'listed_active',
+        includeUnlisted: false,
+        fetchAll: true,
+        forceRefresh,
+      });
+      setProducts(Array.isArray(productRows) ? productRows : []);
+      setProductsLoaded(true);
+    } catch (productError) {
+      setToast({ type: 'error', message: productError.message || 'Ürün listesi alınamadı.' });
+    } finally {
+      setProductsLoading(false);
+    }
+  }, [productsLoaded, productsLoading]);
+
+  const loadRecentPriceActions = useCallback(async () => {
+    setRecentPriceActionsLoading(true);
+    try {
+      const actions = await pricingAnalysisService.getRecentPriceActions({ limit: 3 });
+      setRecentPriceActions(Array.isArray(actions) ? actions : []);
+    } catch {
+      setRecentPriceActions([]);
+    } finally {
+      setRecentPriceActionsLoading(false);
+    }
+  }, []);
+
+  const patchPriceRowsLocally = useCallback((priceChanges = []) => {
+    const normalizedChanges = new Map(
+      (Array.isArray(priceChanges) ? priceChanges : [])
+        .map((item) => [
+          String(item.productId || item.id || '').trim(),
+          normalizePrice(item.salePrice ?? item.nextPrice ?? item.price),
+        ])
+        .filter(([productId, salePrice]) => productId && salePrice > 0)
+    );
+    if (!normalizedChanges.size) return;
+
+    const applyToRow = (row = {}) => {
+      const rowId = String(row.productId || row.id || row.product?.id || '').trim();
+      if (!normalizedChanges.has(rowId)) return row;
+      const salePrice = normalizedChanges.get(rowId);
+      return {
+        ...row,
+        currentPrice: salePrice,
+        salePrice,
+        price: salePrice,
+        productPrice: salePrice,
+        product: row.product ? { ...row.product, salePrice, price: salePrice } : row.product,
+        current: row.current ? { ...row.current, salePrice } : row.current,
+      };
+    };
+
+    setAnalysis((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        rows: Array.isArray(current.rows) ? current.rows.map(applyToRow) : current.rows,
+        sections: current.sections && typeof current.sections === 'object'
+          ? Object.fromEntries(Object.entries(current.sections).map(([key, value]) => [
+            key,
+            Array.isArray(value) ? value.map(applyToRow) : value,
+          ]))
+          : current.sections,
+      };
+    });
+    setProducts((current) => current.map((product) => {
+      const productId = String(product.id || product.productId || '').trim();
+      if (!normalizedChanges.has(productId)) return product;
+      const salePrice = normalizedChanges.get(productId);
+      return { ...product, salePrice, price: salePrice, currentPrice: salePrice };
+    }));
+  }, []);
+
+  const prependRecentPriceAction = useCallback((action) => {
+    if (!action?.id) return;
+    setRecentPriceActions((current) => [
+      action,
+      ...current.filter((item) => item.id !== action.id),
+    ].slice(0, 3));
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     void loadPricingData({ signal: controller.signal });
     return () => controller.abort();
   }, [loadPricingData]);
+
+  useEffect(() => {
+    setTablePage(1);
+  }, [filters, selectedPreset, criticalFilterActive]);
+
+  useEffect(() => {
+    if (isBulkModalOpen || isSellPriceModalOpen) {
+      void loadRecentPriceActions();
+      void loadPricingProducts();
+    }
+  }, [isBulkModalOpen, isSellPriceModalOpen, loadPricingProducts, loadRecentPriceActions]);
 
   const recommendationRows = useMemo(() => {
     const collectedRows = collectPricingRows(analysis);
@@ -1782,39 +2675,25 @@ function PricingAnalysis() {
     return [...uniqueMap.values()];
   }, [analysis, products]);
 
-  const visibleRows = useMemo(() => {
+  const supplierOptions = useMemo(() => {
+    const optionMap = new Map();
+    [...recommendationRows, ...products].forEach((item) => {
+      const value = String(item?.supplierId || item?.supplier?.id || '').trim();
+      if (!value || optionMap.has(value)) return;
+      const label = item?.supplierName || item?.supplier?.name || value;
+      optionMap.set(value, { value, label });
+    });
+    return [...optionMap.values()].sort((a, b) => a.label.localeCompare(b.label, 'tr-TR'));
+  }, [products, recommendationRows]);
+
+  const filteredDecisionRows = useMemo(() => {
     let rows = recommendationRows;
 
-    if (selectedPreset) {
-      rows = rows.filter((row) => rowMatchesPricePreset(row, selectedPreset));
-    }
-    if (filters.risk) {
-      rows = rows.filter((row) => row.riskLevel === filters.risk);
-    }
-    if (filters.sktStatus) {
-      rows = rows.filter((row) => row.expirationRisk === filters.sktStatus);
-    }
-    if (filters.salesSpeed) {
-      rows = rows.filter((row) => {
-        if (filters.salesSpeed === 'fast') return row.salesVelocity >= 4;
-        if (filters.salesSpeed === 'slow') return row.salesVelocity <= 1;
-        return row.salesVelocity > 1 && row.salesVelocity < 4;
-      });
-    }
-    if (filters.hasSuggestion === true) {
-      rows = rows.filter((row) => row.suggestedDiscount > 0);
-    } else if (filters.hasSuggestion === false) {
-      rows = rows.filter((row) => row.suggestedDiscount <= 0);
-    }
-    if (criticalFilterActive) {
-      rows = rows.filter((row) => row.actionType === 'urgent' || row.expirationRisk === 'critical' || row.riskLevel === 'critical');
-    }
-
-    return rows.map((row) => {
+    const mappedRows = rows.map((row) => {
       const simulatedDiscount = clampPercent(simulationDiscounts[row.id] ?? row.suggestedDiscount);
       const simulatedAction = getActionModel({
         currentPrice: row.currentPrice,
-        actionType: simulatedDiscount > 0 ? (row.actionType === 'urgent' ? 'urgent' : 'discount') : row.actionType,
+        actionType: simulatedDiscount > 0 ? PRICING_ACTION_TYPES.DISCOUNT : row.actionType,
         actionPercent: simulatedDiscount,
         suggestedPrice: row.suggestedPrice,
       });
@@ -1830,20 +2709,67 @@ function PricingAnalysis() {
         priceChangePercent: simulatedAction.priceChangePercent,
       };
     });
-  }, [recommendationRows, selectedPreset, simulationDiscounts, filters, criticalFilterActive]);
+
+    const activeAppliedByProduct = Object.values(locallyAppliedDecisions).reduce((map, item) => {
+      const productKey = getPricingDecisionProductKey(item);
+      const status = String(item?.archiveStatus || item?.status || '').trim().toLowerCase('tr-TR');
+      if (productKey && (!status || status === 'active')) map.set(productKey, item);
+      return map;
+    }, new Map());
+
+    const markedRows = mappedRows.map((row) => {
+      const decisionKey = getPricingDecisionKey(row);
+      const appliedDecision = locallyAppliedDecisions[decisionKey];
+      const activeProductDecision = activeAppliedByProduct.get(getPricingDecisionProductKey(row));
+      const matchedDecision = appliedDecision || activeProductDecision;
+      return matchedDecision
+        ? { ...row, ...matchedDecision, isLocallyApplied: true }
+        : row;
+    });
+
+    return markedRows;
+  }, [recommendationRows, simulationDiscounts, locallyAppliedDecisions]);
+
+  const visibleRows = useMemo(
+    () => filteredDecisionRows.filter(isActivePricingDecision),
+    [filteredDecisionRows],
+  );
+
+  const archivedRows = useMemo(() => {
+    const existingArchiveKeys = new Set(filteredDecisionRows.map(getPricingDecisionKey).filter(Boolean));
+    const archivedFromCurrentRows = filteredDecisionRows.filter((row) => row.isLocallyApplied || hasActiveTemporaryPriceAction(row));
+    const archivedSnapshots = Object.values(locallyAppliedDecisions)
+      .filter((row) => !existingArchiveKeys.has(row.decisionKey || getPricingDecisionKey(row)))
+      .filter((row) => {
+        if (selectedPreset && !rowMatchesPricePreset(row, selectedPreset)) return false;
+        if (filters.risk && row.riskLevel !== filters.risk) return false;
+        if (normalizeSktStatusFilter(filters.sktStatus) && !rowMatchesSktStatusFilter(row, filters.sktStatus)) return false;
+        if (filters.salesSpeed) {
+          if (filters.salesSpeed === 'fast' && row.salesVelocity < 4) return false;
+          if (filters.salesSpeed === 'slow' && row.salesVelocity > 1) return false;
+          if (filters.salesSpeed === 'normal' && !(row.salesVelocity > 1 && row.salesVelocity < 4)) return false;
+        }
+        if (filters.hasSuggestion === true && row.actionType !== PRICING_ACTION_TYPES.DISCOUNT) return false;
+        if (filters.hasSuggestion === false && [PRICING_ACTION_TYPES.DISCOUNT, PRICING_ACTION_TYPES.CAMPAIGN, PRICING_ACTION_TYPES.ORDER].includes(row.actionType)) return false;
+        if (filters.primaryAction && row.actionType !== filters.primaryAction) return false;
+        if (filters.categoryId && String(row.categoryId || row.productCategoryId || '').trim() !== String(filters.categoryId).trim()) return false;
+        if (filters.supplierId && String(row.supplierId || '').trim() !== String(filters.supplierId).trim()) return false;
+        if (criticalFilterActive && !(row.actionType === PRICING_ACTION_TYPES.DISCOUNT || row.expirationRisk === 'critical' || row.riskLevel === 'critical')) return false;
+        return true;
+      })
+      .map((row) => ({ ...row, isLocallyApplied: true }));
+    return [...archivedFromCurrentRows, ...archivedSnapshots]
+      .sort((a, b) => new Date(b.archivedAt || b.appliedAt || 0) - new Date(a.archivedAt || a.appliedAt || 0));
+  }, [criticalFilterActive, filteredDecisionRows, filters, locallyAppliedDecisions, selectedPreset]);
 
   const selectedRows = useMemo(() => {
     const selectedSet = new Set(selectedIds);
     return visibleRows.filter((row) => selectedSet.has(row.id));
   }, [selectedIds, visibleRows]);
 
-  const selectedCampaignEligibleRows = useMemo(
-    () => selectedRows.filter((row) => row.campaignEligible),
-    [selectedRows],
-  );
-
   const bulkModalProducts = useMemo(() => {
     if (products.length) return products;
+    if (productsLoading || productsLoaded) return [];
     return recommendationRows.map((row) => ({
       id: row.productId || row.id,
       productId: row.productId || row.id,
@@ -1856,9 +2782,10 @@ function PricingAnalysis() {
       avgDailySales: row.salesVelocity,
       sku: row.sku,
     }));
-  }, [products, recommendationRows]);
+  }, [products, productsLoaded, productsLoading, recommendationRows]);
 
   const sellPriceRows = useMemo(() => {
+    if (!productsLoaded && productsLoading) return [];
     const activeProductRows = products
       .filter((product) => !isCatalogUnlistedProduct(product))
       .map((product, index) => ({
@@ -1872,38 +2799,55 @@ function PricingAnalysis() {
       }))
       .filter((row) => row.productId && Number(row.currentPrice || 0) > 0);
     return activeProductRows.length ? activeProductRows : recommendationRows;
-  }, [products, recommendationRows]);
+  }, [products, productsLoaded, productsLoading, recommendationRows]);
 
   const summary = useMemo(() => {
     const rows = visibleRows;
     const analysisSummary = analysis?.summary || {};
-    const total = Number(analysisSummary.totalAnalyzedProducts ?? tableMeta?.total ?? rows.length);
-    const urgentCount = Number(analysisSummary.highRiskProducts ?? rows.filter((row) => row.actionType === 'urgent').length);
-    const discountCount = Number(analysisSummary.discountSuggestedProducts ?? rows.filter((row) => row.simulatedDiscount > 0).length);
-    const keepCount = Math.max(0, total - discountCount);
-    const avgDiscount = discountCount
-      ? rows
-          .filter((row) => row.simulatedDiscount > 0)
-          .reduce((sum, row) => sum + row.simulatedDiscount, 0) / discountCount
+    const useVisibleSummary = selectedPreset === PRICE_PRESETS.overstocked || criticalFilterActive;
+    const total = useVisibleSummary ? rows.length : Number(analysisSummary.totalAnalyzedProducts ?? tableMeta?.total ?? rows.length);
+    const actionRequiredCount = useVisibleSummary
+      ? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.DISCOUNT).length
+      : Number(analysisSummary.actionRequiredProducts ?? analysisSummary.discountSuggestedProducts ?? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.DISCOUNT).length);
+    const watchCount = useVisibleSummary
+      ? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.WATCH).length
+      : Number(analysisSummary.watchOnlyProducts ?? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.WATCH).length);
+    const holdCount = useVisibleSummary
+      ? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.HOLD).length
+      : Number(analysisSummary.holdPriceProducts ?? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.HOLD).length);
+    const orderCount = useVisibleSummary
+      ? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.ORDER).length
+      : Number(analysisSummary.orderPriorityProducts ?? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.ORDER).length);
+    const campaignCount = useVisibleSummary
+      ? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.CAMPAIGN).length
+      : Number(analysisSummary.campaignCandidateProducts ?? rows.filter((row) => row.actionType === PRICING_ACTION_TYPES.CAMPAIGN).length);
+    const discountRows = rows.filter((row) => row.simulatedDiscount > 0);
+    const avgDiscount = discountRows.length
+      ? discountRows.reduce((sum, row) => sum + row.simulatedDiscount, 0) / discountRows.length
       : 0;
 
     return {
       total,
-      urgentCount,
-      discountCount,
-      keepCount,
+      urgentCount: actionRequiredCount,
+      discountCount: actionRequiredCount,
+      actionRequiredCount,
+      watchCount,
+      keepCount: holdCount,
+      holdCount,
+      orderCount,
+      campaignCount,
       avgDiscount: Number(avgDiscount.toFixed(1)),
     };
-  }, [analysis?.summary, tableMeta?.total, visibleRows]);
+  }, [analysis?.summary, criticalFilterActive, selectedPreset, tableMeta?.total, visibleRows]);
 
   const metricCards = useMemo(() => {
-    const urgentMessage = summary.urgentCount > 0 ?
-      `${summary.urgentCount} ürün için hızlı aksiyon gerekiyor.`
-      : 'Acil müdahale gerektiren ürün yok.';
+    const urgentMessage = summary.actionRequiredCount > 0 ?
+      `${summary.actionRequiredCount} ürün için gerçek fiyat aksiyonu gerekiyor.`
+      : 'Fiyat aksiyonu gerektiren ürün yok.';
 
     const discountMessage = summary.discountCount > 0 ?
-      `${summary.discountCount} ürün için indirim önerisi hazır.`
-      : 'İndirim gerektiren ürün görünmüyor.';
+      `${summary.discountCount} ürün indirim eşiğini geçti.`
+      : 'İndirim eşiğini geçen ürün görünmüyor.';
 
     const keepMessage = summary.keepCount > 0 ?
       `${summary.keepCount} ürün fiyat koruma modunda.`
@@ -1912,22 +2856,22 @@ function PricingAnalysis() {
     return [
       {
         id: 'urgent',
-        label: 'Acil İşlem',
-        value: summary.urgentCount,
+        label: 'Aksiyon Gerekli',
+        value: summary.actionRequiredCount,
         icon: <ShieldAlert size={16} />,
         iconClass: 'mod-icon-rose',
         message: urgentMessage,
-        onClick: () => handleCardFilter('urgent'),
+        onClick: () => handleCardFilter(PRICING_ACTION_TYPES.DISCOUNT),
         toneClass: 'is-primary-urgent',
       },
       {
-        id: 'discount',
-        label: 'İndirim Önerisi',
-        value: summary.discountCount,
-        icon: <BadgePercent size={16} />,
+        id: 'watch',
+        label: 'İzlenmeli',
+        value: summary.watchCount,
+        icon: <Clock3 size={16} />,
         iconClass: 'mod-icon-cyan',
-        message: discountMessage,
-        onClick: () => handleCardFilter('discount'),
+        message: summary.watchCount > 0 ? `${summary.watchCount} ürün takipte.` : 'Takip edilecek ürün görünmüyor.',
+        onClick: () => handleCardFilter(PRICING_ACTION_TYPES.WATCH),
         toneClass: '',
       },
       {
@@ -1937,16 +2881,36 @@ function PricingAnalysis() {
         icon: <ShieldCheck size={16} />,
         iconClass: 'mod-icon-emerald',
         message: keepMessage,
-        onClick: () => handleCardFilter('keep'),
+        onClick: () => handleCardFilter(PRICING_ACTION_TYPES.HOLD),
+        toneClass: '',
+      },
+      {
+        id: 'order',
+        label: 'Sipariş Baskısı',
+        value: summary.orderCount,
+        icon: <Boxes size={16} />,
+        iconClass: 'mod-icon-indigo',
+        message: summary.orderCount > 0 ? `${summary.orderCount} üründe önce stok/sipariş aksiyonu var.` : 'Sipariş baskısı görünmüyor.',
+        onClick: () => handleCardFilter(PRICING_ACTION_TYPES.ORDER),
+        toneClass: '',
+      },
+      {
+        id: 'campaign',
+        label: 'Kampanya Adayı',
+        value: summary.campaignCount,
+        icon: <BadgePercent size={16} />,
+        iconClass: 'mod-icon-indigo',
+        message: summary.campaignCount > 0 ? `${summary.campaignCount} ürün kampanyaya alınabilir.` : discountMessage,
+        onClick: () => handleCardFilter(PRICING_ACTION_TYPES.CAMPAIGN),
         toneClass: '',
       },
       {
         id: 'all',
-        label: 'Toplam Öneri',
+        label: 'Analiz Edilen Ürün',
         value: summary.total,
         icon: <Boxes size={16} />,
         iconClass: 'mod-icon-indigo',
-        message: summary.total > 0 ? 'Sistem önerileri analiz ederek listeliyor.' : 'Şu an öneri listesi boş görünüyor.',
+        message: summary.total > 0 ? 'Aksiyon, izleme ve koruma grupları ayrı hesaplandı.' : 'Analiz edilecek ürün görünmüyor.',
         onClick: () => handleCardFilter('all'),
         toneClass: '',
       },
@@ -1954,9 +2918,11 @@ function PricingAnalysis() {
   }, [summary]);
 
   const pricingActionChartData = useMemo(() => ([
-    { name: 'Acil', adet: summary.urgentCount },
-    { name: 'İndirim', adet: summary.discountCount },
-    { name: 'Koruma', adet: summary.keepCount },
+    { name: 'Aksiyon', adet: summary.actionRequiredCount },
+    { name: 'İzle', adet: summary.watchCount },
+    { name: 'Koru', adet: summary.keepCount },
+    { name: 'Sipariş', adet: summary.orderCount },
+    { name: 'Kampanya', adet: summary.campaignCount },
   ]), [summary]);
 
   const pricingRiskChartData = useMemo(() => {
@@ -2000,19 +2966,44 @@ function PricingAnalysis() {
   }, [visibleRows]);
 
   const criticalRows = useMemo(
-    () => visibleRows.filter((row) => row.actionType === 'urgent' || row.expirationRisk === 'critical').slice(0, 5),
+    () => visibleRows.filter((row) => row.actionType === PRICING_ACTION_TYPES.DISCOUNT || row.actionType === PRICING_ACTION_TYPES.ORDER).slice(0, 5),
     [visibleRows],
   );
 
-  const emptyState = useMemo(
-    () => mapEmptyStateReason({ rows: recommendationRows, filters }),
-    [recommendationRows, filters],
-  );
-
-  const activeFilterCount = useMemo(
-    () => [filters.risk, filters.sktStatus, filters.salesSpeed, filters.hasSuggestion !== '' ? 'suggestion' : '', selectedPreset, criticalFilterActive ? 'critical' : ''].filter(Boolean).length,
-    [filters, selectedPreset, criticalFilterActive],
-  );
+  const emptyState = useMemo(() => {
+    const backendTotal = Number(tableMeta?.total ?? recommendationRows.length);
+    const hasActiveFilters = [
+      filters.risk,
+      filters.sktStatus,
+      filters.salesSpeed,
+      filters.primaryAction,
+      filters.categoryId,
+      filters.supplierId,
+      filters.campaignEligibility,
+      filters.conflict,
+      filters.blockingReason,
+      filters.activeCampaignConflict,
+      filters.guardrail,
+      filters.hasSuggestion !== '' ? 'suggestion' : '',
+      selectedPreset,
+      criticalFilterActive ? 'critical' : '',
+    ].filter(Boolean).length > 0;
+    if (hasActiveFilters && backendTotal === 0) {
+      return {
+        title: 'Filtreyle eşleşen aktif karar yok',
+        description: 'Seçili filtreler için uygulama bekleyen fiyat kararı bulunamadı.',
+        isFilteredEmpty: true,
+      };
+    }
+    if (backendTotal === 0) {
+      return {
+        title: 'Aktif fiyat kararı yok',
+        description: 'Şu anda uygulama bekleyen açık fiyat kararı bulunmuyor.',
+        isFilteredEmpty: false,
+      };
+    }
+    return mapEmptyStateReason({ rows: recommendationRows, filters });
+  }, [criticalFilterActive, filters, recommendationRows, selectedPreset, tableMeta?.total]);
 
   const toggleRowSelection = (rowId, checked) => {
     setSelectedIds((prev) => toggleSelectedIds(prev, rowId, checked));
@@ -2022,14 +3013,10 @@ function PricingAnalysis() {
     setSelectedIds((prev) => toggleAllIds(prev, visibleRows, checked));
   };
 
-  const updateSimulationDiscount = (rowId, value) => {
-    const parsed = Math.max(0, Math.min(80, toSafeNumber(value, 0)));
-    setSimulationDiscounts((prev) => ({ ...prev, [rowId]: parsed }));
-  };
-
   const toggleRowDetail = async (row) => {
     const rowId = row?.id;
     if (!rowId) return;
+    setOpenActionMenuId('');
     if (expandedRowId === rowId) {
       setExpandedRowId('');
       return;
@@ -2053,65 +3040,35 @@ function PricingAnalysis() {
     }
   };
 
-  const handlePresetClick = (presetId) => {
-    const nextPreset = selectedPreset === presetId ? '' : presetId;
-    setSelectedPreset(nextPreset);
-    setFilters((prev) => applyPricePreset(prev, nextPreset));
-    setSelectedIds([]);
-  };
-
-  const handleCardFilter = (mode) => {
-    if (mode === 'urgent') {
-      setFilters((prev) => ({ ...prev, sktStatus: 'critical' }));
-      setSelectedPreset(PRICE_PRESETS.nearExpiry);
-      setCriticalFilterActive(true);
-      return;
-    }
-    if (mode === 'discount') {
-      setFilters((prev) => ({ ...prev, hasSuggestion: true }));
-      return;
-    }
-    if (mode === 'keep') {
-      setFilters((prev) => ({ ...prev, hasSuggestion: false }));
-      return;
-    }
-    setFilters(FILTER_DEFAULTS);
-    setSelectedPreset('');
-    setCriticalFilterActive(false);
-  };
-
-  const openCampaignFlow = (rows, intent) => {
-    const productIds = rows.map((row) => row.productId).filter(Boolean);
-    if (!productIds.length) {
-      setToast({ type: 'warning', message: 'Kampanya aktarımı için en az bir ürün seçin.' });
-      return;
-    }
-
-    localStorage.setItem(
-      'pricingCampaignDraft',
-      JSON.stringify({
-        intent,
-        productIds,
-        discountRate: bulkDiscountRate,
-        createdAt: new Date().toISOString(),
-      }),
-    );
-
-    navigate(`/kampanya-yonetimi?source=pricing&intent=${intent}&count=${productIds.length}`);
-  };
+  const archivePricingDecisions = useCallback((rows = [], archiveMeta = {}) => {
+    const rowList = Array.isArray(rows) ? rows.filter(Boolean) : [rows].filter(Boolean);
+    if (!rowList.length) return;
+    const archivedAt = new Date().toISOString();
+    setLocallyAppliedDecisions((current) => {
+      const next = { ...current };
+      rowList.forEach((row) => {
+        const decisionKey = getPricingDecisionKey(row);
+        if (!decisionKey) return;
+        next[decisionKey] = {
+          ...row,
+          ...archiveMeta,
+          decisionKey,
+          productKey: getPricingDecisionProductKey(row),
+          archivedAt,
+          isLocallyApplied: true,
+        };
+      });
+      writePricingDecisionArchive(next);
+      return next;
+    });
+    setSelectedIds((current) => current.filter((id) => !rowList.some((row) => row.id === id)));
+    setOpenActionMenuId('');
+    setExpandedRowId('');
+  }, []);
 
   const handleBulkAction = (action) => {
     if (!selectedRows.length) {
       setToast({ type: 'warning', message: 'Toplu işlem için ürün seçimi yapın.' });
-      return;
-    }
-
-    if (action === BULK_ACTIONS.ADD_CAMPAIGN) {
-      if (!selectedCampaignEligibleRows.length) {
-        setToast({ type: 'warning', message: 'Seçili ürünlerde kampanya için uygun öneri yok. Guardrail durumunu kontrol edin.' });
-        return;
-      }
-      openCampaignFlow(selectedCampaignEligibleRows, 'campaign');
       return;
     }
 
@@ -2129,7 +3086,7 @@ function PricingAnalysis() {
         message: (
           <>
             {selectedRows.length} ürüne %{Math.round(newDiscount)} simülasyon indirimi uygulandı.
-            <span className="sr-only">{selectedRows.length} urune %{Math.round(newDiscount)} simulasyon indirimi uygulandi</span>
+            <span className="sr-only">{selectedRows.length} ürüne %{Math.round(newDiscount)} simülasyon indirimi uygulandı</span>
           </>
         ),
       });
@@ -2148,19 +3105,175 @@ function PricingAnalysis() {
     }
   };
 
-  const handleApplyBulkPriceUpdate = async (updates) => {
+  const handleApplySinglePriceAction = async (row) => {
+    const rowId = String(row?.id || row?.productId || '').trim();
+    const productId = String(row?.productId || row?.id || row?.product?.id || '').trim();
+    const salePrice = normalizePrice(row?.suggestedPrice);
+    const currentPrice = normalizePrice(row?.currentPrice);
+    if (hasActiveTemporaryPriceAction(row)) {
+      setToast({ type: 'warning', message: 'Bu ürün için aktif geçici fiyat uygulaması devam ediyor.' });
+      return;
+    }
+    if (row?.actionType !== PRICING_ACTION_TYPES.DISCOUNT) {
+      setToast({ type: 'info', message: `${getPassiveDecisionActionText(row)} satırı fiyat güncelleme aksiyonu değildir.` });
+      return;
+    }
+    if (!rowId || !productId) {
+      setToast({ type: 'warning', message: 'Uygulanacak ürün bulunamadı.' });
+      return;
+    }
+    if (!salePrice || salePrice <= 0) {
+      setToast({ type: 'warning', message: 'Uygulanacak önerilen fiyat bulunamadı.' });
+      return;
+    }
+    if (Math.round(currentPrice * 100) === Math.round(salePrice * 100)) {
+      setToast({ type: 'info', message: `${row.productName || 'Ürün'} için fiyat değişikliği gerekmiyor.` });
+      return;
+    }
+    if (rowApplyPendingId) return;
+
+    setOpenActionMenuId('');
+    setRowApplyPendingId(rowId);
+    try {
+      const duration = getTemporaryPriceValidity(row);
+      const result = await pricingAnalysisService.applyTemporaryPriceAction({
+        productId,
+        salePrice,
+        actionType: 'temporary_price_decision',
+        recommendationType: row.actionType || PRICING_ACTION_TYPES.DISCOUNT,
+        riskLevel: row.riskLevel,
+        sourceRecommendationKey: getPricingDecisionKey(row),
+        notes: `${row.productName || 'Ürün'} - ${getDecisionActionLabel(row)}`,
+        rowSnapshot: {
+          id: row.id,
+          productId,
+          productName: row.productName,
+          sku: row.sku,
+          currentPrice,
+          suggestedPrice: salePrice,
+          riskLevel: row.riskLevel,
+          recommendationReason: row.recommendationReason || row.reasonSummary || '',
+        },
+      });
+      const appliedAt = result?.appliedAt || new Date().toISOString();
+      const durationDays = Number(result?.durationDays || duration.durationDays);
+      const endAt = result?.endAt || addDaysIso(appliedAt, durationDays);
+      patchPriceRowsLocally(result?.updatedProducts || [{ productId, salePrice }]);
+      prependRecentPriceAction({
+        id: result?.id || result?.priceActionId || '',
+        type: 'temporary_price_decision',
+        scopeLabel: row.productName || 'Fiyat kararı',
+        affectedProductCount: 1,
+        priceSummary: `${formatCurrency(currentPrice)} → ${formatCurrency(salePrice)}`,
+        createdAt: appliedAt,
+        status: result?.status || 'active',
+        statusLabel: 'Uygulandı',
+      });
+      archivePricingDecisions([row], {
+        salePrice,
+        actionType: PRICING_ACTION_TYPES.DISCOUNT,
+        archiveStatus: 'active',
+        archiveStatusLabel: 'Uygulandı',
+        activeTemporaryPriceAction: result || null,
+        hasActiveTemporaryPriceAction: true,
+        temporaryPriceActionStatus: result?.status || 'active',
+        appliedAt,
+        endAt,
+        durationDays,
+        appliedActionId: result?.id || result?.priceActionId || '',
+      });
+      setSelectedIds((current) => current.filter((id) => id !== row.id));
+      window.setTimeout(() => {
+        void loadRecentPriceActions();
+      }, 250);
+      setToast({ type: 'success', message: `Fiyat ${durationDays} gün geçerli olacak şekilde uygulandı. Bitiş: ${formatDateShort(endAt)}.` });
+    } catch (applyError) {
+      console.error('[pricing-analysis] price decision apply failed', applyError);
+      const apiMessage = String(applyError?.message || '').trim();
+      const isTemporaryPriceInfraError = /geçici fiyat aksiyonu|temporary price action|migration|prisma generate/i.test(apiMessage)
+        || applyError?.payload?.errorCode === 'TEMPORARY_PRICE_ACTION_INFRA_NOT_READY';
+      const isActiveTemporaryConflict = applyError?.payload?.errorCode === 'ACTIVE_TEMPORARY_PRICE_ACTION_EXISTS'
+        || /aktif geçici fiyat uygulaması/i.test(apiMessage);
+      const isGenericServerError = !apiMessage || /sunucu hatas[ıi]|server error/i.test(apiMessage);
+      if (isActiveTemporaryConflict) {
+        void loadPricingData({ forceRefresh: true, keepContent: true });
+      }
+      setToast({
+        type: 'error',
+        title: isTemporaryPriceInfraError ? 'Fiyat Altyapısı' : 'Fiyat Güncellemesi',
+        message: isTemporaryPriceInfraError
+          ? 'Geçici fiyat aksiyonu altyapısı hazır değil. Sistem migration/generate güncellemesi bekliyor.'
+          : isActiveTemporaryConflict
+            ? 'Bu ürün için aktif geçici fiyat uygulaması devam ediyor.'
+          : isGenericServerError
+            ? 'Fiyat güncellemesi tamamlanamadı. Backend hata kaydını kontrol edin; fiyat değişikliği uygulanmadı.'
+            : apiMessage,
+      });
+    } finally {
+      setRowApplyPendingId('');
+    }
+  };
+
+  const handleSkipSinglePriceAction = async (row) => {
+    if (!row?.id) return;
+    const productId = String(row?.productId || row?.id || row?.product?.id || '').trim();
+    const sourceRecommendationKey = getPricingDecisionKey(row);
+    if (!productId || !sourceRecommendationKey) {
+      setToast({ type: 'warning', message: 'Pas geçilecek karar bulunamadı.' });
+      return;
+    }
+    setOpenActionMenuId('');
+    try {
+      const result = await pricingAnalysisService.skipPricingDecision({
+        productId,
+        sourceRecommendationKey,
+        recommendationType: row.actionType || '',
+        riskLevel: row.riskLevel || '',
+        notes: `${row.productName || 'Ürün'} - ${getDecisionActionLabel(row)}`,
+        rowSnapshot: {
+          id: row.id,
+          productId,
+          productName: row.productName,
+          sku: row.sku,
+          currentPrice: row.currentPrice,
+          suggestedPrice: row.suggestedPrice,
+          riskLevel: row.riskLevel,
+          recommendationReason: row.recommendationReason || row.reasonSummary || '',
+        },
+      });
+      setSimulationDiscounts((prev) => ({ ...prev, [row.id]: 0 }));
+      archivePricingDecisions([row], {
+        archiveStatus: 'dismissed',
+        archiveStatusLabel: 'Pas geçildi',
+        skippedAt: result?.skippedAt || new Date().toISOString(),
+        sourceRecommendationKey,
+      });
+      void loadPricingData({ forceRefresh: true, keepContent: true });
+      setToast({ type: 'info', message: `${row.productName || 'Ürün'} kararı kalıcı olarak pas geçildi.` });
+    } catch (skipError) {
+      setToast({ type: 'error', message: skipError.message || 'Karar pas geçilemedi.' });
+    }
+  };
+
+  const handleApplyBulkPriceUpdate = async (updates, scopeDescriptor = {}) => {
     if (!Array.isArray(updates) || updates.length === 0) {
       setToast({ type: 'warning', message: 'Güncellenecek ürün bulunamadı.' });
       return;
     }
     setBulkApplying(true);
     try {
-      await Promise.all(updates.map(({ product, nextPrice }) => productService.update(product.id, {
+      const priceChanges = updates.map(({ product, nextPrice }) => ({
+        productId: product.id,
         salePrice: normalizePrice(nextPrice),
-        lastPriceChangeSource: 'bulk_price_update',
-      })));
-      pricingAnalysisService.invalidateCache?.();
-      await loadPricingData({ forceRefresh: true });
+      }));
+      const result = await pricingAnalysisService.applyBulkPriceUpdate({
+        scope: scopeDescriptor,
+        updates: priceChanges,
+      });
+      patchPriceRowsLocally(result?.updatedProducts || priceChanges);
+      prependRecentPriceAction(result);
+      void loadRecentPriceActions();
+      void loadPricingData({ forceRefresh: true, keepContent: true });
       setSimulationDiscounts({});
       setSelectedIds([]);
       setIsBulkModalOpen(false);
@@ -2169,6 +3282,35 @@ function PricingAnalysis() {
       setToast({ type: 'error', message: applyError.message || 'Toplu fiyat güncelleme uygulanamadı.' });
     } finally {
       setBulkApplying(false);
+    }
+  };
+
+  const handleRollbackPriceAction = async (action) => {
+    if (!action?.id || rollbackPendingId) return;
+    setRollbackPendingId(action.id);
+    try {
+      const result = await pricingAnalysisService.rollbackPriceAction(action.id);
+      patchPriceRowsLocally(result?.rolledBackProducts || []);
+      setRecentPriceActions((current) => current.map((item) => (
+        item.id === action.id
+          ? {
+            ...item,
+            status: result.status || item.status,
+            rollbackSummary: result.message || item.rollbackSummary,
+          }
+          : item
+      )));
+      void loadPricingData({ forceRefresh: true, keepContent: true });
+      void loadRecentPriceActions();
+      setToast({
+        type: result.status === 'partial_rollback' ? 'warning' : 'success',
+        message: result.message || 'Fiyat işlemi geri alındı.',
+      });
+    } catch (rollbackError) {
+      await loadRecentPriceActions();
+      setToast({ type: 'error', message: rollbackError.message || 'Fiyat işlemi geri alınamadı.' });
+    } finally {
+      setRollbackPendingId('');
     }
   };
 
@@ -2196,8 +3338,10 @@ function PricingAnalysis() {
     setSellPriceApproving(true);
     try {
       const result = await pricingAnalysisService.approveSellPrice(payload);
-      pricingAnalysisService.invalidateCache?.();
-      await loadPricingData({ forceRefresh: true });
+      patchPriceRowsLocally([{ productId: result.productId || payload.productId, salePrice: result.salePrice }]);
+      if (result?.action) prependRecentPriceAction(result.action);
+      void loadRecentPriceActions();
+      void loadPricingData({ forceRefresh: true, keepContent: true });
       setSellPriceCalculation((current) => current ? {
         ...current,
         current: { ...current.current, salePrice: result.salePrice },
@@ -2216,41 +3360,39 @@ function PricingAnalysis() {
     void loadPricingData({ forceRefresh: true, keepContent: true });
   };
 
-  const resetFilters = () => {
-    setFilters(FILTER_DEFAULTS);
-    setSelectedPreset('');
-    setCriticalFilterActive(false);
-    setSelectedIds([]);
-    setTablePage(1);
-  };
-
   useEffect(() => {
     setTablePage(1);
+    setOpenActionMenuId('');
   }, [filters, selectedPreset, criticalFilterActive]);
 
-  const totalRows = Number(tableMeta?.total ?? visibleRows.length);
-  const totalPages = Math.max(1, Number(tableMeta?.totalPages ?? Math.ceil(visibleRows.length / rowsPerPage)));
+  const pagination = tableMeta || {};
+  const totalRows = Number(pagination.total ?? visibleRows.length);
+  const currentPage = Number(pagination.page ?? tablePage);
+  const currentLimit = Number(pagination.limit ?? rowsPerPage);
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? Math.ceil(totalRows / Math.max(currentLimit, 1))));
   const pagedRows = useMemo(
     () => visibleRows.map((row) => enrichPricingActionRowForTable(row, simulationDiscounts)),
     [visibleRows, simulationDiscounts],
   );
-  const visibleRangeStart = totalRows ? ((tablePage - 1) * rowsPerPage) + 1 : 0;
-  const visibleRangeEnd = totalRows ? Math.min(tablePage * rowsPerPage, totalRows) : 0;
+  const detailModalRow = useMemo(
+    () => pagedRows.find((row) => row.id === expandedRowId) || null,
+    [expandedRowId, pagedRows],
+  );
+  const visibleRangeStart = totalRows && pagedRows.length ? ((currentPage - 1) * currentLimit) + 1 : 0;
+  const visibleRangeEnd = totalRows && pagedRows.length ? Math.min(((currentPage - 1) * currentLimit) + pagedRows.length, totalRows) : 0;
 
   const allSelected = pagedRows.length > 0 && pagedRows.every((row) => selectedIds.includes(row.id));
-  const renderTablePagination = () => {
-    if (!visibleRows.length) return null;
-    return (
-      <div className="pricing-table-pagination pricing-table-pagination--top" aria-label="Sayfalama">
-        <div className="pricing-table-pagination-row">
-          <span className="pricing-table-pagination-summary">{totalRows} kayıttan {visibleRangeStart}-{visibleRangeEnd} arası</span>
-          <button type="button" className="ghost-button pricing-toolbar-button pricing-table-pagination-button" onClick={() => setTablePage((prev) => Math.max(1, prev - 1))} disabled={tablePage === 1}>Önceki</button>
-          <span className="pricing-table-pagination-page">Sayfa {tablePage} / {totalPages}</span>
-          <button type="button" className="primary-button pricing-toolbar-button pricing-table-pagination-button" onClick={() => setTablePage((prev) => Math.min(totalPages, prev + 1))} disabled={tablePage >= totalPages}>Sonraki</button>
-        </div>
-      </div>
-    );
-  };
+  const tablePagination = (
+    <PricingTablePagination
+      totalRows={totalRows}
+      visibleRangeStart={visibleRangeStart}
+      visibleRangeEnd={visibleRangeEnd}
+      currentPage={currentPage}
+      totalPages={totalPages}
+      onPrevious={() => setTablePage((prev) => Math.max(1, prev - 1))}
+      onNext={() => setTablePage((prev) => Math.min(totalPages, prev + 1))}
+    />
+  );
 
   return (
     <div className="dashboard-page page-stack pricing-analysis-page pricing-layout">
@@ -2292,29 +3434,28 @@ function PricingAnalysis() {
         <div className="pricing-critical-hero pricing-section" role="alert" aria-live="polite">
           <div className="pricing-critical-hero-icon" aria-hidden="true"><AlertTriangle size={28} /></div>
           <div>
-            <h3>Öncelikli Fiyat Aksiyonları</h3>
-            <span className="sr-only">Oncelikli Fiyat Aksiyonlari</span>
-            <p>{criticalRows.length} ürün acil indirim veya fiyat koruma değerlendirmesi bekliyor.</p>
+            <h3>Öncelikli Kararlar</h3>
+            <span className="sr-only">Öncelikli Fiyat Aksiyonları</span>
+            <p>{criticalRows.length} ürün gerçek fiyat aksiyonu veya sipariş önceliği bekliyor.</p>
           </div>
           <button
             type="button"
-            className={`ghost-button ${criticalFilterActive ? 'is-active' : ''}`}
+            className={`ghost-button ${filters.primaryAction === PRICING_ACTION_TYPES.DISCOUNT ? 'is-active' : ''}`}
             onClick={() => {
-              if (criticalFilterActive) {
-                setCriticalFilterActive(false);
-                setFilters((prev) => ({ ...prev, sktStatus: '' }));
+              if (filters.primaryAction === PRICING_ACTION_TYPES.DISCOUNT) {
+                setFilters((prev) => ({ ...prev, primaryAction: '' }));
               } else {
-                handleCardFilter('urgent');
+                handleCardFilter(PRICING_ACTION_TYPES.DISCOUNT);
               }
             }}
-            aria-pressed={criticalFilterActive}
+            aria-pressed={filters.primaryAction === PRICING_ACTION_TYPES.DISCOUNT}
           >
-            {criticalFilterActive ? 'Kritik Filtresini Kaldır' : 'Kritikleri Filtrele'}
+            {filters.primaryAction === PRICING_ACTION_TYPES.DISCOUNT ? 'Öncelik Filtresini Kaldır' : 'Aksiyon Gereklileri Filtrele'}
           </button>
         </div>
       )}
 
-      <div className="dashboard-grid dashboard-grid--4 pricing-summary-grid pricing-summary-grid-meaningful pricing-section">
+      <div className="dashboard-grid dashboard-grid--6 pricing-summary-grid pricing-summary-grid-meaningful pricing-section">
         {metricCards.map((card) => (
           <button
             key={card.id}
@@ -2431,7 +3572,7 @@ function PricingAnalysis() {
             <span>SKT</span>
             <select
               value={filters.sktStatus}
-              onChange={(event) => setFilters((prev) => ({ ...prev, sktStatus: event.target.value }))}
+              onChange={(event) => setFilters((prev) => ({ ...prev, sktStatus: normalizeSktStatusFilter(event.target.value) }))}
             >
               <option value="">Tüm durumlar</option>
               <option value="safe">Güvenli</option>
@@ -2452,6 +3593,50 @@ function PricingAnalysis() {
             </select>
           </label>
           <label className="field-group pricing-filter-field">
+            <span>Aksiyon Tipi</span>
+            <select
+              value={filters.primaryAction}
+              onChange={(event) => setFilters((prev) => ({ ...prev, primaryAction: event.target.value, hasSuggestion: '' }))}
+            >
+              <option value="">Tüm tipler</option>
+              <option value={PRICING_ACTION_TYPES.DISCOUNT}>Aksiyon Gerekli</option>
+              <option value={PRICING_ACTION_TYPES.WATCH}>İzlenmeli</option>
+              <option value={PRICING_ACTION_TYPES.HOLD}>Fiyatı Koru</option>
+              <option value={PRICING_ACTION_TYPES.ORDER}>Sipariş Baskısı</option>
+              <option value={PRICING_ACTION_TYPES.CAMPAIGN}>Kampanya Adayı</option>
+            </select>
+          </label>
+          <label className="field-group pricing-filter-field">
+            <span>Kategori</span>
+            <select
+              value={filters.categoryId}
+              onChange={(event) => setFilters((prev) => ({ ...prev, categoryId: event.target.value }))}
+            >
+              <option value="">Tüm kategoriler</option>
+              {categories.map((category) => {
+                const value = String(category?.id || category?.categoryId || '').trim();
+                if (!value) return null;
+                return (
+                  <option key={value} value={value}>
+                    {getReadableCategoryLabelName(category, categoryLabels) || category?.name || value}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          <label className="field-group pricing-filter-field">
+            <span>Tedarikçi</span>
+            <select
+              value={filters.supplierId}
+              onChange={(event) => setFilters((prev) => ({ ...prev, supplierId: event.target.value }))}
+            >
+              <option value="">Tüm tedarikçiler</option>
+              {supplierOptions.map((supplier) => (
+                <option key={supplier.value} value={supplier.value}>{supplier.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-group pricing-filter-field">
             <span>Öneri Durumu</span>
             <select
               value={filters.hasSuggestion === '' ? '' : String(filters.hasSuggestion)}
@@ -2459,6 +3644,7 @@ function PricingAnalysis() {
                 const value = event.target.value;
                 setFilters((prev) => ({
                   ...prev,
+                  primaryAction: '',
                   hasSuggestion: value === '' ? '' : value === 'true',
                 }));
               }}
@@ -2468,10 +3654,54 @@ function PricingAnalysis() {
               <option value="false">Fiyat koru</option>
             </select>
           </label>
+          <label className="field-group pricing-filter-field">
+            <span>Kampanya Uygunluğu</span>
+            <select
+              value={filters.campaignEligibility}
+              onChange={(event) => setFilters((prev) => ({ ...prev, campaignEligibility: event.target.value }))}
+            >
+              <option value="">Tümü</option>
+              <option value="eligible">Kampanyaya alınabilir</option>
+              <option value="not_eligible">Kampanyaya alınamaz</option>
+              <option value="conflict">Çakışmalı</option>
+              <option value="campaign_active">Kampanya aktif</option>
+              <option value="campaign_inactive">Kampanya yok</option>
+            </select>
+          </label>
+          <label className="field-group pricing-filter-field">
+            <span>Kontrol Kuralı</span>
+            <select
+              value={filters.guardrail}
+              onChange={(event) => setFilters((prev) => ({ ...prev, guardrail: event.target.value }))}
+            >
+              <option value="">Tümü</option>
+              <option value="any">Kural engeli var</option>
+              <option value="margin">Marj kuralı</option>
+              <option value="stock">Stok kuralı</option>
+              <option value="procurement">Tedarik kuralı</option>
+              <option value="none">Kural engeli yok</option>
+            </select>
+          </label>
+          <label className="field-group pricing-filter-field">
+            <span>Engel Nedeni</span>
+            <select
+              value={filters.blockingReason}
+              onChange={(event) => setFilters((prev) => ({ ...prev, blockingReason: event.target.value }))}
+            >
+              <option value="">Tüm nedenler</option>
+              <option value="active_campaign_conflict">Aktif kampanya çakışması</option>
+              <option value="low_margin">Düşük marj</option>
+              <option value="price_at_or_below_cost">Fiyat maliyet sınırında</option>
+              <option value="critical_stock">Kritik stok</option>
+              <option value="low_stock_coverage">Stok karşılama süresi düşük</option>
+              <option value="replenishment_pipeline_missing">Tedarik hattı zayıf</option>
+              <option value="long_lead_time">Tedarik süresi uzun</option>
+            </select>
+          </label>
           <div className="pricing-filter-inline-meta">
             <span className="pricing-info-chip">Aktif filtre: <strong>{activeFilterCount}</strong></span>
             <button type="button" className="ghost-button pricing-filter-action" onClick={resetFilters}>
-              Filtreleri Temizle
+              Temizle
             </button>
           </div>
         </FilterBar>
@@ -2493,7 +3723,7 @@ function PricingAnalysis() {
 
       {selectedRows.length > 0 && (
         <div className="pricing-bulk-bar pricing-section" role="region" aria-label="Toplu aksiyon çubuğu">
-          <span>{selectedRows.length} ürün seçili<span className="sr-only">{selectedRows.length} urun secili</span></span>
+          <span>{selectedRows.length} ürün seçili<span className="sr-only">{selectedRows.length} ürün seçili</span></span>
           <label>
             Toplu indirim (%)
             <input
@@ -2504,11 +3734,8 @@ function PricingAnalysis() {
               onChange={(event) => setBulkDiscountRate(event.target.value)}
             />
           </label>
-          <button type="button" className="primary-button" aria-label="Toplu Indirim Uygula" onClick={() => handleBulkAction(BULK_ACTIONS.APPLY_DISCOUNT)}>
+          <button type="button" className="primary-button" aria-label="Toplu İndirim Uygula" onClick={() => handleBulkAction(BULK_ACTIONS.APPLY_DISCOUNT)}>
             Toplu İndirim Uygula
-          </button>
-          <button type="button" className="ghost-button" onClick={() => handleBulkAction(BULK_ACTIONS.ADD_CAMPAIGN)} disabled={!selectedCampaignEligibleRows.length}>
-            Kampanya Taslağına Gönder{selectedCampaignEligibleRows.length ? ` (${selectedCampaignEligibleRows.length})` : ''}
           </button>
           <button type="button" className="ghost-button" onClick={() => handleBulkAction(BULK_ACTIONS.KEEP_PRICE)}>
             Fiyatı Koru
@@ -2520,10 +3747,10 @@ function PricingAnalysis() {
         <div className="mod-card-header">
           <div className="mod-card-icon mod-icon-indigo"><BadgePercent size={18} /></div>
           <div>
-            <h2>Fiyat Aksiyon Listesi</h2>
-            <p>Satır bazında etki simülasyonu, marj karşılaştırması ve karar desteği.</p>
+            <h2>Aktif Kararlar</h2>
+            <p>Süreli önerilen fiyat uygulaması bekleyen açık kararlar gösterilir.</p>
           </div>
-          {renderTablePagination()}
+          {tablePagination}
         </div>
 
         {loading ? (
@@ -2533,201 +3760,145 @@ function PricingAnalysis() {
         ) : visibleRows.length === 0 ? (
           <div className="mod-empty-state pricing-empty-state" role="status">
             <BadgePercent size={24} />
-            <h4>Fiyat aksiyonu gerektiren ürün bulunmuyor</h4>
-            <p>Satış hızı, stok seviyesi ve marj dengede. Şu an fiyat değişikliği önerilmiyor.</p>
+            <h4>{emptyState.title}</h4>
+            <p>{emptyState.isFilteredEmpty ? 'Filtreleri genişleterek diğer açık kararları görüntüleyebilirsiniz.' : 'İşlem yapılmış kararlar alttaki Geçmiş alanında görünür.'}</p>
             <p className="pricing-empty-why">Neden: {emptyState.description}</p>
             <div className="pricing-empty-state__actions">
               <button type="button" className="ghost-button" onClick={resetFilters}>
                 Filtreleri Sıfırla
               </button>
             </div>
-            <div className="pricing-empty-insights" role="note" aria-label="Sistem içgörüleri">
-              <div>
-                <strong>Son 7 günde fiyat önerisi oluşmadı</strong>
-                <span>Fiyat dalgalanması aksiyon eşiğini aşmadı.</span>
+            {!emptyState.isFilteredEmpty ? (
+              <div className="pricing-empty-insights" role="note" aria-label="Sistem içgörüleri">
+                <div>
+                  <strong>Açık fiyat kararı yok</strong>
+                  <span>Backend bu görünüm için uygulama bekleyen kayıt döndürmedi.</span>
+                </div>
               </div>
-              <div>
-                <strong>Stok devri stabil</strong>
-                <span>Yavaşlayan veya aşırı hızlanan kritik ürün görünmüyor.</span>
-              </div>
-              <div>
-                <strong>Riskli ürün bulunmuyor</strong>
-                <span>SKT ve marj sinyalleri güvenli aralıkta.</span>
-              </div>
-            </div>
+            ) : null}
           </div>
         ) : (
           <>
             <div className="table-wrapper pricing-action-table-wrapper">
-              <table className="data-table" aria-label="Fiyat aksiyon tablosu">
+              <table className="data-table" aria-label="Fiyat ve talep karar tablosu">
                 <thead>
                   <tr>
                     <th>
-                        <input
-                          type="checkbox"
-                          aria-label="Tum satirlari sec"
-                          checked={allSelected}
-                          onChange={(event) => toggleAllSelection(event.target.checked)}
-                        />
+                      <input
+                        type="checkbox"
+                        aria-label="Tüm satırları seç"
+                        checked={allSelected}
+                        onChange={(event) => toggleAllSelection(event.target.checked)}
+                      />
                     </th>
                     <th>Ürün</th>
-                    <th>Fiyat</th>
-                    <th>Operasyonel Risk</th>
-                    <th>Sistem Önerisi</th>
-                    <th>Talep / Stok</th>
-                    <th>Simülasyon</th>
-                    <th>Detay</th>
+                    <th>Öneri</th>
+                    <th>Sebep</th>
+                    <th>Risk</th>
+                    <th>Önerilen Fiyat</th>
+                    <th>Geçerlilik</th>
+                    <th>Aksiyon</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pagedRows.map((row) => {
-                  const isExpanded = expandedRowId === row.id;
                   const isSelected = selectedIds.includes(row.id);
-                  const dangerMargin = Number.isFinite(row.estimatedMarginPercent) && row.estimatedMarginPercent < 12;
-                  const actionLabel = hasText(row.actionLabel) ? row.actionLabel : 'Aksiyon yok';
-                  const riskLabel = hasText(row.riskLabel) ? row.riskLabel : toRiskLabel(row.riskLevel);
-                  const reasonLabel = normalizeRecommendationReasonText(row.recommendationReason || row.reasonSummary) || 'Satış verisi sınırlı olduğu için güvenli öneri üretildi.';
-                  const actionTone = row.actionTone || (row.actionType === 'urgent' ? 'danger' : row.actionType === 'discount' ? 'warning' : row.actionType === 'increase' ? 'primary' : row.actionType === 'none' ? 'neutral' : 'success');
-                  const marginText = Number.isFinite(row.currentMarginPercent) && Number.isFinite(row.estimatedMarginPercent)
-                    ? <>{formatPercent(row.currentMarginPercent)} → <span className={dangerMargin ? 'pricing-emphasis is-danger' : 'pricing-emphasis'}>{formatPercent(row.estimatedMarginPercent)}</span></>
-                    : 'Marj: Hesaplanamadı';
-                  const profitClass = Number.isFinite(row.impact?.profitImpact) && row.impact.profitImpact < 0 ? 'pricing-impact-negative' : 'pricing-impact-positive';
-                  const campaignTone = row.campaignEligible ? 'success' : row.activeCampaignFlag ? 'neutral' : row.isSuppressed ? 'warning' : 'neutral';
-                  const fdtLabel = row.lastPriceChangeDate ? String(row.lastPriceChangeDate).slice(0, 10) : '-';
-                  return (
-                    <Fragment key={row.id}>
-                      <tr className={`pricing-action-row pricing-action-row--${row.actionType || 'default'} ${row.actionType === 'urgent' ? 'pricing-row--urgent' : ''} ${isExpanded ? 'pricing-action-row--selected' : ''}`.trim()}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            aria-label={`${toAsciiLabel(row.productName)} satirini sec`}
-                            checked={isSelected}
-                            onChange={(event) => toggleRowSelection(row.id, event.target.checked)}
-                          />
-                        </td>
-                        <td>
+                  const decisionAction = getDecisionActionLabel(row);
+                  const actionTone = decisionAction === 'İndirim öner'
+                    ? 'warning'
+                    : decisionAction === 'Fiyat artır'
+                      ? 'primary'
+                      : decisionAction === 'Kampanya aktif'
+                        ? 'neutral'
+                        : decisionAction === 'İşlem önerilmez'
+                          ? 'danger'
+                          : 'success';
+                    const reasons = buildDecisionReasons(row, 2);
+                    const risk = getDecisionRisk(row);
+                    const priceChange = getPriceChangeLabel(row);
+                    const validity = getTemporaryPriceValidity(row);
+                    const isActionMenuOpen = openActionMenuId === row.id;
+                    const canApplyRow = canApplyPricingDecision(row);
+                    const isDiscountAction = row.actionType === PRICING_ACTION_TYPES.DISCOUNT;
+                    const passiveActionText = getPassiveDecisionActionText(row);
+                    const passiveHelpText = getPassiveDecisionHelpText(row);
+                    const rowPending = rowApplyPendingId === String(row.id || row.productId || '');
+                    return (
+                    <tr key={row.id} className={`pricing-action-row pricing-decision-row pricing-action-row--${row.actionType || 'default'} ${row.actionType === PRICING_ACTION_TYPES.DISCOUNT || row.actionType === PRICING_ACTION_TYPES.ORDER ? 'pricing-row--urgent' : ''} ${row.isLocallyApplied ? 'pricing-row--applied' : ''}`.trim()}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`${toAsciiLabel(row.productName)} satırını seç`}
+                          checked={isSelected}
+                          onChange={(event) => toggleRowSelection(row.id, event.target.checked)}
+                        />
+                      </td>
+                      <td>
+                        <div className="pricing-product-cell">
                           <strong>
                             {row.isCatalogUnlisted ? <span className="product-new-badge">Yeni</span> : null}
                             {String(row.productName || '').trim() || 'Bilinmeyen ürün'}
                           </strong>
-                          <div className="pricing-row-subtext">SKU: {String(row.sku || '').trim() || '-'} · {String(row.category || '').trim() || '-'}</div>
-                          <div className="pricing-row-subtext">Tedarikçi: {String(row.supplierName || '').trim() || '-'}</div>
-                        </td>
-                        <td>
-                          <div className="pricing-price-stack">
-                            <span>Efektif</span>
-                            <strong>{formatCurrency(row.currentPrice)}</strong>
-                            <small>Alış: {formatCurrency(row.cost)}</small>
-                            {row.hasActiveDiscount ? <small>Kampanyalı fiyat aktif</small> : null}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="pricing-risk-cell">
-                            {hasText(riskLabel) ? <StatusBadge tone={riskToneMap[row.riskLevel] || 'neutral'}>{riskLabel}</StatusBadge> : <StatusBadge tone="neutral">Belirsiz</StatusBadge>}
-                            <div className="pricing-row-subtext">SKT: {toSktLabel(row.expirationRisk)}</div>
-                            <div className="pricing-row-subtext">Tükeniş: {Number.isFinite(row.stockEndEstimate) ? `${row.stockEndEstimate} gün` : 'Veri yok'}</div>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="pricing-action-cell">
-                            {hasText(actionLabel) ? <StatusBadge tone={actionTone}>{actionLabel}</StatusBadge> : <span>Aksiyon yok</span>}
-                            <StatusBadge tone={campaignTone}>{row.campaignLabel || 'Kampanya durumu yok'}</StatusBadge>
-                            {row.blockingReasons?.length ? <div className="pricing-row-subtext">Guardrail: {row.blockingReasons.slice(0, 2).join(', ')}</div> : null}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="pricing-demand-cell">
-                            <strong>{row.salesSpeedKey === 'slow' ? 'Yavaş' : row.salesSpeedKey === 'fast' ? 'Hızlı' : row.salesSpeedKey === 'normal' ? 'Normal' : 'Belirsiz'}</strong>
-                            <span>7g: {toSafeNumber(row.sold7, 0)} · 30g: {toSafeNumber(row.sold30, 0)}</span>
-                            <span>Stok: {Math.round(row.stockLevel)}</span>
-                            <ActionSparkline values={row.trend} />
-                          </div>
-                        </td>
-                        <td>
-                          <div className="pricing-simulation-cell">
-                            <span>Sistemden bağımsız deneme</span>
-                            <strong>{row.simulationLabel || row.actionSimulationText || 'Fiyat korunur'}</strong>
-                            <small>Simüle fiyat: {formatCurrency(row.suggestedPrice)}</small>
-                            <small className={profitClass}>Kar etkisi: {Number.isFinite(row.impact?.profitImpact) ? formatSignedCurrency(row.impact.profitImpact) : 'Veri yok'}</small>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="pricing-row-reason" title={reasonLabel}>{reasonLabel}</div>
-                          <div className="pricing-row-subtext">Marj: {marginText}</div>
-                          <div className="pricing-row-subtext">FDT: {fdtLabel}</div>
-                          <button
-                            type="button"
-                            className="ghost-button pricing-reason-toggle"
-                            onClick={() => toggleRowDetail(row)}
-                          >
-                            {isExpanded ? 'Kapat' : 'Neden?'}
-                          </button>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr className="pricing-explanation-row pricing-explanation-row--selected">
-                          <td colSpan={8}>
-                            <div className="pricing-explanation">
-                              {rowDetailLoadingId === row.id ? (
-                                <div className="pricing-detail-loading">Satır detayı yükleniyor...</div>
-                              ) : null}
-                              <div className="pricing-explanation-summary">
-                                <strong>Neden Bu Aksiyon Öneriliyor?</strong>
-                                <p>{reasonLabel}</p>
-                                {rowDetails[row.id] ? (
-                                  <small>Fiyat geçmişi kayıtları: {Number(rowDetails[row.id]?.priceHistoryCount || 0)}</small>
-                                ) : null}
-                              </div>
-                              <div className="pricing-explanation-grid">
-                                <div>
-                                  <strong>Stok / SKT</strong>
-                                  <p>Stok: {Math.round(row.stockLevel)} | SKT: {formatDaysLabel(row.daysToExpiry)}</p>
-                                </div>
-                                <div>
-                                  <strong>Satış Hızı / Devir</strong>
-                                  <p>
-                                    Günlük satış: {toSafeNumber(row.salesVelocity, 0).toFixed(1)} | Devir: {toSafeNumber(row.stockTurnoverRate, 0).toFixed(2)}
-                                  </p>
-                                </div>
-                                <div>
-                                  <strong>İndirim Simülasyonu</strong>
-                                  <span className="sr-only">Indirim Simulasyonu</span>
-                                  <div className="pricing-simulation-controls">
-                                    {[10, 20, 30].map((value) => (
-                                      <button
-                                        key={value}
-                                        type="button"
-                                        className={`pricing-sim-chip ${Math.round(row.simulatedDiscount) === value ? 'is-active' : ''}`}
-                                        onClick={() => updateSimulationDiscount(row.id, value)}
-                                      >
-                                        %{value}
-                                      </button>
-                                    ))}
-                                    <input
-                                      type="range"
-                                      min="0"
-                                      max="80"
-                                      value={row.simulatedDiscount}
-                                      onChange={(event) => updateSimulationDiscount(row.id, event.target.value)}
-                                      aria-label={`${row.productName} indirim slider`}
-                                    />
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="80"
-                                      value={Math.round(row.simulatedDiscount)}
-                                      onChange={(event) => updateSimulationDiscount(row.id, event.target.value)}
-                                      aria-label={`${row.productName} indirim kutusu`}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
+                          <span>SKU: {String(row.sku || '').trim() || '-'}</span>
+                          <small>{String(row.category || row.categoryName || '').trim() || '-'}{row.etiket ? ` · ${row.etiket}` : ''}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <StatusBadge tone={actionTone}>{decisionAction}</StatusBadge>
+                      </td>
+                      <td>
+                        <div className="pricing-reason-chips">
+                          {(reasons.length ? reasons : ['Veri yetersiz']).map((item) => <span key={item}>{item}</span>)}
+                        </div>
+                      </td>
+                      <td>
+                        <StatusBadge tone={risk.tone}>{risk.label}</StatusBadge>
+                      </td>
+                      <td>
+                        <div className="pricing-price-decision">
+                          <span>{formatCurrency(row.currentPrice)}</span>
+                          <strong>{formatCurrency(row.suggestedPrice)}</strong>
+                          <small>{priceChange}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="pricing-validity-cell">
+                          <strong>{validity.durationDays} gün</strong>
+                          <span>{formatDateShort(validity.endAt)} biter</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="pricing-decision-actions">
+                          {row.isLocallyApplied ? (
+                            <StatusBadge tone="success">Uygulandı</StatusBadge>
+                          ) : isDiscountAction ? (
+                            <button
+                              type="button"
+                              className="primary-button pricing-row-apply-button"
+                              onClick={() => handleApplySinglePriceAction(row)}
+                              disabled={!canApplyRow || rowPending}
+                              title={canApplyRow ? 'Önerilen fiyatı ürüne uygula' : passiveActionText}
+                            >
+                              {rowPending ? 'Uygulanıyor...' : (canApplyRow ? 'Uygula' : passiveActionText)}
+                            </button>
+                          ) : (
+                            <span className="pricing-passive-action-label">
+                              {passiveActionText}
+                              {passiveHelpText ? <small>{passiveHelpText}</small> : null}
+                            </span>
+                          )}
+                          <PricingRowMoreActions
+                            rowId={row.id}
+                            isOpen={isActionMenuOpen}
+                            onToggle={() => setOpenActionMenuId((current) => (current === row.id ? '' : row.id))}
+                            onClose={() => setOpenActionMenuId('')}
+                            onDetail={() => toggleRowDetail(row)}
+                            onSkip={() => handleSkipSinglePriceAction(row)}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                    );
                   })}
                 </tbody>
               </table>
@@ -2736,25 +3907,163 @@ function PricingAnalysis() {
         )}
       </div>
 
+      <div className="mod-card pricing-section pricing-action-list-card pricing-decision-archive-card">
+        <div className="mod-card-header">
+          <div className="mod-card-icon mod-icon-indigo"><Clock3 size={18} /></div>
+          <div>
+            <h2>Geçmiş</h2>
+            <p>Bu oturumda uygulanan, süresi dolan, geri alınan veya kapatılan karar kayıtları.</p>
+          </div>
+        </div>
+
+        {archivedRows.length === 0 ? (
+          <div className="mod-empty-state pricing-empty-state" role="status">
+            <Clock3 size={24} />
+            <h4>Geçmiş karar yok</h4>
+            <p>Bir fiyatı uyguladığınızda veya kararı kapattığınızda kayıt burada görünür.</p>
+          </div>
+        ) : (
+          <div className="table-wrapper pricing-action-table-wrapper">
+            <table className="data-table" aria-label="Fiyat ve talep karar geçmişi tablosu">
+              <thead>
+                <tr>
+                  <th>Durum</th>
+                  <th>Ürün</th>
+                  <th>Öneri</th>
+                  <th>Sebep</th>
+                  <th>Risk</th>
+                  <th>Önerilen Fiyat</th>
+                  <th>Geçerlilik</th>
+                  <th>Aksiyon</th>
+                </tr>
+              </thead>
+              <tbody>
+                {archivedRows.map((archiveRow) => {
+                  const activeAction = archiveRow.activeTemporaryPriceAction || null;
+                  const activeSnapshot = activeAction?.rowSnapshot && typeof activeAction.rowSnapshot === 'object' ? activeAction.rowSnapshot : null;
+                  const historySourceRow = activeSnapshot && !archiveRow.isLocallyApplied
+                    ? {
+                      ...archiveRow,
+                      ...activeSnapshot,
+                      actionType: PRICING_ACTION_TYPES.DISCOUNT,
+                      archiveStatus: activeAction.status || 'active',
+                      appliedAt: activeAction.appliedAt,
+                      endAt: activeAction.endAt,
+                      durationDays: activeAction.durationDays,
+                      activeTemporaryPriceAction: activeAction,
+                      hasActiveTemporaryPriceAction: true,
+                    }
+                    : archiveRow;
+                  const row = enrichPricingActionRowForTable(historySourceRow, simulationDiscounts);
+                  const decisionAction = getDecisionActionLabel(row);
+                  const actionTone = decisionAction === 'İndirim öner'
+                    ? 'warning'
+                    : decisionAction === 'Fiyat artır'
+                      ? 'primary'
+                      : decisionAction === 'Kampanya aktif'
+                        ? 'neutral'
+                        : decisionAction === 'İşlem önerilmez'
+                          ? 'danger'
+                          : 'success';
+                  const reasons = buildDecisionReasons(row, 2);
+                  const risk = getDecisionRisk(row);
+                  const priceChange = getPriceChangeLabel(row);
+                  const archivedAt = row.archivedAt || row.appliedAt;
+                  const validity = getTemporaryPriceValidity(row, archivedAt ? new Date(archivedAt) : new Date());
+                  const archiveStatus = getArchivedDecisionStatus(row);
+                  return (
+                    <tr key={`archive-${row.decisionKey || getPricingDecisionKey(row)}`} className="pricing-action-row pricing-decision-row pricing-row--applied">
+                      <td>
+                        <StatusBadge tone={archiveStatus.tone}>
+                          {archiveStatus.label}
+                        </StatusBadge>
+                      </td>
+                      <td>
+                        <div className="pricing-product-cell">
+                          <strong>{String(row.productName || '').trim() || 'Bilinmeyen ürün'}</strong>
+                          <span>SKU: {String(row.sku || '').trim() || '-'}</span>
+                          <small>{String(row.category || row.categoryName || '').trim() || '-'}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <StatusBadge tone={actionTone}>{decisionAction}</StatusBadge>
+                      </td>
+                      <td>
+                        <div className="pricing-reason-chips">
+                          {(reasons.length ? reasons : ['Veri yetersiz']).map((item) => <span key={item}>{item}</span>)}
+                        </div>
+                      </td>
+                      <td>
+                        <StatusBadge tone={risk.tone}>{risk.label}</StatusBadge>
+                      </td>
+                      <td>
+                        <div className="pricing-price-decision">
+                          <span>{formatCurrency(row.currentPrice)}</span>
+                          <strong>{formatCurrency(row.suggestedPrice)}</strong>
+                          <small>{priceChange}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="pricing-validity-cell">
+                          <strong>{validity.durationDays} gün</strong>
+                          <span>{formatDateShort(validity.endAt)} biter</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="pricing-decision-actions">
+                          <span className="pricing-passive-action-label">
+                            {archivedAt ? new Date(archivedAt).toLocaleString('tr-TR') : 'Bu oturum'}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <BulkPriceUpdateModal
         isOpen={isBulkModalOpen}
         products={bulkModalProducts}
+        productsLoading={productsLoading}
         categories={categories}
         labels={categoryLabels}
         onClose={() => setIsBulkModalOpen(false)}
         onApply={handleApplyBulkPriceUpdate}
         isApplying={bulkApplying}
+        recentActions={recentPriceActions}
+        recentActionsLoading={recentPriceActionsLoading}
+        rollbackPendingId={rollbackPendingId}
+        onRollbackPriceAction={handleRollbackPriceAction}
       />
 
       <SellPriceAdvisorModal
         isOpen={isSellPriceModalOpen}
         rows={sellPriceRows}
+        rowsLoading={productsLoading}
         onClose={() => setIsSellPriceModalOpen(false)}
         onCalculate={handleCalculateSellPrice}
         onApprove={handleApproveSellPrice}
         calculation={sellPriceCalculation}
         isLoading={sellPriceLoading}
         isApproving={sellPriceApproving}
+        recentActions={recentPriceActions}
+        recentActionsLoading={recentPriceActionsLoading}
+        rollbackPendingId={rollbackPendingId}
+        onRollbackPriceAction={handleRollbackPriceAction}
+      />
+
+      <PricingActionDetailModal
+        row={detailModalRow}
+        detail={detailModalRow ? rowDetails[detailModalRow.id] : null}
+        isLoading={Boolean(detailModalRow && rowDetailLoadingId === detailModalRow.id)}
+        isApplying={Boolean(detailModalRow && rowApplyPendingId === String(detailModalRow.id || detailModalRow.productId || ''))}
+        onClose={() => setExpandedRowId('')}
+        onApply={handleApplySinglePriceAction}
+        onSkip={handleSkipSinglePriceAction}
       />
 
       {toast.message ? <Toast toast={toast} onClose={() => setToast({ type: '', message: '' })} /> : null}

@@ -74,6 +74,17 @@ const parseBodyForLog = (body) => {
 
 const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
 
+const TECHNICAL_API_MESSAGE_PATTERN = /(prisma|invocation|unknown argument|database|sql|constraint|foreign key|relation|stack|clientvalidationerror|repository|delegate)/i;
+
+const sanitizeApiErrorMessage = (message, status) => {
+  const text = String(message || '').trim();
+  if (!text) return 'Bir işlem hatası oluştu';
+  if (Number(status || 0) >= 500 || TECHNICAL_API_MESSAGE_PATTERN.test(text)) {
+    return 'İşlem tamamlanamadı. Lütfen tekrar deneyin.';
+  }
+  return text;
+};
+
 export const isRequestCancellation = (error) => {
   if (!error) return false;
   if (typeof error === 'object' && error.__CANCEL__ === true) return true;
@@ -319,7 +330,7 @@ const notifyAuthRefreshed = (data) => {
   window.dispatchEvent(new CustomEvent(AUTH_SESSION_REFRESHED_EVENT, { detail: data }));
 };
 
-async function refreshStaffSession() {
+export async function refreshStaffSession() {
   if (pendingStaffRefreshPromise) {
     return pendingStaffRefreshPromise;
   }
@@ -498,11 +509,12 @@ async function request(path, options = {}) {
 
     const requestId = response.headers.get('x-request-id') || '';
     const isLoginRequest = path.startsWith('/auth/login');
-    const friendlyMessage = response.status === 401
+    const rawFriendlyMessage = response.status === 401
       ? (isLoginRequest ? (payload?.message || 'Kullanıcı bilgileri hatalı.') : 'Oturum süreniz doldu. Lütfen tekrar giriş yapın.')
       : response.status === 403
         ? 'Bu işlem için yetkiniz bulunmuyor.'
         : payload?.message || 'Bir işlem hatası oluştu';
+    const friendlyMessage = sanitizeApiErrorMessage(rawFriendlyMessage, response.status);
     queueDeveloperLog({
       level: 'error',
       source: 'api',

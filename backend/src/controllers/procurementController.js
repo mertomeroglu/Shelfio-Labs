@@ -80,11 +80,21 @@ export const procurementController = {
             pagination: result.pagination,
             filters: result.filters || {},
             sort: result.sort || {},
+            summary: result.summary || null,
           },
         });
         return;
       }
       res.json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async getSuggestionSummary(req, res, next) {
+    try {
+      const data = await procurementService.getSuggestionSummary(req.query);
+      res.json({ success: true, data });
     } catch (error) {
       next(error);
     }

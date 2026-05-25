@@ -1,7 +1,4 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import pdfMake from 'pdfmake/build/pdfmake';
-import pdfFonts from 'pdfmake/build/vfs_fonts';
-import * as XLSX from 'xlsx';
 import { Receipt, PackageCheck, Filter, Truck, Clock, CheckCircle2, FileText, FileSpreadsheet, Archive, AlertTriangle, CalendarDays, ClipboardList, CircleDollarSign, History, Route, Info } from 'lucide-react';
 import {
   Bar,
@@ -365,7 +362,30 @@ const getWaitingHours = (order = {}) => {
   return Math.max(0, (Date.now() - arrivalMs) / (1000 * 60 * 60));
 };
 
-const resolveEmbeddedPdfVfs = () => {
+let pdfMakeModulePromise = null;
+let xlsxModulePromise = null;
+
+const loadPdfMakeModule = async () => {
+  if (!pdfMakeModulePromise) {
+    pdfMakeModulePromise = Promise.all([
+      import('pdfmake/build/pdfmake'),
+      import('pdfmake/build/vfs_fonts'),
+    ]).then(([pdfMakeModule, pdfFontsModule]) => ({
+      pdfMake: pdfMakeModule?.default || pdfMakeModule,
+      pdfFonts: pdfFontsModule?.default || pdfFontsModule,
+    }));
+  }
+  return pdfMakeModulePromise;
+};
+
+const loadXlsxModule = async () => {
+  if (!xlsxModulePromise) {
+    xlsxModulePromise = import('xlsx').then((module) => module?.default || module);
+  }
+  return xlsxModulePromise;
+};
+
+const resolveEmbeddedPdfVfs = (pdfFonts) => {
   const nestedVfs = pdfFonts?.pdfMake?.vfs || pdfFonts?.vfs || pdfFonts?.default?.pdfMake?.vfs || pdfFonts?.default?.vfs;
   if (nestedVfs && Object.keys(nestedVfs).length > 0) {
     return nestedVfs;
@@ -376,19 +396,16 @@ const resolveEmbeddedPdfVfs = () => {
   return directFontEntries.length ? Object.fromEntries(directFontEntries) : {};
 };
 
-if (!pdfMake.vfs || Object.keys(pdfMake.vfs).length === 0) {
-  const embeddedVfs = resolveEmbeddedPdfVfs();
-  pdfMake.vfs = embeddedVfs;
-}
-
-const ensurePdfReady = () => {
-  const embeddedVfs = resolveEmbeddedPdfVfs();
+const ensurePdfReady = async () => {
+  const { pdfMake, pdfFonts } = await loadPdfMakeModule();
+  const embeddedVfs = resolveEmbeddedPdfVfs(pdfFonts);
   if ((!pdfMake.vfs || Object.keys(pdfMake.vfs).length === 0) && Object.keys(embeddedVfs).length > 0) {
     pdfMake.vfs = embeddedVfs;
   }
   if (!pdfMake.vfs || Object.keys(pdfMake.vfs).length === 0) {
     throw new Error('PDF altyapısı hazırlanamadı. Lütfen sayfayı yenileyip tekrar deneyin.');
   }
+  return pdfMake;
 };
 
 const ORDER_TABLE_PAGE_SIZE = 5;
@@ -960,6 +977,7 @@ export default function PurchaseOrders() {
   const handleExportOrderXlsx = async (order) => {
     if (!order) return;
     try {
+      const XLSX = await loadXlsxModule();
       const items = await procurementService.getOrderItems(order.id);
       const rows = items.map((item) => ({
         SKU: item.sku || '-',
@@ -982,7 +1000,7 @@ export default function PurchaseOrders() {
     if (!order) return;
     try {
       setExportingPdfId(order.id);
-      ensurePdfReady();
+      const pdfMake = await ensurePdfReady();
       const items = await procurementService.getOrderItems(order.id);
       const tableBody = [
         [

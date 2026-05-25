@@ -27,6 +27,7 @@ import {
   normalizeSearchText,
   resolveProductTaxonomy,
 } from '../../services/formatters.js';
+import { resolveSktPolicy, SKT_POLICIES } from '../../utils/sktPolicy.js';
 
 const MONEY_MATCH_FIELDS = new Set(['purchasePrice', 'tierPrice3Case', 'tierPrice10Case', 'tierPrice20Case']);
 
@@ -1089,6 +1090,22 @@ export default function Suppliers({ mode = 'suppliers' }) {
     () => products.find((item) => String(item.id) === String(selectedCreateProductId)) || null,
     [products, selectedCreateProductId]
   );
+  const selectedMatchSktPolicy = useMemo(() => resolveSktPolicy(selectedMatchProduct || {}), [selectedMatchProduct]);
+  const isSelectedMatchSktRequired = selectedMatchSktPolicy.policy === SKT_POLICIES.REQUIRED;
+  const isSelectedMatchSktApplicable = selectedMatchSktPolicy.policy !== SKT_POLICIES.NOT_APPLICABLE;
+
+  useEffect(() => {
+    if (isSelectedMatchSktApplicable || !batchMatchForm.skt) return;
+    setBatchMatchForm((current) => ({ ...current, skt: '' }));
+  }, [batchMatchForm.skt, isSelectedMatchSktApplicable]);
+
+  const batchEditProduct = useMemo(
+    () => products.find((item) => String(item.id) === String(batchEditForm.productId)) || null,
+    [batchEditForm.productId, products]
+  );
+  const batchEditSktPolicy = useMemo(() => resolveSktPolicy(batchEditProduct || {}), [batchEditProduct]);
+  const isBatchEditSktRequired = batchEditSktPolicy.policy === SKT_POLICIES.REQUIRED;
+  const isBatchEditSktApplicable = batchEditSktPolicy.policy !== SKT_POLICIES.NOT_APPLICABLE;
 
   const duplicateMatch = useMemo(
     () =>
@@ -1272,7 +1289,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
     !isMatchReferenceLoading
     && Boolean(batchMatchForm.productId)
     && Boolean(String(batchMatchForm.batchNo || '').trim())
-    && isValidDateOnly(batchMatchForm.skt);
+    && (!isSelectedMatchSktRequired || isValidDateOnly(batchMatchForm.skt));
 
   const canSaveReyonMatch =
     !isMatchReferenceLoading
@@ -1453,7 +1470,11 @@ export default function Suppliers({ mode = 'suppliers' }) {
       return false;
     }
 
-    if (!isValidDateOnly(batchMatchForm.skt)) {
+    if (isSelectedMatchSktRequired && !isValidDateOnly(batchMatchForm.skt)) {
+      setToast({ type: 'error', title: 'Ürün-Parti-SKT Eşleşme', message: 'SKT geçerli bir tarih olmalıdır.' });
+      return false;
+    }
+    if (!isSelectedMatchSktRequired && String(batchMatchForm.skt || '').trim() && !isValidDateOnly(batchMatchForm.skt)) {
       setToast({ type: 'error', title: 'Ürün-Parti-SKT Eşleşme', message: 'SKT geçerli bir tarih olmalıdır.' });
       return false;
     }
@@ -1474,10 +1495,10 @@ export default function Suppliers({ mode = 'suppliers' }) {
 
     await stockService.upsertBatch(batchMatchForm.productId, {
       batchNo: nextBatchNo,
-      skt: toDateOnly(batchMatchForm.skt),
+      skt: isSelectedMatchSktApplicable ? toDateOnly(batchMatchForm.skt) : '',
       warehouseQuantity: Number(batchMatchForm.warehouseQuantity || 0),
       shelfQuantity: Number(batchMatchForm.shelfQuantity || 0),
-      status: resolveExpiryStatus(batchMatchForm.skt),
+      status: isSelectedMatchSktApplicable ? resolveExpiryStatus(batchMatchForm.skt) : 'Aktif',
     });
     return true;
   };
@@ -1699,14 +1720,29 @@ export default function Suppliers({ mode = 'suppliers' }) {
   const handleSaveBatchEdit = async (event) => {
     event.preventDefault();
 
-    if (!batchEditForm.productId || !String(batchEditForm.batchNo || '').trim() || !isValidDateOnly(batchEditForm.skt)) {
-      setToast({ type: 'error', title: 'Parti-SKT Düzenle', message: 'Parti no ve geçerli SKT zorunludur.' });
+    const editProduct = products.find((item) => String(item.id) === String(batchEditForm.productId));
+    const editSktPolicy = resolveSktPolicy(editProduct || {});
+    const isEditSktRequired = editSktPolicy.policy === SKT_POLICIES.REQUIRED;
+    const isEditSktApplicable = editSktPolicy.policy !== SKT_POLICIES.NOT_APPLICABLE;
+
+    if (!batchEditForm.productId || !String(batchEditForm.batchNo || '').trim()) {
+      setToast({ type: 'error', title: 'Parti-SKT Düzenle', message: 'Parti no zorunludur.' });
+      return;
+    }
+
+    if (isEditSktRequired && !isValidDateOnly(batchEditForm.skt)) {
+      setToast({ type: 'error', title: 'Parti-SKT Düzenle', message: 'Bu ürün grubu için geçerli SKT zorunludur.' });
+      return;
+    }
+
+    if (!isEditSktRequired && String(batchEditForm.skt || '').trim() && !isValidDateOnly(batchEditForm.skt)) {
+      setToast({ type: 'error', title: 'Parti-SKT Düzenle', message: 'SKT geçerli bir tarih olmalıdır.' });
       return;
     }
 
     try {
       setMatchEditSubmitting(true);
-      const product = products.find((item) => String(item.id) === String(batchEditForm.productId));
+      const product = editProduct;
       const sourceBatches = Array.isArray(product?.productBatches) ? product.productBatches : [];
       const nextBatchNo = String(batchEditForm.batchNo || '').trim();
       const duplicate = sourceBatches.some((item) => {
@@ -1724,10 +1760,10 @@ export default function Suppliers({ mode = 'suppliers' }) {
       await stockService.upsertBatch(batchEditForm.productId, {
         sourceBatchNo: batchEditForm.sourceBatchNo,
         batchNo: nextBatchNo,
-        skt: toDateOnly(batchEditForm.skt),
+        skt: isEditSktApplicable ? toDateOnly(batchEditForm.skt) : '',
         warehouseQuantity: Number(batchEditForm.warehouseQuantity || 0),
         shelfQuantity: Number(batchEditForm.shelfQuantity || 0),
-        status: resolveExpiryStatus(batchEditForm.skt),
+        status: isEditSktApplicable ? resolveExpiryStatus(batchEditForm.skt) : 'Aktif',
       });
       setToast({ type: 'success', title: 'Parti-SKT Düzenle', message: 'Ürün-parti-SKT eşleşmesi güncellendi.' });
       closeMatchEditModal();
@@ -3886,14 +3922,16 @@ export default function Suppliers({ mode = 'suppliers' }) {
                           placeholder="Örn. PR-2026-04"
                         />
                       </label>
-                      <label className="field-group col-4">
-                        <span>SKT<span className="modal-required">*</span></span>
-                        <input
-                          type="date"
-                          value={batchMatchForm.skt}
-                          onChange={(event) => setBatchMatchForm((current) => ({ ...current, skt: event.target.value }))}
-                        />
-                      </label>
+                      {isSelectedMatchSktApplicable ? (
+                        <label className="field-group col-4">
+                          <span>SKT{isSelectedMatchSktRequired ? <span className="modal-required">*</span> : null}</span>
+                          <input
+                            type="date"
+                            value={batchMatchForm.skt}
+                            onChange={(event) => setBatchMatchForm((current) => ({ ...current, skt: event.target.value }))}
+                          />
+                        </label>
+                      ) : null}
                       <label className="field-group col-4">
                         <span>Toplam Miktar</span>
                         <input
@@ -3924,10 +3962,12 @@ export default function Suppliers({ mode = 'suppliers' }) {
                           placeholder="Örn. 40"
                         />
                       </label>
-                      <label className="field-group col-6">
-                        <span>Durum</span>
-                        <input value={getExpiryStatusLabel(resolveExpiryStatus(batchMatchForm.skt))} readOnly />
-                      </label>
+                      {isSelectedMatchSktApplicable ? (
+                        <label className="field-group col-6">
+                          <span>Durum</span>
+                          <input value={getExpiryStatusLabel(resolveExpiryStatus(batchMatchForm.skt))} readOnly />
+                        </label>
+                      ) : null}
                       <label className="field-group col-6">
                         <span>Maliyet/SKT Notu</span>
                         <textarea
@@ -4108,10 +4148,12 @@ export default function Suppliers({ mode = 'suppliers' }) {
                     <span>Parti No</span>
                     <input value={batchEditForm.batchNo} onChange={(event) => setBatchEditForm((current) => ({ ...current, batchNo: event.target.value }))} />
                   </label>
-                  <label className="field-group col-6">
-                    <span>SKT</span>
-                    <input type="date" value={batchEditForm.skt} onChange={(event) => setBatchEditForm((current) => ({ ...current, skt: event.target.value }))} />
-                  </label>
+                  {isBatchEditSktApplicable ? (
+                    <label className="field-group col-6">
+                      <span>SKT{isBatchEditSktRequired ? <span className="modal-required">*</span> : null}</span>
+                      <input type="date" value={batchEditForm.skt} onChange={(event) => setBatchEditForm((current) => ({ ...current, skt: event.target.value }))} />
+                    </label>
+                  ) : null}
                   <label className="field-group col-6">
                     <span>Depo Miktarı</span>
                     <input type="number" min="0" value={batchEditForm.warehouseQuantity} onChange={(event) => setBatchEditForm((current) => ({ ...current, warehouseQuantity: event.target.value, totalQuantity: String(Number(event.target.value || 0) + Number(current.shelfQuantity || 0)) }))} />

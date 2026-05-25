@@ -427,6 +427,14 @@ export const validateSettingsPayload = (payload, { partial = false } = {}) => {
           throw new AppError(400, `campaigns[${index}].targetCategoryIds dizi olmalidir`);
         }
 
+        if (campaign.targetCategoryLabelIds !== undefined && !Array.isArray(campaign.targetCategoryLabelIds)) {
+          throw new AppError(400, `campaigns[${index}].targetCategoryLabelIds dizi olmalidir`);
+        }
+
+        if (campaign.targetCategoryLabels !== undefined && !Array.isArray(campaign.targetCategoryLabels)) {
+          throw new AppError(400, `campaigns[${index}].targetCategoryLabels dizi olmalidir`);
+        }
+
         if (campaign.targetProductIds !== undefined && !Array.isArray(campaign.targetProductIds)) {
           throw new AppError(400, `campaigns[${index}].targetProductIds dizi olmalidir`);
         }
@@ -658,7 +666,6 @@ export const validateStockMovementPayload = (payload, { type = 'IN' } = {}) => {
     requireFields(payload, [
       'supplierId',
       'batchNo',
-      'skt',
       'purchasePrice',
       'receiptDate',
       'warehouseLocation',
@@ -677,7 +684,7 @@ export const validateStockMovementPayload = (payload, { type = 'IN' } = {}) => {
     }
 
     const skt = normalizeString(payload.skt);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(skt)) {
+    if (skt && !/^\d{4}-\d{2}-\d{2}$/.test(skt)) {
       throw new AppError(400, 'skt YYYY-MM-DD formatinda olmalidir');
     }
 
@@ -1042,6 +1049,12 @@ export const sanitizeSettingsInput = (payload) => ({
         })(),
         targetCategoryIds: Array.isArray(campaign?.targetCategoryIds)
           ? campaign.targetCategoryIds.map((id) => normalizeString(id)).filter(Boolean)
+          : [],
+        targetCategoryLabelIds: Array.isArray(campaign?.targetCategoryLabelIds)
+          ? campaign.targetCategoryLabelIds.map((id) => normalizeString(id)).filter(Boolean)
+          : [],
+        targetCategoryLabels: Array.isArray(campaign?.targetCategoryLabels)
+          ? campaign.targetCategoryLabels.map((label) => normalizeString(label)).filter(Boolean)
           : [],
         targetProductIds: Array.isArray(campaign?.targetProductIds)
           ? campaign.targetProductIds.map((id) => normalizeString(id)).filter(Boolean)

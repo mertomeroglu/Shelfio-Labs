@@ -10,6 +10,15 @@ export const posController = {
     }
   },
 
+  async getAutomaticSaleAvailability(req, res, next) {
+    try {
+      const data = await posService.getAutomaticSaleAvailability();
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async setDeskActivation(req, res, next) {
     try {
       const data = await posService.setDeskActivation(req.body, req.user);
@@ -82,6 +91,15 @@ export const posController = {
     }
   },
 
+  async getAutomaticPanelTransactions(req, res, next) {
+    try {
+      const data = await posService.getAutomaticPanelTransactions(req.query.limit);
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async processReturn(req, res, next) {
     try {
       const data = await posService.processReturn(req.body, req.user);
@@ -131,6 +149,24 @@ export const posController = {
     try {
       const data = await posService.getDailyReport(req.query.date);
       res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async listDayEndClosings(req, res, next) {
+    try {
+      const data = await posService.listDayEndClosings(req.query);
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async closeDayEnd(req, res, next) {
+    try {
+      const data = await posService.closeDayEnd(req.body, req.user);
+      res.status(201).json({ success: true, data });
     } catch (error) {
       next(error);
     }

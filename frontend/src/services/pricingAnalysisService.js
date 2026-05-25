@@ -26,6 +26,29 @@ export const pricingAnalysisService = {
   calculateSellPrice: (payload = {}) => (
     api.post('/reports/pricing-analysis/sell-price/calculate', payload)
   ),
+  getRecentPriceActions: (params = {}) => (
+    api.get(`/reports/pricing-analysis/price-actions/recent${buildQueryString(params)}`)
+  ),
+  applyBulkPriceUpdate: async (payload = {}) => {
+    const result = await api.post('/reports/pricing-analysis/price-actions/bulk-update', payload);
+    invalidateSessionCache((key) => key.startsWith('pricing-analysis:') || key.startsWith('products:'));
+    return result;
+  },
+  applyTemporaryPriceAction: async (payload = {}) => {
+    const result = await api.post('/reports/pricing-analysis/price-actions/temporary', payload);
+    invalidateSessionCache((key) => key.startsWith('pricing-analysis:') || key.startsWith('products:'));
+    return result;
+  },
+  skipPricingDecision: async (payload = {}) => {
+    const result = await api.post('/reports/pricing-analysis/price-actions/skip', payload);
+    invalidateSessionCache((key) => key.startsWith('pricing-analysis:'));
+    return result;
+  },
+  rollbackPriceAction: async (actionId) => {
+    const result = await api.post(`/reports/pricing-analysis/price-actions/${encodeURIComponent(actionId)}/rollback`, {});
+    invalidateSessionCache((key) => key.startsWith('pricing-analysis:') || key.startsWith('products:'));
+    return result;
+  },
   approveSellPrice: async (payload = {}) => {
     const result = await api.post('/reports/pricing-analysis/sell-price/approve', payload);
     invalidateSessionCache((key) => key.startsWith('pricing-analysis:') || key.startsWith('products:'));

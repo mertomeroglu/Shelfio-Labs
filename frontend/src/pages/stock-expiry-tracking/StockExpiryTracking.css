@@ -1,0 +1,675 @@
+.stock-expiry-page {
+  --stock-expiry-surface: #ffffff;
+  --stock-expiry-surface-soft: #fbfcfe;
+  --stock-expiry-border: #e2e8f0;
+  --stock-expiry-border-strong: #d6dee9;
+  --stock-expiry-text: #101828;
+  --stock-expiry-muted: #667085;
+  --stock-expiry-danger: #c73a3a;
+  --stock-expiry-warning: #c47a18;
+  --stock-expiry-primary: #2567b8;
+  --stock-expiry-neutral: #596579;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-height: 0;
+  overflow: visible;
+}
+
+.stock-expiry-page *,
+.stock-expiry-page *::before,
+.stock-expiry-page *::after {
+  box-sizing: border-box;
+}
+
+.stock-expiry-page__hero {
+  align-items: center;
+}
+
+.stock-expiry-page__header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stock-expiry-page__last-updated {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid #e0e7ef;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--stock-expiry-muted);
+  font-size: 0.8rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.stock-expiry-page__overview {
+  display: grid;
+  grid-template-columns: minmax(340px, 1.2fr) repeat(3, minmax(180px, 0.85fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.stock-expiry-page__chart-panel,
+.stock-expiry-page__panel {
+  border: 1px solid var(--stock-expiry-border);
+  border-radius: 8px;
+  background: var(--stock-expiry-surface);
+  box-shadow: 0 8px 18px rgba(16, 24, 40, 0.045);
+}
+
+.stock-expiry-page__chart-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-height: 210px;
+  padding: 15px;
+}
+
+.stock-expiry-page__panel {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+}
+
+.stock-expiry-page__section-head,
+.stock-expiry-page__table-title,
+.stock-expiry-page__table-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stock-expiry-page__table-head {
+  justify-content: space-between;
+  padding-bottom: 12px;
+}
+
+.stock-expiry-page__section-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: var(--stock-expiry-warning);
+}
+
+.stock-expiry-page__section-head h3,
+.stock-expiry-page__table-head h3 {
+  margin: 0;
+  color: var(--stock-expiry-text);
+  font-size: 0.98rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.stock-expiry-page__section-head p,
+.stock-expiry-page__table-head p {
+  margin: 2px 0 0;
+  color: var(--stock-expiry-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.stock-expiry-page__table-head p strong {
+  color: var(--stock-expiry-text);
+  font-weight: 850;
+}
+
+.stock-expiry-page__chart-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+.stock-expiry-page__bar-chart {
+  display: grid;
+  gap: 9px;
+  align-content: center;
+  height: 100%;
+}
+
+.stock-expiry-page__bar-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.9fr) minmax(0, 1.8fr) 44px;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  color: #475467;
+  font-size: 0.74rem;
+  font-weight: 750;
+}
+
+.stock-expiry-page__bar-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-expiry-page__bar-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef2f6;
+}
+
+.stock-expiry-page__bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--stock-expiry-neutral);
+}
+
+.stock-expiry-page__bar-fill--danger { background: var(--stock-expiry-danger); }
+.stock-expiry-page__bar-fill--warning { background: var(--stock-expiry-warning); }
+.stock-expiry-page__bar-fill--primary { background: var(--stock-expiry-primary); }
+.stock-expiry-page__bar-fill--neutral { background: #98a2b3; }
+
+.stock-expiry-page__bar-row strong {
+  color: var(--stock-expiry-text);
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-expiry-page__column-chart {
+  display: grid;
+  grid-template-rows: minmax(84px, 1fr) auto;
+  gap: 8px;
+  height: 100%;
+}
+
+.stock-expiry-page__column-plot {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: end;
+  gap: 10px;
+  min-height: 92px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid #e8eef5;
+}
+
+.stock-expiry-page__column-item {
+  display: grid;
+  grid-template-rows: 18px minmax(0, 1fr);
+  align-items: end;
+  gap: 5px;
+  height: 100%;
+  min-width: 0;
+}
+
+.stock-expiry-page__column-value {
+  color: var(--stock-expiry-text);
+  font-size: 0.76rem;
+  font-weight: 850;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.stock-expiry-page__column-bar {
+  display: block;
+  width: 100%;
+  min-height: 6px;
+  border-radius: 7px 7px 0 0;
+  background: var(--stock-expiry-neutral);
+}
+
+.stock-expiry-page__column-bar--danger { background: var(--stock-expiry-danger); }
+.stock-expiry-page__column-bar--warning { background: var(--stock-expiry-warning); }
+.stock-expiry-page__column-bar--primary { background: var(--stock-expiry-primary); }
+.stock-expiry-page__column-bar--neutral { background: #98a2b3; }
+
+.stock-expiry-page__column-axis {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 10px;
+}
+
+.stock-expiry-page__column-axis span {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stock-expiry-page__chart-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 112px;
+  border: 1px dashed #d8e1ec;
+  border-radius: 8px;
+  color: var(--stock-expiry-muted);
+  font-size: 0.8rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.stock-expiry-page__filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.55fr) repeat(8, minmax(116px, 1fr)) minmax(130px, auto);
+  gap: 8px;
+  align-items: end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.stock-expiry-page__field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+}
+
+.stock-expiry-page__field span {
+  color: #475467;
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.stock-expiry-page__field input,
+.stock-expiry-page__field select {
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 9px;
+  border: 1px solid var(--stock-expiry-border-strong);
+  border-radius: 8px;
+  outline: none;
+  background: #ffffff;
+  color: var(--stock-expiry-text);
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+.stock-expiry-page__field input::placeholder {
+  color: #98a2b3;
+}
+
+.stock-expiry-page__field input:focus,
+.stock-expiry-page__field select:focus {
+  border-color: #6ea4dc;
+  box-shadow: 0 0 0 3px rgba(37, 103, 184, 0.14);
+}
+
+.stock-expiry-page__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--stock-expiry-border-strong);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475467;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.stock-expiry-page__check--filter {
+  height: 34px;
+  align-self: end;
+  white-space: nowrap;
+}
+
+.stock-expiry-page__check input,
+.stock-expiry-page__table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--stock-expiry-primary);
+}
+
+.stock-expiry-page__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.stock-expiry-page__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.stock-expiry-page__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.stock-expiry-page__button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.stock-expiry-page__button--ghost {
+  border-color: #cbd6e2;
+  background: #ffffff;
+  color: var(--stock-expiry-primary);
+}
+
+.stock-expiry-page__button--ghost:hover:not(:disabled) {
+  border-color: #9dbad8;
+  background: #edf5ff;
+}
+
+.stock-expiry-page__button--danger {
+  border-color: #f2bbbb;
+  background: #fff1f1;
+  color: #a92727;
+}
+
+.stock-expiry-page__button--danger:hover:not(:disabled) {
+  border-color: #df8d8d;
+  background: #ffe5e5;
+}
+
+.stock-expiry-page__table-frame {
+  min-width: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__data-panel {
+  min-height: 292px;
+  margin-top: 0;
+  border: 1px solid var(--stock-expiry-border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.stock-expiry-page .table-top-scroll-shell {
+  border-bottom: 1px solid #e3e9f0;
+  background: #ffffff;
+}
+
+.stock-expiry-page .stock-expiry-page__table-wrapper {
+  min-height: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__table {
+  min-width: 1180px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__table thead {
+  background: #ffffff;
+}
+
+.stock-expiry-page .stock-expiry-page__table th,
+.stock-expiry-page .stock-expiry-page__table td {
+  padding: 10px 11px;
+  vertical-align: middle;
+  border-bottom: 1px solid #edf1f6;
+}
+
+.stock-expiry-page .stock-expiry-page__table th {
+  color: #5d6b7c;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__table tbody tr:hover {
+  background: #f9fbff;
+}
+
+.stock-expiry-page .stock-expiry-page__table th.stock-expiry-page__cell-select,
+.stock-expiry-page .stock-expiry-page__table td.stock-expiry-page__cell-select {
+  width: 42px;
+  text-align: center;
+}
+
+.stock-expiry-page .stock-expiry-page__table .table-sort-button {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__table th.stock-expiry-page__cell-wide,
+.stock-expiry-page .stock-expiry-page__table td.stock-expiry-page__cell-wide {
+  min-width: 170px;
+  max-width: 240px;
+}
+
+.stock-expiry-page__cell-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.32;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.stock-expiry-page__cell-actions {
+  min-width: 132px;
+}
+
+.stock-expiry-page__row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 126px;
+}
+
+.stock-expiry-page .table-pagination {
+  min-height: 44px;
+  padding: 8px 10px;
+  border-top: 1px solid #e3e9f0;
+  background: #ffffff;
+}
+
+.stock-expiry-page .table-pagination-summary,
+.stock-expiry-page .table-pagination-total {
+  font-size: 0.78rem;
+}
+
+.stock-expiry-page .table-pagination-actions {
+  gap: 5px;
+}
+
+.stock-expiry-page .table-pagination-actions .ghost-button,
+.stock-expiry-page .table-pagination-actions .primary-button,
+.stock-expiry-page .table-page-input {
+  min-height: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  letter-spacing: 0;
+}
+
+.stock-expiry-page .stock-expiry-page__loading {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 292px;
+  border: 1px dashed var(--stock-expiry-border-strong);
+  border-radius: 8px;
+  background: var(--stock-expiry-surface-soft);
+}
+
+.stock-expiry-page .stock-expiry-page__loading p {
+  margin: 0;
+  color: var(--stock-expiry-muted);
+  font-size: 0.86rem;
+}
+
+.stock-expiry-page .stock-expiry-page__empty {
+  display: grid;
+  place-items: center;
+  min-height: 292px;
+  border: 1px dashed var(--stock-expiry-border-strong);
+  border-radius: 8px;
+  background: var(--stock-expiry-surface-soft);
+  color: var(--stock-expiry-muted);
+  text-align: center;
+}
+
+.stock-expiry-page .stock-expiry-page__empty .empty-state,
+.stock-expiry-page .stock-expiry-page__empty .mod-empty-state {
+  max-width: 360px;
+  margin: 0 auto;
+  padding: 22px;
+}
+
+.stock-expiry-page .stock-expiry-page__empty h3 {
+  margin: 0;
+  color: var(--stock-expiry-text);
+  font-size: 1rem;
+  font-weight: 850;
+}
+
+.stock-expiry-page .stock-expiry-page__empty p {
+  margin: 6px 0 0;
+  color: var(--stock-expiry-muted);
+  font-size: 0.86rem;
+}
+
+.stock-expiry-page .status-badge {
+  white-space: nowrap;
+}
+
+.stock-expiry-page__detail-modal {
+  max-width: 720px;
+}
+
+.skt-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stock-expiry-page__detail-modal .skt-detail-grid {
+  margin: 22px 22px 0;
+}
+
+.skt-detail-grid > div {
+  display: grid;
+  gap: 5px;
+  min-height: 72px;
+  padding: 13px;
+  border: 1px solid var(--stock-expiry-border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.skt-detail-grid span {
+  color: #64748b;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.skt-detail-grid strong {
+  color: #0f172a;
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.stock-expiry-page__modal-actions {
+  justify-content: flex-end;
+  margin: 16px 22px 22px;
+  padding-top: 14px;
+  border-top: 1px solid #e3e9f0;
+}
+
+@media (max-width: 1440px) {
+  .stock-expiry-page__filter-grid {
+    grid-template-columns: minmax(220px, 1.4fr) repeat(4, minmax(124px, 1fr));
+  }
+}
+
+@media (max-width: 1180px) {
+  .stock-expiry-page__overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stock-expiry-page__filter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 780px) {
+  .stock-expiry-page__overview,
+  .stock-expiry-page__filter-grid,
+  .skt-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stock-expiry-page__hero,
+  .stock-expiry-page__table-head {
+    align-items: flex-start;
+  }
+
+  .stock-expiry-page__header-actions,
+  .stock-expiry-page__table-head,
+  .stock-expiry-page__toolbar {
+    flex-direction: column;
+  }
+
+  .stock-expiry-page__header-actions,
+  .stock-expiry-page__toolbar,
+  .stock-expiry-page__button,
+  .stock-expiry-page__check--compact,
+  .stock-expiry-page__last-updated {
+    width: 100%;
+  }
+
+  .stock-expiry-page__last-updated {
+    justify-content: center;
+    white-space: normal;
+  }
+
+  .stock-expiry-page__row-actions {
+    min-width: 0;
+    flex-direction: column;
+  }
+}

@@ -331,21 +331,38 @@ export const PRESET_FILTERS = {
   risk7: 'risk7',
   fastSelling: 'fastSelling',
   slowOrOverstock: 'slowOrOverstock',
+  criticalNeed: 'critical_need',
+  noInbound: 'no_inbound',
+  missingData: 'missing_data',
+  longLeadTime: 'long_lead_time',
+  highRisk: 'high_risk',
+  fastStockout: 'fast_stockout',
 };
 
 export const applyPresetToFilters = (currentFilters = {}, preset) => {
   const base = { ...currentFilters };
   switch (preset) {
     case PRESET_FILTERS.critical3:
-      return { ...base, riskLevel: 'critical' };
+      return { ...base, riskLevel: 'critical', preset: 'fast_stockout' };
     case PRESET_FILTERS.risk7:
-      return { ...base, riskLevel: base.riskLevel || 'high' };
+      return { ...base, riskLevel: base.riskLevel || 'high', preset: 'high_risk' };
     case PRESET_FILTERS.fastSelling:
-      return { ...base };
     case PRESET_FILTERS.slowOrOverstock:
-      return { ...base };
+      return { ...base, preset: '' };
+    case PRESET_FILTERS.criticalNeed:
+      return { ...base, preset };
+    case PRESET_FILTERS.noInbound:
+      return { ...base, preset };
+    case PRESET_FILTERS.missingData:
+      return { ...base, preset };
+    case PRESET_FILTERS.longLeadTime:
+      return { ...base, preset };
+    case PRESET_FILTERS.highRisk:
+      return { ...base, preset, riskLevel: base.riskLevel || 'high' };
+    case PRESET_FILTERS.fastStockout:
+      return { ...base, preset };
     default:
-      return base;
+      return { ...base, preset: '' };
   }
 };
 

@@ -365,6 +365,7 @@ const ACCESS_SCOPE_GROUPS = [
   { label: 'Eşleşmeler', permission: 'supplier:view' },
   { label: 'Lokasyon Yönetimi', permission: 'section:view' },
   { label: 'Stok İşlemleri', permission: 'stock:view' },
+  { label: 'SKT Takibi', permission: 'stock:view' },
   { label: 'Tedarikçiler', permission: 'supplier:view' },
   { label: 'Sipariş Oluştur', permission: 'purchase:create' },
   { label: 'Sipariş Takibi', permission: 'purchase:view' },

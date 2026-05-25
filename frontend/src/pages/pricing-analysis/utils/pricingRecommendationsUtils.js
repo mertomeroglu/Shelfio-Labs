@@ -3,7 +3,12 @@ export const PRICE_PRESETS = {
   slowSelling: 'slowSelling',
   overstocked: 'overstocked',
   highMargin: 'highMargin',
+  campaignEligible: 'campaignEligible',
+  conflicted: 'conflicted',
+  blocked: 'blocked',
 };
+
+const REMOVED_PRICE_FILTER_KEYS = new Set();
 
 export const toSafeNumber = (value, fallback = 0) => {
   const parsed = Number(value);
@@ -105,7 +110,9 @@ export const buildReasonSummary = ({
 };
 
 export const applyPricePreset = (currentFilters = {}, preset) => {
-  const base = { ...currentFilters };
+  const base = Object.fromEntries(
+    Object.entries(currentFilters).filter(([key]) => !REMOVED_PRICE_FILTER_KEYS.has(key))
+  );
   switch (preset) {
     case PRICE_PRESETS.nearExpiry:
       return { ...base, sktStatus: 'critical' };
@@ -114,6 +121,10 @@ export const applyPricePreset = (currentFilters = {}, preset) => {
     case PRICE_PRESETS.overstocked:
       return { ...base };
     case PRICE_PRESETS.highMargin:
+      return { ...base };
+    case PRICE_PRESETS.campaignEligible:
+    case PRICE_PRESETS.conflicted:
+    case PRICE_PRESETS.blocked:
       return { ...base };
     default:
       return base;
@@ -125,6 +136,12 @@ export const rowMatchesPricePreset = (row = {}, preset) => {
   const salesVelocity = Math.max(0, toSafeNumber(row.salesVelocity, 0));
   const stock = Math.max(0, toSafeNumber(row.stockLevel, 0));
   const margin = toSafeNumber(row.currentMarginPercent, -999);
+  const blockingReasons = Array.isArray(row.blockingReasons) ? row.blockingReasons : [];
+  const hasActiveCampaignConflict = Boolean(row.activeCampaignConflict || row.activeCampaignFlag || row.hasActiveDiscount);
+  const hasLowStockBlock = Boolean(row.lowStockGuardrailFlag || row.stockGuardrail?.blocksDiscount || blockingReasons.some((reason) => ['critical_stock', 'near_critical_fast_moving', 'low_stock_coverage', 'stock_guardrail_blocked'].includes(reason)));
+  const hasWeakReplenishment = Boolean(row.procurementGuardrail?.pipelineWeak || row.replenishmentSupportFlag === false || blockingReasons.some((reason) => ['replenishment_pipeline_missing', 'long_lead_time', 'goods_receipt_pending_not_secured', 'replenishment_guardrail_blocked'].includes(reason)));
+  const hasLowMarginBlock = Boolean(row.marginGuardrailFlag || row.marginGuardrail?.blocksDiscount || blockingReasons.some((reason) => ['low_margin', 'price_at_or_below_cost', 'margin_guardrail_blocked'].includes(reason)));
+  const hasGuardrail = hasLowStockBlock || hasWeakReplenishment || hasLowMarginBlock;
 
   switch (preset) {
     case PRICE_PRESETS.nearExpiry:
@@ -135,6 +152,12 @@ export const rowMatchesPricePreset = (row = {}, preset) => {
       return stock >= 40 && salesVelocity <= 2;
     case PRICE_PRESETS.highMargin:
       return margin >= 30;
+    case PRICE_PRESETS.campaignEligible:
+      return row.campaignEligible !== false && row.actionType === 'campaign_candidate';
+    case PRICE_PRESETS.conflicted:
+      return hasActiveCampaignConflict;
+    case PRICE_PRESETS.blocked:
+      return hasGuardrail || Boolean(row.isSuppressed || row.suppressionReason || blockingReasons.length);
     default:
       return true;
   }

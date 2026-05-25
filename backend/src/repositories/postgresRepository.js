@@ -154,10 +154,10 @@ const FIELD_CONFIG = {
     date: ['createdAt', 'updatedAt'],
   },
   dailyStoreClosing: {
-    string: ['id', 'storeId', 'timezone', 'source'],
+    string: ['id', 'storeId', 'timezone', 'source', 'closingType'],
     int: ['salesCount', 'returnCount', 'transactionCount', 'itemCount'],
     decimal: ['grossSalesAmount', 'returnAmount', 'netRevenue'],
-    date: ['businessDate', 'createdAt', 'updatedAt'],
+    date: ['businessDate', 'closedAt', 'createdAt', 'updatedAt'],
   },
   customer: {
     string: ['id', 'customerNo', 'name', 'phone', 'email', 'passwordHash', 'city', 'district'],
@@ -185,12 +185,12 @@ const FIELD_CONFIG = {
     date: ['createdAt'],
   },
   stockTransferRequest: {
-    string: ['id', 'productId', 'productName', 'sku', 'barcode', 'sectionId', 'sectionName', 'sourceLocation', 'targetLocation', 'status', 'priority', 'requestedBy', 'requestedByName', 'handledBy', 'handledByName', 'note', 'handledNote'],
+    string: ['id', 'productId', 'productName', 'sku', 'barcode', 'sectionId', 'sectionName', 'sourceLocation', 'targetLocation', 'status', 'priority', 'origin', 'source', 'requestedBy', 'requestedByName', 'handledBy', 'handledByName', 'note', 'handledNote'],
     int: ['sectionNumber', 'quantity', 'warehouseStockSnapshot', 'shelfStockSnapshot'],
-    date: ['createdAt', 'completedAt', 'updatedAt'],
+    date: ['createdAt', 'completedAt', 'stockTransferredAt', 'updatedAt'],
   },
   transferAudit: {
-    string: ['id', 'transferRequestId', 'fromStatus', 'toStatus', 'note', 'actorId', 'actorName'],
+    string: ['id', 'transferRequestId', 'fromStatus', 'toStatus', 'note', 'actorId', 'actorName', 'event', 'origin'],
     date: ['createdAt'],
   },
   eslDevice: {
@@ -255,6 +255,8 @@ const NULL_IF_BLANK = new Set([
   'macAddress',
   'referenceNo',
   'handledBy',
+  'requestedBy',
+  'actorId',
 ]);
 
 const PURCHASE_SUGGESTION_COLUMN_FIELDS = [
@@ -904,6 +906,9 @@ const stockData = (item = {}) => {
 };
 
 const syncStockBatches = async (prisma, stockRow, batches = []) => {
+  if ((!Array.isArray(batches) || batches.length === 0) && Number(stockRow?.batchCount || 0) <= 0) {
+    return;
+  }
   await prisma.stockBatch.deleteMany({ where: { stockId: stockRow.id } });
   for (const batch of Array.isArray(batches) ? batches : []) {
     await prisma.stockBatch.create({

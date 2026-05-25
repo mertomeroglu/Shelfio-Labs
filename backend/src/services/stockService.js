@@ -20,6 +20,7 @@ import { formatMovementRouteLabel, formatStockLocationLabel, formatStorageTypeLa
 import { deriveShelfStockAlert, isActiveRetailProduct } from '../utils/retailStockPolicy.js';
 import { createPublicBatchNo, isLegacyGeneratedBatchNo } from '../utils/batchNumber.js';
 import { enrichBatchExpiryState, summarizeBatchAvailability } from '../utils/batchExpiry.js';
+import { resolveSktPolicy, SKT_POLICIES } from '../utils/sktPolicy.js';
 import { clearPricingAnalysisCache } from './analysis/pricingAnalysisService.js';
 import { validateStockBatchSummaryIntegrity } from './dataIntegrityService.js';
 
@@ -120,6 +121,22 @@ const enrichReason = (movement) => {
     }),
     location: movement.location || (movement.toLocation ? movement.toLocation : movement.fromLocation) || 'depo',
   };
+};
+
+const triggerTransferAutomationAfterShelfChange = async ({ productId, source }) => {
+  try {
+    const { sectionService } = await import('./sectionService.js');
+    await sectionService.runTransferAutomationScan({
+      source,
+      productId,
+    });
+  } catch (error) {
+    console.error('[transfer-automation:stock-hook] scan failed', {
+      productId,
+      source,
+      message: error.message || String(error),
+    });
+  }
 };
 
 const resolveCaseMultiplierFromDesi = (desi) => {
@@ -226,6 +243,11 @@ const mapStockProductRow = (product, options = {}) => {
     sku: product.sku,
     barcode: product.barcode || '',
     productName: product.name,
+    name: product.name,
+    categoryId: product.categoryId || null,
+    categoryCode: product.category?.code || '',
+    categoryName: product.category?.name || '',
+    etiket: product.etiket || '',
     unit: product.unit,
     isActive: product.isActive,
     status: product.isActive ? 'active' : 'inactive',
@@ -279,6 +301,7 @@ const mapStockProductRow = (product, options = {}) => {
     },
     isCritical: deriveShelfStockAlert({ product, shelfQuantity: shelfStock, totalQuantity: quantity }) === 'critical',
     updatedAt: fromDateValue(stock.updatedAt) || fromDateValue(product.updatedAt),
+    sktPolicy: resolveSktPolicy({ product, category: product.category || null }),
   };
 };
 
@@ -341,6 +364,8 @@ const getStocksFromPostgres = async (query = {}) => {
         sku: true,
         barcode: true,
         name: true,
+        categoryId: true,
+        etiket: true,
         unit: true,
         isActive: true,
         isListed: true,
@@ -351,6 +376,7 @@ const getStocksFromPostgres = async (query = {}) => {
         unitsPerCase: true,
         averageDesi: true,
         updatedAt: true,
+        category: { select: { id: true, name: true, code: true } },
         stock: {
           select: {
             warehouseQuantity: true,
@@ -821,26 +847,42 @@ const upsertBatchQuantity = ({ batches, batchNo, skt, location, qty }) => {
   ];
 };
 
-const upsertBatchRecord = ({ batches, sourceBatchNo = '', batchNo, skt, warehouseQuantity = 0, shelfQuantity = 0, status = '' } = {}) => {
+const enforceSktPolicy = ({ product, category, skt, context = 'stock' } = {}) => {
+  const policy = resolveSktPolicy({ product, category });
+  const normalizedSkt = normalizeDateOnly(skt);
+  if (policy.policy === SKT_POLICIES.REQUIRED && !normalizedSkt) {
+    throw new AppError(400, 'Bu ürün grubu için SKT zorunludur');
+  }
+  if (skt && !normalizedSkt) {
+    throw new AppError(400, 'SKT YYYY-MM-DD formatinda olmalidir');
+  }
+  return {
+    ...policy,
+    skt: policy.policy === SKT_POLICIES.NOT_APPLICABLE && context === 'receipt' ? '' : normalizedSkt,
+  };
+};
+
+const upsertBatchRecord = ({ batches, sourceBatchNo = '', batchNo, skt, warehouseQuantity = 0, shelfQuantity = 0, status = '', requireSkt = true } = {}) => {
   const safeBatches = cloneBatches(batches);
   const nextBatchNo = normalizeBatchNo(batchNo);
   const nextSkt = normalizeDateOnly(skt);
   if (!nextBatchNo) {
     throw new AppError(400, 'Parti No zorunludur');
   }
-  if (!nextSkt) {
+  if (requireSkt && !nextSkt) {
     throw new AppError(400, 'SKT YYYY-MM-DD formatinda olmalidir');
   }
 
   const explicitSource = normalizeBatchNo(sourceBatchNo);
   const source = explicitSource || nextBatchNo;
   const existingByBatchNo = safeBatches.find((item) => normalizeBatchNo(item.batchNo) === nextBatchNo);
-  if (!explicitSource && existingByBatchNo && normalizeDateOnly(existingByBatchNo.skt) !== nextSkt) {
+  if (!explicitSource && existingByBatchNo && nextSkt && normalizeDateOnly(existingByBatchNo.skt) !== nextSkt) {
     throw new AppError(409, 'Aynı Parti No farklı SKT ile kaydedilemez');
   }
   const conflict = safeBatches.find((item) =>
     normalizeBatchNo(item.batchNo) === nextBatchNo
     && normalizeBatchNo(item.batchNo) !== source
+    && nextSkt
     && normalizeDateOnly(item.skt) !== nextSkt
   );
   if (conflict) {
@@ -990,6 +1032,13 @@ export const stockService = {
     if (!product) {
       throw createNotFoundError('Ürün bulunamadı');
     }
+    const category = product.categoryId ? await categoryRepo.findById(product.categoryId) : null;
+    const sktPolicy = enforceSktPolicy({
+      product,
+      category,
+      skt: payload.skt,
+      context: 'batch',
+    });
 
     const existingStock = (await stockRepo.findByProductId(productId)) || {
       productId,
@@ -1007,6 +1056,7 @@ export const stockService = {
       warehouseQuantity: payload.warehouseQuantity,
       shelfQuantity: payload.shelfQuantity,
       status: payload.status,
+      requireSkt: sktPolicy.policy === SKT_POLICIES.REQUIRED,
     });
 
     const persistedStock = await stockRepo.upsertDetailed(productId, {
@@ -1022,6 +1072,7 @@ export const stockService = {
       batch,
       batches: cloneBatches(persistedStock?.batches || []),
       stock: persistedStock,
+      sktPolicy,
     };
   },
 
@@ -1346,6 +1397,48 @@ export const stockService = {
     };
   },
 
+  async listSktPolicyManualReview(query = {}) {
+    const [products, categories] = await Promise.all([
+      productRepo.getAll(),
+      categoryRepo.getAll(),
+    ]);
+    const categoryById = new Map(categories.map((item) => [String(item.id), item]));
+    const limit = Math.min(Math.max(Number(query.limit || 200) || 200, 1), 1000);
+    const rows = products
+      .map((product) => {
+        const category = categoryById.get(String(product.categoryId || '')) || null;
+        const policy = resolveSktPolicy({ product, category });
+        return {
+          productId: product.id,
+          sku: product.sku,
+          barcode: product.barcode || '',
+          productName: product.name,
+          categoryId: product.categoryId || null,
+          categoryName: category?.name || '',
+          categoryCode: category?.code || '',
+          etiket: product.etiket || '',
+          sktPolicy: policy.policy,
+          reason: policy.reason,
+          manualReviewReason: policy.manualReviewReason || '',
+        };
+      })
+      .filter((item) => item.sktPolicy === SKT_POLICIES.MANUAL_REVIEW)
+      .sort((left, right) =>
+        String(left.categoryName || '').localeCompare(String(right.categoryName || ''), 'tr')
+        || String(left.etiket || '').localeCompare(String(right.etiket || ''), 'tr')
+        || String(left.productName || '').localeCompare(String(right.productName || ''), 'tr')
+      );
+
+    return {
+      totalCount: rows.length,
+      items: rows.slice(0, limit),
+      meta: {
+        limit,
+        policy: SKT_POLICIES.MANUAL_REVIEW,
+      },
+    };
+  },
+
   async createMovement(type, payload, userId) {
     validateStockMovementPayload(payload, { type });
     const input = sanitizeMovementInput(payload);
@@ -1355,7 +1448,7 @@ export const stockService = {
       throw createNotFoundError('Ürün bulunamadı');
     }
 
-    if (!product.isActive) {
+    if (product.isActive === false) {
       throw new AppError(400, 'Pasif ürünler için stok hareketi oluşturulamaz');
     }
 
@@ -1363,7 +1456,17 @@ export const stockService = {
       throw new AppError(400, 'Listed olmayan ürünler için aktif stok hareketi oluşturulamaz');
     }
 
+    const productCategory = product.categoryId ? await categoryRepo.findById(product.categoryId) : null;
+
     if (type === 'IN' && input.entryType === 'receipt') {
+      const sktPolicy = enforceSktPolicy({
+        product,
+        category: productCategory,
+        skt: input.skt,
+        context: 'receipt',
+      });
+      input.skt = sktPolicy.skt;
+
       const today = new Date().toISOString().slice(0, 10);
       if (input.skt && input.skt < today) {
         throw new AppError(400, 'SKT bugünden geride olamaz');
@@ -1390,8 +1493,7 @@ export const stockService = {
           throw new AppError(400, 'Depo lokasyonu bulunamadı');
         }
 
-        const category = await categoryRepo.findById(product.categoryId);
-        const requiredStorageType = resolveRequiredStorageType(category);
+        const requiredStorageType = resolveRequiredStorageType(productCategory);
         const locationStorageType = String(location.storageType || 'Ortam');
         if (requiredStorageType !== locationStorageType) {
           throw new AppError(400, 'Seçilen depo lokasyonu ürünün saklama tipine uygun deşil');
@@ -1406,8 +1508,7 @@ export const stockService = {
         throw new AppError(400, 'Kaynak depo lokasyonu bulunamadı');
       }
 
-      const category = await categoryRepo.findById(product.categoryId);
-      const requiredStorageType = resolveRequiredStorageType(category);
+      const requiredStorageType = resolveRequiredStorageType(productCategory);
       const locationStorageType = String(location.storageType || 'Ortam');
       if (requiredStorageType !== locationStorageType) {
         throw new AppError(400, 'Yanlış saklama tipli lokasyondan çıkış yapılamaz');
@@ -1577,6 +1678,13 @@ export const stockService = {
 
     await movementRepo.create(movement);
 
+    if (location === 'reyon') {
+      await triggerTransferAutomationAfterShelfChange({
+        productId: product.id,
+        source: `stock_movement:${type.toLowerCase()}`,
+      });
+    }
+
     return {
       movement: enrichReason(movement),
       stock: {
@@ -1588,20 +1696,20 @@ export const stockService = {
     };
   },
 
-  async transferStock(payload, userId) {
+  async transferStock(payload, userId, options = {}) {
     validateStockTransferPayload(payload);
     const input = sanitizeMovementInput(payload);
 
-    const product = await productRepo.findById(input.productId);
+    const product = options.product || await productRepo.findById(input.productId);
     if (!product) {
       throw createNotFoundError('Ürün bulunamadı');
     }
 
-    if (!product.isActive) {
+    if (product.isActive === false) {
       throw new AppError(400, 'Pasif ürünler için transfer oluşturulamaz');
     }
 
-    const user = await userRepo.findById(userId);
+    const user = options.user || await userRepo.findById(userId);
     const fromLocation = normalizeLocation(input.fromLocation);
     const toLocation = normalizeLocation(input.toLocation);
     const qty = input.qty || 0;
@@ -1694,6 +1802,13 @@ export const stockService = {
     };
 
     await movementRepo.create(movement);
+
+    if (!options.skipAutomationScan && (fromLocation === 'reyon' || toLocation === 'reyon')) {
+      await triggerTransferAutomationAfterShelfChange({
+        productId: product.id,
+        source: 'stock_transfer',
+      });
+    }
 
     return {
       movement: enrichReason(movement),

@@ -1,5 +1,5 @@
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PurchaseSuggestions from '../purchase-suggestions/PurchaseSuggestions.jsx';
 
@@ -9,6 +9,7 @@ const mockGenerateSuggestions = vi.fn();
 const mockListSuppliers = vi.fn();
 const mockListProducts = vi.fn();
 const mockListSupplierProducts = vi.fn();
+const mockApproveSuggestion = vi.fn();
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -28,7 +29,7 @@ vi.mock('../../services/procurementService.js', () => ({
     generateSuggestions: (...args) => mockGenerateSuggestions(...args),
     listSupplierProducts: (...args) => mockListSupplierProducts(...args),
     updateSuggestion: vi.fn(),
-    approveSuggestion: vi.fn(),
+    approveSuggestion: (...args) => mockApproveSuggestion(...args),
     rejectSuggestion: vi.fn(),
   },
 }));
@@ -84,6 +85,7 @@ describe('OrderRecommendations integration flow', () => {
     window.sessionStorage.clear();
     mockNavigate.mockReset();
     mockGenerateSuggestions.mockResolvedValue({ ok: true });
+    mockApproveSuggestion.mockResolvedValue({ id: 'po-1', orderNumber: 'PO-1' });
     mockListSuggestions.mockResolvedValue(baseRows);
     mockListSuppliers.mockResolvedValue([
       { id: 's1', name: 'Tedarikçi A' },
@@ -94,12 +96,12 @@ describe('OrderRecommendations integration flow', () => {
       { id: 'p2', minStock: 4, criticalStock: 4, avgDailySales: 0, currentStock: 240 },
     ]);
     mockListSupplierProducts.mockResolvedValue([
-      { productId: 'p1', leadTimeDays: 8 },
-      { productId: 'p2', leadTimeDays: 2 },
+      { supplierProductId: 'sp-1', productId: 'p1', supplierId: 's1', leadTimeDays: 8 },
+      { supplierProductId: 'sp-2', productId: 'p2', supplierId: 's2', leadTimeDays: 2 },
     ]);
   });
 
-  test('refresh button retriggers generation and explanation panel works with dynamic reasons', async () => {
+  test('refresh button retriggers generation and detail modal works with dynamic reasons', async () => {
     const user = userEvent.setup();
 
     render(
@@ -116,15 +118,20 @@ describe('OrderRecommendations integration flow', () => {
       expect(mockGenerateSuggestions).toHaveBeenCalledTimes(1);
     });
 
-    await user.click(screen.getAllByRole('button', { name: 'Neden' })[0]);
+    await user.click(screen.getByRole('button', { name: /Ürün A için diğer işlemler/i }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Detay' }));
 
-    expect(await screen.findByText(/Acil sipariş sinyali|Temin baskısı yüksek|Öneri özeti/)).toBeInTheDocument();
-    expect(screen.getByText('Stok tükenmeye çok yakın.')).toBeInTheDocument();
-    expect(screen.getByText('Son günlerde satış hızı yüksek.')).toBeInTheDocument();
-    expect(screen.getByText('Tedarik süresi uzun olduğu için öneri güçlendirildi.')).toBeInTheDocument();
+    const detailTitle = await screen.findByText('Öneri Detayı');
+    const detailModal = detailTitle.closest('.order-suggestion-detail-modal');
+    expect(detailModal).toBeInTheDocument();
+    expect(within(detailModal).getByText('SKU')).toBeInTheDocument();
+    expect(within(detailModal).getByText('SKU-1')).toBeInTheDocument();
+    expect(screen.getAllByText('20 adet').length).toBeGreaterThan(1);
+    expect(screen.getAllByText(/Son 7 günde/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Siparişe Dönüştür' }).length).toBeGreaterThan(1);
   });
 
-  test('single send action routes to siparis-olustur with prepared payload and leaves archiving to the target page', async () => {
+  test('draft edit action routes to siparis-olustur with prepared payload and leaves archiving to the target page', async () => {
     const user = userEvent.setup();
 
     render(
@@ -135,10 +142,9 @@ describe('OrderRecommendations integration flow', () => {
 
     expect((await screen.findAllByText('Ürün A')).length).toBeGreaterThan(0);
 
-    const approveButtons = screen.getAllByRole('button', { name: 'Onaya Gönder' });
-    expect(approveButtons).toHaveLength(1);
-
-    await user.click(approveButtons[0]);
+    await user.click(screen.getByRole('button', { name: /Ürün A için diğer işlemler/i }));
+    expect(await screen.findByRole('menuitem', { name: 'Reddet' })).toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Öneriyi Taslakta Düzenle' }));
 
     expect(screen.queryByText('Tekli Satın Alım Onayı')).not.toBeInTheDocument();
     expect(mockNavigate).toHaveBeenCalledWith(
@@ -172,8 +178,34 @@ describe('OrderRecommendations integration flow', () => {
           suggestionId: 'r1',
           productId: 'p1',
           supplierId: 's1',
+          supplierProductId: 'sp-1',
         }),
       ],
     }));
+  });
+
+  test('convert action creates order without leaving purchase suggestions page', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <PurchaseSuggestions />
+      </MemoryRouter>
+    );
+
+    expect((await screen.findAllByText('Ürün A')).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Siparişe Dönüştür' }));
+
+    await waitFor(() => {
+      expect(mockApproveSuggestion).toHaveBeenCalledWith('r1', {});
+    });
+
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      '/siparis-takibi',
+      expect.anything(),
+    );
+    expect((await screen.findAllByText(/olu/i)).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Detaya Git' })).toBeInTheDocument();
   });
 });

@@ -39,6 +39,15 @@ export const stockController = {
     }
   },
 
+  async sktPolicyManualReview(req, res, next) {
+    try {
+      const data = await stockService.listSktPolicyManualReview(req.query || {});
+      sendListResponse(res, data);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async expiredBatchNotificationDryRun(req, res, next) {
     try {
       const data = await expiredBatchNotificationService.buildPlan({ dryRun: true });

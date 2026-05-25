@@ -1,4 +1,4 @@
-﻿export const CAMPAIGN_TEMPLATE_LIBRARY = {
+export const CAMPAIGN_TEMPLATE_LIBRARY = {
   weekend_sale: {
     id: 'weekend_sale',
     label: 'Hafta Sonu İndirimi',
@@ -111,7 +111,7 @@ const uniqueProductIds = (rows = []) => [...new Set(rows.map((row) => (
 const uniqueNames = (rows = [], key) => [...new Set(rows.map((row) => String(row?.[key] || '').trim()).filter((value) => value && value !== '-'))];
 
 export const CAMPAIGN_SUGGESTION_MODULES = {
-  general: { key: 'general', label: 'Genel', scopeLabel: 'Genel / çapraz', actionLabel: 'Özel fırsatı taslağa al' },
+  general: { key: 'general', label: 'Çapraz / Öne Çıkan', scopeLabel: 'Çapraz fırsat', actionLabel: 'Öne çıkan fırsatı taslağa al' },
   product: { key: 'product', label: 'Ürün Bazlı', scopeLabel: 'Ürün kümesi', actionLabel: 'Ürün kampanyası oluştur' },
   category: { key: 'category', label: 'Kategori Bazlı', scopeLabel: 'Kategori', actionLabel: 'Kategori kampanyası oluştur' },
   brand: { key: 'brand', label: 'Marka Bazlı', scopeLabel: 'Marka', actionLabel: 'Marka kampanyası oluştur' },
@@ -120,6 +120,17 @@ export const CAMPAIGN_SUGGESTION_MODULES = {
 };
 
 const MODULE_KEYS = Object.keys(CAMPAIGN_SUGGESTION_MODULES);
+const MANUAL_ONLY_SUGGESTION_MODULE_KEYS = new Set(['category', 'brand']);
+const NON_DISCOUNT_RECOMMENDATION_KEYS = new Set([
+  'margin-watch',
+  'margin-watch-suppressed',
+  'margin_watch',
+  'margin_watch_suppressed',
+  'expired-product',
+  'expired-product-suppressed',
+  'expired_product',
+  'expired_product_suppressed',
+]);
 
 const normalizeSuggestionKey = (value) => String(value || '')
   .trim()
@@ -148,6 +159,22 @@ const hasSuggestionText = (suggestion = {}, ...needles) => {
   return needles.some((needle) => haystack.includes(String(needle).toLocaleLowerCase('tr-TR')));
 };
 
+const isManualOnlyCampaignSuggestion = (suggestion = {}) => {
+  const explicitKeys = [
+    suggestion.primaryModule,
+    suggestion.module,
+    suggestion.sourceModule,
+    suggestion.type,
+    suggestion.scope,
+    suggestion.campaignType,
+    suggestion.scopeType,
+  ].map(normalizeSuggestionKey);
+  if (explicitKeys.some((key) => MANUAL_ONLY_SUGGESTION_MODULE_KEYS.has(key))) return true;
+
+  const id = normalizeSuggestionKey(suggestion.id || suggestion.recommendationType || suggestion.title);
+  return id.includes('category-focus') || id.includes('brand-focus');
+};
+
 const resolveCampaignSuggestionModuleKey = (suggestion = {}) => {
   const explicitModule = normalizeSuggestionKey(suggestion.primaryModule || suggestion.module || suggestion.sourceModule);
   if (MODULE_KEYS.includes(explicitModule)) return explicitModule;
@@ -158,7 +185,7 @@ const resolveCampaignSuggestionModuleKey = (suggestion = {}) => {
   if (id === 'near-expiry' || id.includes('expiry') || hasSuggestionText(suggestion, 'skt', 'son kullanma', 'fire')) return 'expiry';
   if (id === 'slow-moving' || id === 'demand-down' || id.includes('sales') || hasSuggestionText(suggestion, 'satış hızı', 'talep düş', 'yavaş satan')) return 'sales';
   if (id === 'overstock' || id.includes('stock-clearance') || hasSuggestionText(suggestion, 'stok eritme', 'stok baskısı')) {
-    return scope === 'category' || safeArray(suggestion.categoryNames).length > 0 ? 'category' : 'product';
+    return 'product';
   }
   if (id === 'margin-watch' || id.includes('margin') || id.includes('discount-opportunity')) {
     if (scope === 'brand') return 'brand';
@@ -180,6 +207,54 @@ const resolveRecommendationType = (suggestion = {}) => {
   if (id === 'overstock') return 'overstock';
   if (id === 'margin-watch') return 'margin_watch';
   return id.replace(/-/g, '_');
+};
+
+export const isCampaignSuggestionDiscountActionable = (suggestion = {}) => {
+  const id = normalizeSuggestionKey(suggestion.id || suggestion.recommendationType || suggestion.title);
+  const recommendationType = normalizeSuggestionKey(suggestion.recommendationType || suggestion.id || '');
+  const reasonCodes = safeArray(suggestion.reasonCodes).map(normalizeSuggestionKey);
+  if (NON_DISCOUNT_RECOMMENDATION_KEYS.has(id) || NON_DISCOUNT_RECOMMENDATION_KEYS.has(recommendationType)) return false;
+  if (reasonCodes.includes('expired-product') || reasonCodes.includes('expired-product-disposal-required')) return false;
+  if (reasonCodes.includes('discount-not-recommended') || reasonCodes.includes('margin-protection')) return false;
+  return toNumber(suggestion.recommendedDiscount ?? suggestion.recommendedDiscountRate, 0) > 0;
+};
+
+export const resolveCampaignSuggestionDraftTarget = (suggestion = {}, fallbackModule = '') => {
+  const enriched = enrichCampaignSuggestion(suggestion);
+  const primaryModule = resolveCampaignSuggestionModuleKey(enriched);
+  const productIds = uniqueProductIds(safeArray(enriched.productIds || enriched.rows));
+  const categoryIds = safeArray(enriched.categoryIds).map((id) => String(id || '').trim()).filter(Boolean);
+  const brandNames = safeArray(enriched.brandNames).map((brand) => String(brand || '').trim()).filter(Boolean);
+  const fallback = normalizeSuggestionKey(fallbackModule);
+  const sourceModule = MODULE_KEYS.includes(primaryModule)
+    ? primaryModule
+    : MODULE_KEYS.includes(fallback)
+      ? fallback
+      : '';
+  const targetView = sourceModule === 'sales' || sourceModule === 'expiry'
+    ? (productIds.length ? 'product' : 'dynamic')
+    : enriched.type === 'product' || (enriched.type === 'dynamic' && productIds.length)
+      ? 'product'
+      : enriched.type === 'category'
+        ? 'category'
+        : enriched.type === 'brand'
+          ? 'brand'
+          : productIds.length
+            ? 'product'
+            : categoryIds.length
+              ? 'category'
+              : brandNames.length
+                ? 'brand'
+                : '';
+
+  return {
+    targetView,
+    sourceModule: sourceModule || targetView,
+    primaryModule,
+    productIds,
+    categoryIds,
+    brandNames,
+  };
 };
 
 export const enrichCampaignSuggestion = (suggestion = {}) => {
@@ -262,7 +337,9 @@ const buildDashboardHighlights = (suggestions = []) => {
 export const buildCampaignSuggestionPresentation = (suggestions = []) => {
   const unique = new Map();
   safeArray(suggestions).forEach((suggestion) => {
+    if (isManualOnlyCampaignSuggestion(suggestion)) return;
     const enriched = enrichCampaignSuggestion(suggestion);
+    if (MANUAL_ONLY_SUGGESTION_MODULE_KEYS.has(enriched.primaryModule)) return;
     const key = getSuggestionIdentity(enriched);
     if (!key || unique.has(key)) return;
     unique.set(key, enriched);
@@ -310,32 +387,6 @@ const buildSignalBullets = ({
 
 const buildPlaybookSteps = (...items) => items.filter(Boolean);
 
-const buildCategoryFocus = (rows = []) => {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const key = String(row?.category || '').trim();
-    if (!key || key === '-') return;
-    const current = grouped.get(key) || { name: key, count: 0, rows: [] };
-    current.count += 1;
-    current.rows.push(row);
-    grouped.set(key, current);
-  });
-  return [...grouped.values()].sort((left, right) => right.count - left.count)[0] || null;
-};
-
-const buildBrandFocus = (rows = []) => {
-  const grouped = new Map();
-  rows.forEach((row) => {
-    const key = String(row?.brand || row?.supplierName || '').trim();
-    if (!key || key === '-') return;
-    const current = grouped.get(key) || { name: key, count: 0, rows: [] };
-    current.count += 1;
-    current.rows.push(row);
-    grouped.set(key, current);
-  });
-  return [...grouped.values()].sort((left, right) => right.count - left.count)[0] || null;
-};
-
 export const buildCampaignSuggestions = ({ pricingRows = [], purchaseSuggestions = [], campaigns = [], giftCards = [] } = {}) => {
   const rows = safeArray(pricingRows);
   const orderRows = safeArray(purchaseSuggestions);
@@ -350,9 +401,6 @@ export const buildCampaignSuggestions = ({ pricingRows = [], purchaseSuggestions
 
   const overstocked = rows.filter((row) => toNumber(row.stockLevel, 0) >= 35 && toNumber(row.salesVelocity, 99) <= 2);
   const overstockSelection = (overstocked.length ? overstocked : sortByDescending(rows, (row) => toNumber(row.stockLevel, 0))).slice(0, Math.max(3, Math.min(10, rows.length || 3)));
-
-  const categoryFocus = buildCategoryFocus(overstockSelection.length ? overstockSelection : rows);
-  const brandFocus = buildBrandFocus(slowSelection.length ? slowSelection : rows);
 
   const giftCardFocusRows = (rows.length ? sortByDescending(rows, (row) => toNumber(row.currentMarginPercent, 0)) : []).slice(0, Math.max(3, Math.min(6, rows.length || 3)));
   const reorderPressure = orderRows.filter((row) => toNumber(row?.currentStock, 0) > 20 && toNumber(row?.avgDailySales, 0) <= 1.2);
@@ -371,7 +419,7 @@ export const buildCampaignSuggestions = ({ pricingRows = [], purchaseSuggestions
       brandNames: uniqueNames(slowSelection, 'brand'),
       priority: slowSelection.length > 6 ? 'high' : 'medium',
       impactSummary: 'Yavaş dönen ürünlerde görünürlüğü artırır, stok baskısını azaltır ve raf verimini iyileştirir.',
-      riskSummary: 'Marjı zaten düşük ürünlerde agresif indirim kârlılığı gereksiz biçimde aşağı çekebilir.',
+      riskSummary: 'Marjı zaten düşük ürünlerde agresif indirim karlılığı gereksiz biçimde aşağı çekebilir.',
       signalBullets: buildSignalBullets({
         rows: slowSelection,
         salesLine: 'Yavaş satış eğilimleri seçildi.',
@@ -414,7 +462,7 @@ export const buildCampaignSuggestions = ({ pricingRows = [], purchaseSuggestions
       reason: 'Stok seviyesi mevcut satış hızına göre yüksek. Stok eritme kampanyası nakit akışını rahatlatabilir.',
       affectedProductCount: overstockSelection.length || 3,
       recommendedDiscount: 15,
-      type: 'category',
+      type: 'product',
       productIds: uniqueProductIds(overstockSelection),
       categoryNames: uniqueNames(overstockSelection, 'category'),
       brandNames: uniqueNames(overstockSelection, 'brand'),
@@ -430,54 +478,6 @@ export const buildCampaignSuggestions = ({ pricingRows = [], purchaseSuggestions
         'En yoğun stoklu kategoriyi dar hedefle başlatın.',
         'İndirim oranını mağaza trafiğine göre 15-20 bandında tutun.',
         'Kampanya sonunda kalan stok için ikinci dalga kararını ölçün.',
-      ),
-    },
-    {
-      id: 'category-focus',
-      title: categoryFocus ? `${categoryFocus.name} kategorisi için odak kampanyası` : 'Kategori odaklı dönüşüm kampanyası',
-      reason: 'Benzer risk sinyalleri aynı kategoride yoğunlaşıyor. Tek aksiyonla daha hızlı kampanya yönetimi yapılabilir.',
-      affectedProductCount: categoryFocus?.count || Math.max(3, rows.length || 3),
-      recommendedDiscount: 14,
-      type: 'category',
-      productIds: uniqueProductIds(categoryFocus?.rows || overstockSelection),
-      categoryNames: categoryFocus ? [categoryFocus.name] : uniqueNames(overstockSelection, 'category').slice(0, 1),
-      brandNames: uniqueNames(categoryFocus?.rows || overstockSelection, 'brand'),
-      priority: 'medium',
-      impactSummary: 'Kategori seviyesinde görünürlük ve dönüşüm artışı sağlayarak operasyon yükünü azaltır.',
-      riskSummary: 'Kategori kapsamı geniş tutulursa gerçek ihtiyacı olmayan ürünler de kampanyaya dahil olabilir.',
-      signalBullets: buildSignalBullets({
-        rows: categoryFocus?.rows || overstockSelection,
-        salesLine: 'Kategori bazında tekrar eden sinyaller gruplanarak analiz edildi.',
-        stockLine: 'Kategori içi stok dengesizliği ve satış trendi birlikte okundu.',
-      }),
-      playbookSteps: buildPlaybookSteps(
-        'Kapsamı tek kategoriyle başlatın ve alt kategori ayrımını kontrol edin.',
-        'Raf iletişimini kategori başlıklarıyla destekleyin.',
-        'İlk hafta sonunda kategori bazlı satış uplift raporu alın.',
-      ),
-    },
-    {
-      id: 'brand-focus',
-      title: brandFocus ? `${brandFocus.name} markası için görünürlük kampanyası` : 'Marka odaklı kampanya fırsatı',
-      reason: 'Aynı marka altında biriken zayıf performanslı ürünler ortak görünürlük mesajıyla daha kolay desteklenebilir.',
-      affectedProductCount: brandFocus?.count || Math.max(3, rows.length || 3),
-      recommendedDiscount: 11,
-      type: 'brand',
-      productIds: uniqueProductIds(brandFocus?.rows || slowSelection),
-      categoryNames: uniqueNames(brandFocus?.rows || slowSelection, 'category'),
-      brandNames: brandFocus ? [brandFocus.name] : uniqueNames(slowSelection, 'brand').slice(0, 1),
-      priority: 'medium',
-      impactSummary: 'Marka görünürlüğünü güçlendirir ve seçili ürünlerde sepet dönüşümünü destekler.',
-      riskSummary: 'Aynı kampanyaya farklı fiyat hassasiyetindeki ürünler girerse aksiyon etkisi dağılabilir.',
-      signalBullets: buildSignalBullets({
-        rows: brandFocus?.rows || slowSelection,
-        salesLine: 'Marka bazında tekrar eden satış yavaşlaması izlendi.',
-        stockLine: 'Marka içi stok baskısı ve raf yoğunluğu karşılaştırıldı.',
-      }),
-      playbookSteps: buildPlaybookSteps(
-        'Önce tek marka ve sınırlı süre ile pilot açın.',
-        'Marka tedarikçisiyle görünürlük desteği varsa kampanya ile eşleyin.',
-        'Fiyat duyarlılığı yüksek ürünleri aynı kampanyadan gerekirse çıkarın.',
       ),
     },
     {
@@ -723,7 +723,7 @@ export const buildCampaignEmptyState = ({ campaigns = [], suggestions = [], tab 
     return {
       title: 'Aktif kampanya yok, ancak uygun ürünler bulundu',
       description: `${eligible} ürün kampanya için uygun görünüyor. Önerilen kampanyalardan birini başlatabilirsiniz.`,
-      cta: 'Genel sekmesinden yeni kampanya oluşturun.',
+      cta: 'Öne çıkan fırsatlardan ürün, kategori veya marka kapsamlı bir kampanya başlatın.',
     };
   }
 

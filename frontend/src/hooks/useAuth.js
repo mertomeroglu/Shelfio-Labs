@@ -6,8 +6,10 @@ import {
   AUTH_SESSION_EXPIRED_EVENT,
   AUTH_SESSION_REFRESHED_EVENT,
   clearAuthToken,
+  getAuthRefreshToken,
   getAuthToken,
   getStoredUser,
+  refreshStaffSession,
   setStoredUser,
 } from '../services/api.js';
 import { hasPermission } from '../config/permissions.js';
@@ -52,59 +54,43 @@ async function preloadSessionReferenceData(user) {
   ]);
 }
 
+async function hydrateCurrentUser() {
+  const currentUser = await withTimeout(authService.me(), AUTH_BOOTSTRAP_TIMEOUT_MS);
+  setStoredUser(currentUser);
+  void preloadSessionReferenceData(currentUser);
+  return currentUser;
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(getStoredUser());
+  const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    const storedUser = getStoredUser();
 
     const bootstrap = async () => {
-      if (!getAuthToken()) {
-        if (active) {
-          setIsLoading(false);
-        }
+      const hasAccessToken = Boolean(getAuthToken());
+      const hasRefreshToken = Boolean(getAuthRefreshToken());
+
+      if (!hasAccessToken && !hasRefreshToken) {
+        if (active) setIsLoading(false);
         return;
       }
 
       try {
-        const currentUser = await withTimeout(authService.me(), AUTH_BOOTSTRAP_TIMEOUT_MS);
-        if (active) {
-          setUser(currentUser);
-          setStoredUser(currentUser);
-        }
-        void preloadSessionReferenceData(currentUser);
-      } catch (error) {
-        const isTimeout = error?.code === 'AUTH_BOOTSTRAP_TIMEOUT';
-
-        if (active && isTimeout && storedUser) {
-          setUser(storedUser);
-
-          // UI'yi bloklamadan do�rulama denemesini arka planda s�rd�r.
-          void authService.me()
-            .then((freshUser) => {
-              if (!active) return;
-              setUser(freshUser);
-              setStoredUser(freshUser);
-              void preloadSessionReferenceData(freshUser);
-            })
-            .catch(() => {
-              if (!active) return;
-              clearAuthToken();
-              setUser(null);
-            });
-          return;
+        if (!hasAccessToken && hasRefreshToken) {
+          await withTimeout(refreshStaffSession(), AUTH_BOOTSTRAP_TIMEOUT_MS);
         }
 
+        const currentUser = await hydrateCurrentUser();
+        if (active) setUser(currentUser);
+      } catch {
         if (active) {
           clearAuthToken();
           setUser(null);
         }
       } finally {
-        if (active) {
-          setIsLoading(false);
-        }
+        if (active) setIsLoading(false);
       }
     };
 
@@ -157,7 +143,7 @@ export function AuthProvider({ children }) {
       logout,
       setUser,
     }),
-    [isLoading, login, logout, user]
+    [isLoading, login, logout, user],
   );
 
   return createElement(AuthContext.Provider, { value }, children);

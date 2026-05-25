@@ -178,11 +178,45 @@ model Product {
   eslDevices                        EslDevice[]
   eslHistory                        EslHistory[]
   priceEvents                       ProductPriceEvent[]
+  temporaryPriceActions             TemporaryPriceAction[]
 
   @@index([categoryId])
   @@index([supplierId])
   @@index([sectionId])
   @@map("products")
+}
+
+model TemporaryPriceAction {
+  id                      String    @id @default(uuid())
+  productId               String    @map("product_id")
+  oldPrice                Decimal?  @map("old_price") @db.Decimal(14, 4)
+  appliedPrice            Decimal   @map("applied_price") @db.Decimal(14, 4)
+  actionType              String?   @map("action_type")
+  recommendationType      String?   @map("recommendation_type")
+  riskLevel               String?   @map("risk_level")
+  startAt                 DateTime  @map("start_at")
+  endAt                   DateTime  @map("end_at")
+  durationDays            Int       @map("duration_days")
+  appliedBy               String?   @map("applied_by")
+  appliedAt               DateTime  @map("applied_at")
+  status                  String    @default("active")
+  sourceRecommendationKey String?   @map("source_recommendation_key")
+  priceEventId            String?   @map("price_event_id")
+  revertAt                DateTime? @map("revert_at")
+  revertedAt              DateTime? @map("reverted_at")
+  notes                   String?
+  payload                 Json?
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  product                 Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// PostgreSQL partial unique index `temporary_price_actions_one_active_per_product_idx`
+  /// is managed by migration `20260525033000_unique_active_temporary_price_action`.
+  /// Prisma schema cannot represent partial indexes; keep that migration with the model.
+  @@index([status, endAt])
+  @@index([productId, status])
+  @@index([sourceRecommendationKey])
+  @@map("temporary_price_actions")
 }
 
 model ProductPriceEvent {
@@ -542,6 +576,8 @@ model DailyStoreClosing {
   id               String    @id
   storeId          String    @map("store_id")
   businessDate     DateTime  @map("business_date") @db.Date
+  closingType      String    @default("official_daily_close") @map("closing_type")
+  closedAt         DateTime  @default(now()) @map("closed_at")
   timezone         String
   salesCount       Int       @default(0) @map("sales_count")
   returnCount      Int       @default(0) @map("return_count")
@@ -555,7 +591,10 @@ model DailyStoreClosing {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  @@unique([storeId, businessDate])
+  /// PostgreSQL partial unique index `daily_store_closings_official_daily_close_key`
+  /// is managed by migration `20260525090000_daily_closing_types`.
+  /// It allows one official close per business date while permitting manual snapshots.
+  @@index([storeId, businessDate, closingType], map: "daily_store_closings_store_date_type_idx")
   @@index([businessDate])
   @@map("daily_store_closings")
 }
@@ -689,6 +728,8 @@ model StockTransferRequest {
   shelfStockSnapshot    Int?            @map("shelf_stock_snapshot")
   status                String?
   priority              String?
+  origin                String?
+  source                String?
   requestedBy           String?         @map("requested_by")
   requestedByName       String?         @map("requested_by_name")
   handledBy             String?         @map("handled_by")
@@ -698,6 +739,7 @@ model StockTransferRequest {
   payload               Json?
   createdAt             DateTime?       @map("created_at")
   completedAt           DateTime?       @map("completed_at")
+  stockTransferredAt    DateTime?       @map("stock_transferred_at")
   updatedAt             DateTime?       @map("updated_at")
   product               Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
   section               Section?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
@@ -706,6 +748,8 @@ model StockTransferRequest {
   requester             User?           @relation("TransferRequestedBy", fields: [requestedBy], references: [id], onDelete: SetNull)
   handler               User?           @relation("TransferHandledBy", fields: [handledBy], references: [id], onDelete: SetNull)
 
+  @@index([origin, status], map: "stock_transfer_requests_origin_status_idx")
+  @@index([productId, sectionId, status], map: "stock_transfer_requests_product_section_status_idx")
   @@map("stock_transfer_requests")
 }
 
@@ -717,6 +761,8 @@ model TransferAudit {
   note              String?
   actorId           String?               @map("actor_id")
   actorName         String?               @map("actor_name")
+  event             String?
+  origin            String?
   payload           Json?
   createdAt         DateTime?             @map("created_at")
   transferRequest   StockTransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: Cascade)

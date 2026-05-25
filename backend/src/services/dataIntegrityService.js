@@ -1,3 +1,5 @@
+import { resolveSktPolicy, SKT_POLICIES } from '../utils/sktPolicy.js';
+
 const logIntegrityIssue = (message, details = {}) => {
   console.warn('[Veri bütünlüğü]', message, details);
 };
@@ -58,7 +60,10 @@ export const validateBatchSktIntegrity = (batches = [], { productId = '', produc
 
 export const validateStockBatchSummaryIntegrity = (stock = {}, { product = {} } = {}) => {
   const batches = Array.isArray(stock.batches) ? stock.batches : [];
-  validateBatchSktIntegrity(batches, { productId: stock.productId || product.id, productName: product.name });
+  const sktPolicy = resolveSktPolicy({ product, category: product.category || null });
+  if (sktPolicy.policy === SKT_POLICIES.REQUIRED) {
+    validateBatchSktIntegrity(batches, { productId: stock.productId || product.id, productName: product.name });
+  }
   const batchTotal = batches.reduce((sum, batch) => sum + Number(batch?.totalQuantity || 0), 0);
   const stockTotal = Number(stock.warehouseQuantity || 0) + Number(stock.shelfQuantity || 0);
   if (batchTotal !== stockTotal) {

@@ -38,6 +38,8 @@ export const sectionService = {
   },
   createTransferRequest: (sectionId, payload) => api.post(`/sections/${sectionId}/transfer-requests`, payload),
   updateTransferRequestStatus: (requestId, payload) => api.patch(`/sections/transfer-requests/${requestId}/status`, payload),
+  bulkUpdateTransferRequests: (payload) => api.post('/sections/transfer-requests/bulk-status', payload),
+  runTransferAutomationScan: (payload = {}) => api.post('/sections/transfer-requests/automation/run', payload),
   create: async (payload) => {
     const result = await api.post('/sections', payload);
     invalidateSectionCache();

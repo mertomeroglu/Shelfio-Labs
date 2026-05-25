@@ -7,9 +7,9 @@ const DISPLAY_H = 128;
 const RENDER_SCALE = 3;
 
 const TEMPLATES = {
-  standard: 'Standart (2.9")',
-  campaign: 'Firsat',
-  discount: 'indirim',
+  standard: 'Standart',
+  campaign: 'Fırsat',
+  discount: 'İndirim',
 };
 
 const font = {
@@ -61,13 +61,14 @@ function splitPrice(value) {
 function resolveProduct(product) {
   if (!product) {
     return {
-      clearMode: true,
-      name: 'Urun Secilmedi',
-      barcode: '0000000000000',
+      clearMode: false,
+      placeholderMode: true,
+      name: 'Ürün seçilmedi',
+      barcode: '',
       salePrice: 0,
       previousSalePrice: 0,
-      origin: 'Turkiye',
-      fdt: '',
+      origin: '-',
+      fdt: 'FDT: -',
     };
   }
 
@@ -82,6 +83,7 @@ function resolveProduct(product) {
 
   return {
     clearMode,
+    placeholderMode: false,
     name: normalizeTrToAscii(productName || 'Bilinmeyen Urun'),
     barcode,
     salePrice: price,
@@ -194,7 +196,17 @@ function drawBarcode(ctx, rawCode, x, y, width, height) {
   ctx.fillText(code, x + width / 2, y + height + 10);
 }
 
-function drawPriceBox(ctx, x, y, w, h, price) {
+function drawBarcodePlaceholder(ctx, x, y, width, height) {
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, width, height);
+  ctx.font = `bold 8px ${font.system}`;
+  ctx.fillStyle = '#000000';
+  ctx.textAlign = 'center';
+  ctx.fillText('Ürün barkodu bekleniyor', x + width / 2, y + Math.floor(height / 2) + 3);
+}
+
+function drawPriceBox(ctx, x, y, w, h, price, placeholderMode = false) {
   const { major, minor } = splitPrice(price);
   ctx.fillStyle = '#000000';
   ctx.fillRect(x, y, w, h);
@@ -204,6 +216,15 @@ function drawPriceBox(ctx, x, y, w, h, price) {
   ctx.textAlign = 'center';
   ctx.fillText('KDV Dahil', x + w / 2, y + 12);
   ctx.fillText('KDV Dahil', x + w / 2 + 1, y + 12);
+
+  if (placeholderMode) {
+    ctx.font = `bold 24px ${font.system}`;
+    ctx.textAlign = 'center';
+    ctx.fillText('₺--,--', x + w / 2, y + 39);
+    ctx.font = `bold 8px ${font.system}`;
+    ctx.fillText('Fiyat bekleniyor', x + w / 2, y + h - 7);
+    return;
+  }
 
   const priceTop = y + 18;
   const priceAreaH = h - 18;
@@ -290,11 +311,15 @@ function drawStandardLabel(ctx, data) {
 
   ctx.font = `8px ${font.system}`;
   ctx.fillStyle = '#000000';
-  ctx.fillText(`Mensei: ${data.origin}`, IP, originY);
+  ctx.fillText(data.placeholderMode ? 'Menşei: -' : `Mensei: ${data.origin}`, IP, originY);
   ctx.fillText(data.fdt || 'FDT:../../....', IP, fdtY);
 
-  drawBarcode(ctx, data.barcode, bcX, bcY, bcW, barH);
-  drawPriceBox(ctx, priceX, priceY, priceW, priceH, data.salePrice);
+  if (data.placeholderMode) {
+    drawBarcodePlaceholder(ctx, bcX, bcY, bcW, barH);
+  } else {
+    drawBarcode(ctx, data.barcode, bcX, bcY, bcW, barH);
+  }
+  drawPriceBox(ctx, priceX, priceY, priceW, priceH, data.salePrice, data.placeholderMode);
 }
 
 function drawCampaignHeader(ctx, label, iconType) {
@@ -339,27 +364,34 @@ function drawCampaignLabel(ctx, data) {
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.fillStyle = '#ffffff';
 
-  const { major, minor } = splitPrice(data.salePrice);
-  const minorText = `,${minor}`;
-  ctx.textAlign = 'left';
-  ctx.font = `bold 42px ${font.system}`;
-  const majorW = ctx.measureText(major).width;
-  ctx.font = `bold 31px ${font.system}`;
-  const minorW = ctx.measureText(minorText).width;
-  ctx.font = `bold 18px ${font.system}`;
-  const tlW = ctx.measureText('TL').width;
-  const totalW = majorW + 4 + minorW + 4 + tlW;
-  const startX = boxX + (boxW - totalW) / 2;
-  const baseY = boxY + (boxH + 36) / 2 - 1;
-  ctx.font = `bold 42px ${font.system}`;
-  ctx.fillText(major, startX, baseY);
-  const rightX = startX + majorW + 4;
-  ctx.font = `bold 31px ${font.system}`;
-  ctx.fillText(minorText, rightX, baseY);
-  ctx.font = `bold 18px ${font.system}`;
-  ctx.fillText('TL', rightX + minorW + 4, baseY);
+  if (data.placeholderMode) {
+    ctx.textAlign = 'center';
+    ctx.font = `bold 36px ${font.system}`;
+    ctx.fillText('₺--,-- TL', boxX + boxW / 2, boxY + 39);
+  } else {
+    const { major, minor } = splitPrice(data.salePrice);
+    const minorText = `,${minor}`;
+    ctx.textAlign = 'left';
+    ctx.font = `bold 42px ${font.system}`;
+    const majorW = ctx.measureText(major).width;
+    ctx.font = `bold 31px ${font.system}`;
+    const minorW = ctx.measureText(minorText).width;
+    ctx.font = `bold 18px ${font.system}`;
+    const tlW = ctx.measureText('TL').width;
+    const totalW = majorW + 4 + minorW + 4 + tlW;
+    const startX = boxX + (boxW - totalW) / 2;
+    const baseY = boxY + (boxH + 36) / 2 - 1;
+    ctx.font = `bold 42px ${font.system}`;
+    ctx.fillText(major, startX, baseY);
+    const rightX = startX + majorW + 4;
+    ctx.font = `bold 31px ${font.system}`;
+    ctx.fillText(minorText, rightX, baseY);
+    ctx.font = `bold 18px ${font.system}`;
+    ctx.fillText('TL', rightX + minorW + 4, baseY);
+  }
 
   ctx.font = `8px ${font.system}`;
+  ctx.textAlign = 'left';
   ctx.fillText('KDV Dahil', boxX + 5, boxY + boxH - 10);
   if (data.fdt) {
     ctx.textAlign = 'right';
@@ -394,29 +426,36 @@ function drawDiscountLabel(ctx, data) {
     ctx.stroke();
   }
 
-  const { major, minor } = splitPrice(data.salePrice);
-  const minorText = `,${minor}`;
-  const newPriceX = data.hasDiscountPrice ? boxX + 110 : boxX + 8;
-  const newPriceW = data.hasDiscountPrice ? boxW - 116 : boxW - 16;
-  ctx.textAlign = 'left';
-  ctx.font = `bold 41px ${font.system}`;
-  const majorW = ctx.measureText(major).width;
-  ctx.font = `bold 21px ${font.system}`;
-  const minorW = ctx.measureText(minorText).width;
-  ctx.font = `bold 13px ${font.system}`;
-  const tlW = ctx.measureText('TL').width;
-  const totalW = majorW + 4 + minorW + 4 + tlW;
-  const startX = newPriceX + Math.max(0, (newPriceW - totalW) / 2);
-  const baseY = boxY + 47;
-  ctx.font = `bold 41px ${font.system}`;
-  ctx.fillText(major, startX, baseY);
-  const rightX = startX + majorW + 4;
-  ctx.font = `bold 21px ${font.system}`;
-  ctx.fillText(minorText, rightX, baseY);
-  ctx.font = `bold 13px ${font.system}`;
-  ctx.fillText('TL', rightX + minorW + 4, baseY);
+  if (data.placeholderMode) {
+    ctx.textAlign = 'center';
+    ctx.font = `bold 36px ${font.system}`;
+    ctx.fillText('₺--,-- TL', boxX + boxW / 2, boxY + 42);
+  } else {
+    const { major, minor } = splitPrice(data.salePrice);
+    const minorText = `,${minor}`;
+    const newPriceX = data.hasDiscountPrice ? boxX + 110 : boxX + 8;
+    const newPriceW = data.hasDiscountPrice ? boxW - 116 : boxW - 16;
+    ctx.textAlign = 'left';
+    ctx.font = `bold 41px ${font.system}`;
+    const majorW = ctx.measureText(major).width;
+    ctx.font = `bold 21px ${font.system}`;
+    const minorW = ctx.measureText(minorText).width;
+    ctx.font = `bold 13px ${font.system}`;
+    const tlW = ctx.measureText('TL').width;
+    const totalW = majorW + 4 + minorW + 4 + tlW;
+    const startX = newPriceX + Math.max(0, (newPriceW - totalW) / 2);
+    const baseY = boxY + 47;
+    ctx.font = `bold 41px ${font.system}`;
+    ctx.fillText(major, startX, baseY);
+    const rightX = startX + majorW + 4;
+    ctx.font = `bold 21px ${font.system}`;
+    ctx.fillText(minorText, rightX, baseY);
+    ctx.font = `bold 13px ${font.system}`;
+    ctx.fillText('TL', rightX + minorW + 4, baseY);
+  }
 
   ctx.font = `8px ${font.system}`;
+  ctx.textAlign = 'left';
   ctx.fillText('KDV Dahil', boxX + 8, boxY + boxH - 7);
   if (data.fdt) {
     ctx.textAlign = 'right';

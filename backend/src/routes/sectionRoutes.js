@@ -11,6 +11,8 @@ router.use(authenticate);
 router.use(requireScope());
 router.get('/', requirePermission(PERMISSIONS.SECTION_VIEW), sectionController.list);
 router.get('/transfer-requests', requirePermission(PERMISSIONS.TRANSFER_REQUEST_VIEW), sectionController.listTransferRequests);
+router.post('/transfer-requests/bulk-status', requirePermission(PERMISSIONS.TRANSFER_REQUEST_MANAGE), sectionController.bulkUpdateTransferRequests);
+router.post('/transfer-requests/automation/run', requirePermission(PERMISSIONS.TRANSFER_REQUEST_MANAGE), sectionController.runTransferAutomationScan);
 router.patch('/transfer-requests/:requestId/status', requirePermission(PERMISSIONS.TRANSFER_REQUEST_MANAGE), sectionController.updateTransferRequestStatus);
 router.get('/:id', requirePermission(PERMISSIONS.SECTION_VIEW), sectionController.getById);
 router.get('/:id/products', requirePermission(PERMISSIONS.SECTION_VIEW), sectionController.getProducts);

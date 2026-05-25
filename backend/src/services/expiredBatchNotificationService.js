@@ -8,6 +8,7 @@ import { normalizeDateOnly } from '../utils/batchExpiry.js';
 const NOTIFICATION_TYPE = 'skt_expired';
 const ACTION_URL = '/stok-islemleri';
 const ACTION_TYPE = 'stock';
+const GROUP_REASON = 'expired_batch_disposal_required';
 const TARGET_ROLES = new Set([
   'admin',
   'user',
@@ -66,6 +67,8 @@ export const buildExpiredBatchSourceKey = ({ productId, batchNo, expiryDate }) =
   const datePart = String(expiryDate || 'unknown-date').trim() || 'unknown-date';
   return `skt-expired:${productPart}:${batchPart}:${datePart}`;
 };
+
+export const buildExpiredBatchGroupDedupeKey = (todayKey) => `skt-expired-group:${todayKey}`;
 
 const resolveTargetUsers = async () => {
   const users = await userRepo.getAll();
@@ -213,8 +216,189 @@ export const buildExpiredBatchNotificationRecord = (candidate, { userId, now = n
   isDraft: false,
 });
 
-const summarizePlan = ({ candidates, skipped, targetUsers, existingNotifications, dryRun }) => {
-  const existingKeys = new Set(existingNotifications.map((item) => item.dedupeKey).filter(Boolean));
+const toGroupItem = (candidate = {}, now = new Date()) => ({
+  productId: candidate.productId,
+  sku: candidate.sku,
+  barcode: candidate.barcode,
+  productName: candidate.productName,
+  batchNo: candidate.batchNo,
+  expiryDate: candidate.expiryDate,
+  quantity: candidate.quantity,
+  shelfQuantity: candidate.shelfQuantity,
+  warehouseQuantity: candidate.warehouseQuantity,
+  locationCode: candidate.locationCode,
+  sourceKey: candidate.sourceKey,
+  reason: GROUP_REASON,
+  reasonLabel: 'SKT geçmiş ürün - imha / iade değerlendirmesi gerekli',
+  createdAt: now.toISOString(),
+});
+
+const countAffectedProducts = (items = []) => new Set(
+  items
+    .map((item) => String(item.productId || item.sku || item.productName || '').trim())
+    .filter(Boolean),
+).size;
+
+const buildExpiredBatchGroupTitle = (items = []) => {
+  const count = countAffectedProducts(items);
+  return `${count || items.length} üründe SKT geçti`;
+};
+
+const buildExpiredBatchGroupMessage = (items = []) => {
+  const batchCount = items.length;
+  const productCount = countAffectedProducts(items);
+  if (batchCount === productCount) {
+    return `${productCount} ürünün SKT tarihi geçti. Detay için bildirimi açın.`;
+  }
+  return `${productCount} üründe ${batchCount} partinin SKT tarihi geçti. Detay için bildirimi açın.`;
+};
+
+export const buildExpiredBatchGroupNotificationRecord = (candidates, {
+  userId,
+  now = new Date(),
+  todayKey = formatTodayKey(now),
+} = {}) => {
+  const items = candidates.map((candidate) => toGroupItem(candidate, now));
+  const affectedProductCount = countAffectedProducts(items);
+  return {
+    id: uuidv4(),
+    userId,
+    type: NOTIFICATION_TYPE,
+    title: buildExpiredBatchGroupTitle(items),
+    message: buildExpiredBatchGroupMessage(items),
+    severity: 'critical',
+    isRead: false,
+    createdAt: now.toISOString(),
+    relatedTaskId: null,
+    dedupeKey: buildExpiredBatchGroupDedupeKey(todayKey),
+    actionUrl: ACTION_URL,
+    actionType: ACTION_TYPE,
+    createdBy: null,
+    audience: {
+      mode: 'role',
+      roles: Array.from(TARGET_ROLES),
+    },
+    delivery: {
+      sendAt: now.toISOString(),
+      expiresAt: null,
+      isPinned: false,
+      requireReadReceipt: false,
+    },
+    payload: {
+      type: NOTIFICATION_TYPE,
+      severity: 'critical',
+      entityType: 'notification_group',
+      isNotificationGroup: true,
+      groupType: NOTIFICATION_TYPE,
+      groupLabel: 'SKT geçmiş ürünler',
+      groupReason: GROUP_REASON,
+      groupReasonLabel: 'SKT geçmiş ürün - imha / iade değerlendirmesi gerekli',
+      groupWindow: 'daily_expired_batch_job',
+      jobRunKey: todayKey,
+      itemCount: items.length,
+      affectedProductCount,
+      sampleProductNames: items.slice(0, 5).map((item) => item.productName).filter(Boolean),
+      sourceKeys: items.map((item) => item.sourceKey).filter(Boolean),
+      items,
+    },
+    isDraft: false,
+  };
+};
+
+const getGroupSourceKeys = (notification = {}) => {
+  const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  const keys = new Set();
+  if (notification.dedupeKey && notification.dedupeKey.startsWith('skt-expired:')) {
+    keys.add(notification.dedupeKey);
+  }
+  if (payload.sourceKey) keys.add(payload.sourceKey);
+  if (Array.isArray(payload.sourceKeys)) {
+    payload.sourceKeys.forEach((item) => {
+      const key = String(item || '').trim();
+      if (key) keys.add(key);
+    });
+  }
+  if (Array.isArray(payload.items)) {
+    payload.items.forEach((item) => {
+      const key = String(item?.sourceKey || '').trim();
+      if (key) keys.add(key);
+    });
+  }
+  return keys;
+};
+
+const mergeExpiredBatchGroupNotification = (existing, candidates, { now = new Date(), todayKey }) => {
+  const payload = existing.payload && typeof existing.payload === 'object' ? existing.payload : {};
+  const existingItems = Array.isArray(payload.items) ? payload.items : [];
+  const existingKeys = getGroupSourceKeys(existing);
+  const nextItems = [...existingItems];
+
+  candidates.forEach((candidate) => {
+    if (existingKeys.has(candidate.sourceKey)) return;
+    nextItems.push(toGroupItem(candidate, now));
+    existingKeys.add(candidate.sourceKey);
+  });
+
+  const affectedProductCount = countAffectedProducts(nextItems);
+  return {
+    ...existing,
+    title: buildExpiredBatchGroupTitle(nextItems),
+    message: buildExpiredBatchGroupMessage(nextItems),
+    severity: 'critical',
+    isRead: false,
+    createdAt: now.toISOString(),
+    actionUrl: ACTION_URL,
+    actionType: ACTION_TYPE,
+    payload: {
+      ...payload,
+      type: NOTIFICATION_TYPE,
+      severity: 'critical',
+      entityType: 'notification_group',
+      isNotificationGroup: true,
+      groupType: NOTIFICATION_TYPE,
+      groupLabel: 'SKT geçmiş ürünler',
+      groupReason: GROUP_REASON,
+      groupReasonLabel: 'SKT geçmiş ürün - imha / iade değerlendirmesi gerekli',
+      groupWindow: 'daily_expired_batch_job',
+      jobRunKey: todayKey,
+      itemCount: nextItems.length,
+      affectedProductCount,
+      sampleProductNames: nextItems.slice(0, 5).map((item) => item.productName).filter(Boolean),
+      sourceKeys: nextItems.map((item) => item.sourceKey).filter(Boolean),
+      items: nextItems,
+    },
+  };
+};
+
+const isLegacyExpiredBatchNotification = (notification = {}) => (
+  notification.type === NOTIFICATION_TYPE
+    && typeof notification.dedupeKey === 'string'
+    && notification.dedupeKey.startsWith('skt-expired:')
+    && !notification.dedupeKey.startsWith('skt-expired-group:')
+);
+
+const archiveLegacyExpiredBatchNotifications = async (notifications = [], { groupId, now = new Date() }) => {
+  const archived = [];
+  for (const notification of notifications) {
+    const payload = notification.payload && typeof notification.payload === 'object' ? notification.payload : {};
+    const next = {
+      ...notification,
+      isRead: true,
+      status: 'archived',
+      payload: {
+        ...payload,
+        supersededByGroupNotificationId: groupId,
+        supersededReason: 'grouped_expired_batch_notification',
+        supersededAt: now.toISOString(),
+      },
+    };
+    const updated = await notificationRepo.updateById(notification.id, next);
+    archived.push(updated || next);
+  }
+  return archived;
+};
+
+const summarizePlan = ({ candidates, skipped, targetUsers, existingNotifications, dryRun, todayKey }) => {
   const rows = candidates.map((candidate) => {
     const existingForBatch = existingNotifications.filter((item) => item.dedupeKey === candidate.sourceKey);
     const missingRecipients = targetUsers.filter((user) => !existingForBatch.some((item) => item.userId === user.id));
@@ -227,15 +411,40 @@ const summarizePlan = ({ candidates, skipped, targetUsers, existingNotifications
       willCreate: missingRecipients.length > 0,
     };
   });
+  const groupKey = buildExpiredBatchGroupDedupeKey(todayKey || 'unknown-day');
+  const groupedByUser = targetUsers.map((user) => {
+    const existingForUser = existingNotifications.filter((item) => item.userId === user.id);
+    const existingGroup = existingForUser.find((item) => item.dedupeKey === groupKey);
+    const legacySingles = existingForUser.filter(isLegacyExpiredBatchNotification);
+    const legacySourceKeys = new Set();
+    legacySingles.forEach((item) => {
+      getGroupSourceKeys(item).forEach((key) => legacySourceKeys.add(key));
+    });
+    const existingGroupKeys = existingGroup ? getGroupSourceKeys(existingGroup) : new Set();
+    const missingCandidates = candidates.filter((candidate) => !existingGroupKeys.has(candidate.sourceKey));
+    const legacyCandidates = candidates.filter((candidate) => legacySourceKeys.has(candidate.sourceKey));
+    const candidatesForGroup = existingGroup ? missingCandidates : [...legacyCandidates, ...missingCandidates];
+    const uniqueCandidatesForGroup = candidatesForGroup.filter((candidate, index, source) => (
+      source.findIndex((item) => item.sourceKey === candidate.sourceKey) === index
+    ));
+    return {
+      userId: user.id,
+      groupKey,
+      missingBatchCount: uniqueCandidatesForGroup.length,
+      existingBatchCount: candidates.length - missingCandidates.length,
+      willCreateOrUpdate: uniqueCandidatesForGroup.length > 0 || (existingGroup && legacySingles.length > 0),
+    };
+  });
 
   return {
     dryRun: Boolean(dryRun),
     totalExpiredBatches: candidates.length,
-    existingNotificationBatches: rows.filter((item) => existingKeys.has(item.sourceKey)).length,
-    newNotificationBatches: rows.filter((item) => item.willCreate).length,
-    skippedBatches: skipped.length + rows.filter((item) => !item.willCreate).length,
+    existingNotificationBatches: groupedByUser.reduce((sum, item) => sum + item.existingBatchCount, 0),
+    newNotificationBatches: groupedByUser.reduce((sum, item) => sum + item.missingBatchCount, 0),
+    skippedBatches: skipped.length,
     targetUserCount: targetUsers.length,
-    notificationsToCreate: rows.reduce((sum, item) => sum + item.missingRecipientCount, 0),
+    notificationsToCreate: groupedByUser.filter((item) => item.willCreateOrUpdate).length,
+    groupedNotificationCount: groupedByUser.filter((item) => item.willCreateOrUpdate).length,
     invalidOrIgnoredRows: skipped.length,
     samples: rows.slice(0, 10),
   };
@@ -275,6 +484,7 @@ export const expiredBatchNotificationService = {
         targetUsers,
         existingNotifications,
         dryRun,
+        todayKey,
       }),
     };
   },
@@ -289,22 +499,59 @@ export const expiredBatchNotificationService = {
       resolveTargetUsers(),
       notificationRepo.getAll(),
     ]);
-    const existingByKeyAndUser = new Set(
-      existingNotifications
-        .filter((item) => item.dedupeKey)
-        .map((item) => `${item.dedupeKey}:${item.userId}`),
-    );
+    const groupKey = buildExpiredBatchGroupDedupeKey(todayKey);
     const created = [];
+    const updated = [];
+    const archivedLegacy = [];
 
     if (!dryRun) {
-      for (const candidate of candidates) {
-        for (const user of targetUsers) {
-          const duplicateKey = `${candidate.sourceKey}:${user.id}`;
-          if (existingByKeyAndUser.has(duplicateKey)) continue;
-          const payload = buildExpiredBatchNotificationRecord(candidate, { userId: user.id, now });
-          const record = await notificationRepo.create(payload);
-          existingByKeyAndUser.add(duplicateKey);
-          created.push(record);
+      for (const user of targetUsers) {
+        const existingForUser = existingNotifications.filter((item) => item.userId === user.id);
+        const existingGroup = existingForUser.find((item) => item.dedupeKey === groupKey);
+        const legacySingles = existingForUser.filter(isLegacyExpiredBatchNotification);
+        const legacySourceKeys = new Set();
+        legacySingles.forEach((item) => {
+          getGroupSourceKeys(item).forEach((key) => legacySourceKeys.add(key));
+        });
+        const existingGroupKeys = existingGroup ? getGroupSourceKeys(existingGroup) : new Set();
+        const existingSourceKeys = existingGroup ? existingGroupKeys : new Set();
+        const missingCandidates = candidates.filter((candidate) => !existingSourceKeys.has(candidate.sourceKey));
+        const legacyCandidates = candidates.filter((candidate) => legacySourceKeys.has(candidate.sourceKey));
+        const candidatesForGroup = existingGroup ? missingCandidates : [...legacyCandidates, ...missingCandidates];
+        const uniqueCandidatesForGroup = candidatesForGroup.filter((candidate, index, source) => (
+          source.findIndex((item) => item.sourceKey === candidate.sourceKey) === index
+        ));
+        if (uniqueCandidatesForGroup.length === 0) {
+          if (existingGroup && legacySingles.length > 0) {
+            archivedLegacy.push(...await archiveLegacyExpiredBatchNotifications(legacySingles, {
+              groupId: existingGroup.id,
+              now,
+            }));
+          }
+          continue;
+        }
+
+        if (existingGroup) {
+          const next = mergeExpiredBatchGroupNotification(existingGroup, uniqueCandidatesForGroup, { now, todayKey });
+          const record = await notificationRepo.updateById(existingGroup.id, next);
+          updated.push(record || next);
+          if (legacySingles.length > 0) {
+            archivedLegacy.push(...await archiveLegacyExpiredBatchNotifications(legacySingles, {
+              groupId: existingGroup.id,
+              now,
+            }));
+          }
+          continue;
+        }
+
+        const payload = buildExpiredBatchGroupNotificationRecord(uniqueCandidatesForGroup, { userId: user.id, now, todayKey });
+        const record = await notificationRepo.create(payload);
+        created.push(record);
+        if (legacySingles.length > 0) {
+          archivedLegacy.push(...await archiveLegacyExpiredBatchNotifications(legacySingles, {
+            groupId: record.id,
+            now,
+          }));
         }
       }
     }
@@ -313,15 +560,19 @@ export const expiredBatchNotificationService = {
       candidates,
       skipped,
       targetUsers,
-      existingNotifications: dryRun ? existingNotifications : [...existingNotifications, ...created],
+      existingNotifications: dryRun ? existingNotifications : [...existingNotifications, ...created, ...updated, ...archivedLegacy],
       dryRun,
+      todayKey,
     });
 
     return {
       todayKey,
       ...summary,
       createdCount: created.length,
+      updatedCount: updated.length,
+      archivedLegacyCount: archivedLegacy.length,
       createdIds: created.map((item) => item.id),
+      updatedIds: updated.map((item) => item.id).filter(Boolean),
     };
   },
 };

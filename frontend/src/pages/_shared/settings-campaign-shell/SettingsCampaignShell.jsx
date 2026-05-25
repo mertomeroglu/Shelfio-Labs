@@ -1,7 +1,6 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './SettingsCampaignShell.css';
-import { SlidersHorizontal, Settings as SettingsIcon, Settings2, BarChart3, Home, BadgePercent, Package, Layers, Tags, Phone, Mail, MapPin, Hash, Building, Save, Shield, ShieldCheck, Lock, LockOpen, Eye, EyeOff, KeyRound, Gift, Plus, Trash2, X, Shuffle, FileText, FileSpreadsheet, ChevronDown, ChevronUp, Megaphone, CalendarDays, TrendingUp, RefreshCw, Eraser, Sparkles, Info, AlertTriangle, CalendarClock, Coins, TrendingDown, PackageSearch, Percent } from 'lucide-react';
-import { ResponsiveContainer, BarChart as RBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, LineChart as RLineChart, Line } from 'recharts';
+import { SlidersHorizontal, Settings as SettingsIcon, Settings2, BarChart3, Home, BadgePercent, Package, Layers, Tags, Phone, Mail, MapPin, Hash, Building, Save, Shield, ShieldCheck, Lock, LockOpen, Eye, EyeOff, KeyRound, Gift, Plus, Trash2, X, Shuffle, FileText, FileSpreadsheet, ChevronDown, ChevronUp, Megaphone, CalendarDays, TrendingUp, RefreshCw, Eraser, Sparkles, Info, AlertTriangle, CalendarClock, Coins, TrendingDown, PackageSearch, Percent, MoreHorizontal } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ConfirmModal, { useDialog } from '../../../components/ConfirmModal.jsx';
 import FormModal, { FormGrid, FormSection } from '../../../components/FormModal.jsx';
@@ -15,11 +14,13 @@ import { categoryService } from '../../../services/categoryService.js';
 import { invalidateProductCache, productService } from '../../../services/productService.js';
 import { settingsService } from '../../../services/settingsService.js';
 import { customerAdminService } from '../../../services/customerAdminService.js';
-import { pricingAnalysisService } from '../../../services/pricingAnalysisService.js';
 import { campaignAnalysisService } from '../../../services/campaignAnalysisService.js';
 import { procurementService } from '../../../services/procurementService.js';
+import { posService } from '../../../services/posService.js';
 import { userService } from '../../../services/userService.js';
+import { buildCampaignCreatedNotificationPayload, notificationService } from '../../../services/notificationService.js';
 import { playNotificationTone } from '../../../utils/notificationSound.js';
+import { normalizeTurkishText as normalizeMojibakeText } from '../../../utils/turkishText.js';
 import { SUPPORT_CONTACT } from '../../../constants/contact.js';
 import {
   applyBulkCampaignAction,
@@ -29,9 +30,11 @@ import {
   calculateCampaignImpact,
   CAMPAIGN_SUGGESTION_MODULES,
   CAMPAIGN_TEMPLATE_LIBRARY,
+  isCampaignSuggestionDiscountActionable,
   mapPricingRowsForCampaigns,
   mergeCrossModuleIntelligence,
   previewDynamicRuleImpact,
+  resolveCampaignSuggestionDraftTarget,
 } from './campaignManagementUtils.js';
 import {
   autoSaleRunner,
@@ -40,6 +43,15 @@ import {
   DEFAULT_AUTO_SALE_CONFIG,
   DEFAULT_AUTO_SALE_SUMMARY,
 } from './autoSaleRunner.js';
+import { generateRandomCode } from './settingsCampaignHelpers.js';
+import CampaignActionCandidatesTable from './CampaignActionCandidatesTable.jsx';
+import { CampaignBarChart } from './CampaignBarChart.jsx';
+import { CampaignGiftCardKpiRow } from './CampaignGiftCardPanel.jsx';
+import {
+  createDefaultCampaignDraft,
+  normalizeCampaignDraftModuleKey,
+  useCampaignDrafts,
+} from './useCampaignDraftsByModule.js';
 
 const DAYS = [
   { key: 'Pazartesi', short: 'Pzt' },
@@ -229,37 +241,6 @@ const createDefaultGiftCardDraft = () => ({
   expiresAt: '',
 });
 
-const createDefaultCampaignDraft = () => ({
-  name: '',
-  internalName: '',
-  recommendationTitle: '',
-  publicName: '',
-  type: 'general',
-  sourceModule: '',
-  discountRate: '',
-  startsAt: '',
-  endsAt: '',
-  isIndefinite: false,
-  priority: 0,
-  targetCategoryIds: [],
-  targetProductIds: [],
-  targetBrands: [],
-  triggerSalesSpeed: 'any',
-  triggerTrendDirection: 'any',
-  minOverStockRatio: '1.2',
-  isActive: true,
-  targetBrand: '',
-  targetProductIdsText: '',
-  giftCardRewardEnabled: false,
-  giftCardRewardCode: '',
-  dynamicRule: {
-    salesBelow: '1',
-    stockAbove: '40',
-    expiryBelow: '10',
-    discountRate: '15',
-  },
-});
-
 const FIXED_DATE_CAMPAIGN_TYPES = new Set(['general', 'product', 'category', 'brand']);
 
 const normalizePublicCampaignKey = (value) => String(value || '')
@@ -275,7 +256,7 @@ const isInternalCampaignName = (value) => {
   const key = normalizePublicCampaignKey(value);
   if (!key) return false;
   return /\b(aksiyon onerisi|aksiyon|oneri|draft|test|internal|sinyal|talep sinyali)\b/.test(key)
-    || /\bicin\s+(hizli indirim|aksiyon|indirim onerisi|oneri)\b/.test(key);
+    || /\bicin\s+(hızlı indirim|aksiyon|indirim onerisi|oneri)\b/.test(key);
 };
 
 const resolvePublicCampaignName = ({ name = '', type = 'general', sourceModule = '' } = {}) => {
@@ -303,7 +284,7 @@ const createDefaultAutomationRuleDraft = () => ({
 });
 
 const CAMPAIGN_TYPE_LABELS = {
-  general: 'Genel',
+  general: 'Mağaza Geneli',
   category: 'Kategori',
   product: 'Ürün',
   brand: 'Marka',
@@ -312,7 +293,7 @@ const CAMPAIGN_TYPE_LABELS = {
   dynamic: 'Dinamik',
 };
 
-const CAMPAIGN_VIEW_KEYS = new Set(['all', 'general', 'product', 'category', 'brand', 'expiry', 'sales', 'giftCards', 'dynamic']);
+const CAMPAIGN_VIEW_KEYS = new Set(['all', 'product', 'category', 'brand', 'expiry', 'sales', 'giftCards', 'dynamic']);
 
 const normalizeCampaignViewKey = (value, fallback = 'all') => {
   const normalized = String(value || '').trim();
@@ -336,8 +317,36 @@ const CAMPAIGN_SUGGESTION_PRIORITY_LABELS = {
   low: 'Düşük',
 };
 
+const CAMPAIGN_SUGGESTION_STATUS_LABELS = {
+  eligible: 'Uygun',
+  suppressed: 'Bastırıldı',
+  blocked: 'Bloklu',
+  conflict: 'Çakışma',
+};
+
+const CAMPAIGN_RECOMMENDATION_TYPE_LABELS = {
+  near_expiry: 'SKT Yaklaşan',
+  near_expiry_suppressed: 'SKT Yaklaşan',
+  overstock: 'Fazla Stok',
+  overstock_suppressed: 'Fazla Stok',
+  slow_moving: 'Yavaş Satan',
+  slow_moving_suppressed: 'Yavaş Satan',
+  discount_opportunity: 'İndirim Fırsatı',
+  discount_opportunity_suppressed: 'İndirim Fırsatı',
+  demand_down: 'Talep Düşüşü',
+  demand_down_suppressed: 'Talep Düşüşü',
+  margin_watch: 'Marj Takibi',
+  margin_watch_suppressed: 'Marj Takibi',
+  expired_product: 'SKT Geçmiş Ürün',
+  expired_product_suppressed: 'SKT Geçmiş Ürün',
+  expired_product_disposal_required: 'İmha / İade Gerekli',
+  cross_module_priority: 'Çapraz Öncelik',
+  cross_module_opportunity: 'Çapraz Fırsat',
+  campaign_opportunity: 'Kampanya Fırsatı',
+};
+
 const CAMPAIGN_TABLE_PAGE_SIZE = 5;
-const CAMPAIGN_SUGGESTIONS_PAGE_SIZE = 5;
+const CAMPAIGN_CANDIDATE_PAGE_SIZE = 6;
 const CAMPAIGN_INSIGHT_PAGE_SIZE = 5;
 const CAMPAIGN_SIGNAL_TABLE_PAGE_SIZE = 5;
 const BRAND_INITIAL_VISIBLE_LIMIT = 10;
@@ -384,6 +393,10 @@ const formatCampaignDailySales = (salesVelocity) => {
   const velocity = Number(salesVelocity || 0);
   return velocity > 0 ? `${formatNumber(velocity)} adet` : 'Yeterli satış verisi yok';
 };
+const formatCampaignTableValue = (value, fallback = '—') => {
+  const normalized = normalizeCampaignInsightText(String(value ?? '').trim());
+  return normalized && normalized !== '-' ? normalized : fallback;
+};
 const formatCampaignMarginPercent = (row = {}) => {
   const margin = Number(row?.currentMarginPercent);
   const hasPricingBasis = Number(row?.currentPrice || 0) > 0 || Number(row?.cost || 0) > 0;
@@ -392,7 +405,7 @@ const formatCampaignMarginPercent = (row = {}) => {
 };
 const formatCampaignRefreshDateTime = (value) => {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
+  if (Number.isNaN(date.getTime())) return 'Henüz güncellenmedi';
   return `${date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`;
 };
 const getCampaignRiskLabel = (value) => CAMPAIGN_SUGGESTION_PRIORITY_LABELS[String(value || '').toLowerCase()] || 'Orta';
@@ -469,6 +482,96 @@ const isCampaignInModule = (item, moduleKey) => {
   if (moduleKey === 'giftCards') return normalizeCampaignModuleKey(item?.type, '') === 'giftCards';
   return classifyCampaignModule(item) === moduleKey;
 };
+
+const getCampaignSuggestionStatus = (item = {}) => {
+  const blockingReasons = Array.isArray(item.blockingReasons) ? item.blockingReasons : [];
+  const hasConflict = Boolean(
+    item.activeCampaignConflict
+    || item.activeCampaignId
+    || item.activeCampaignName
+    || Number(item.sourceMetrics?.activeCampaignConflictCount || 0) > 0
+    || blockingReasons.includes('active_campaign_conflict')
+  );
+  if (hasConflict) return 'conflict';
+  if (item.isSuppressed || item.suppressed || item.suppressionReason) return 'suppressed';
+  if (blockingReasons.length || item.blockingReason || item.conflictReason) return 'blocked';
+  return 'eligible';
+};
+const isCampaignSuggestionActionable = (item = {}) => {
+  if (getCampaignSuggestionStatus(item) === 'suppressed') return false;
+  if (!isCampaignSuggestionDiscountActionable(item)) return false;
+  return Number(item?.affectedProductCount || 0) > 0;
+};
+
+const getCampaignSuggestionStatusLabel = (item = {}) => CAMPAIGN_SUGGESTION_STATUS_LABELS[getCampaignSuggestionStatus(item)] || 'Uygun';
+const getCampaignSuggestionStatusDisplayLabel = (item = {}) => ({
+  eligible: 'Uygun',
+  suppressed: 'Bastırıldı',
+  blocked: 'Bloklu',
+  conflict: 'Çakışma',
+})[getCampaignSuggestionStatus(item)] || 'Uygun';
+const getCampaignSuggestionStatusToneClass = (item = {}) => {
+  const status = getCampaignSuggestionStatus(item);
+  if (status === 'eligible') return 'is-success';
+  if (status === 'conflict' || status === 'blocked') return 'is-danger';
+  return 'is-neutral';
+};
+
+const formatCampaignRecommendationType = (value) => {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+    .replace(/\s+/g, '_');
+  if (CAMPAIGN_RECOMMENDATION_TYPE_LABELS[key]) return CAMPAIGN_RECOMMENDATION_TYPE_LABELS[key];
+  const readable = key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toLocaleUpperCase('tr-TR') + part.slice(1))
+    .join(' ');
+  return normalizeCampaignInsightText(readable || 'Kampanya Fırsatı');
+};
+
+const CAMPAIGN_SCOPE_LABELS = {
+  product: 'Ürün Bazlı',
+  category: 'Kategori Bazlı',
+  brand: 'Marka Bazlı',
+  expiry: 'SKT / Fire Riski',
+  sales: 'Satış Performansı',
+  general: 'Mağaza Geneli',
+  'urun kumesi': 'Ürün Grubu',
+  'ürün kümesi': 'Ürün Grubu',
+  'satis performansi': 'Satış Performansı',
+  'satış performansı': 'Satış Performansı',
+};
+
+const formatCampaignScopeLabel = (value, fallback = 'Kampanya Kapsamı') => {
+  const raw = normalizeCampaignInsightText(String(value || '').trim());
+  if (!raw) return fallback;
+  const key = raw.toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ');
+  const technicalKey = String(value || '').trim().toLocaleLowerCase('tr-TR').replace(/-/g, '_').replace(/\s+/g, ' ');
+  return CAMPAIGN_SCOPE_LABELS[key] || CAMPAIGN_SCOPE_LABELS[technicalKey] || normalizeCampaignInsightText(raw);
+};
+
+const getCampaignSuggestionShortAction = (suggestion = {}) => {
+  const recommendationType = String(suggestion?.recommendationType || suggestion?.id || '').toLocaleLowerCase('tr-TR');
+  const actionText = normalizeCampaignInsightText(suggestion?.suggestedAction || suggestion?.action || '');
+  if (recommendationType.includes('margin')) return 'Marj koruma önerisi';
+  if (recommendationType.includes('overstock')) return 'Stok eritme önerisi';
+  if (recommendationType.includes('expiry') || actionText.toLocaleLowerCase('tr-TR').includes('skt')) return 'Kısa süreli indirim';
+  if (recommendationType.includes('demand') || recommendationType.includes('slow')) return 'Satış canlandırma önerisi';
+  if (recommendationType.includes('discount')) return 'İndirim fırsatı';
+  return actionText ? actionText.replace(/\.$/, '') : 'Kampanya önerisi';
+};
+
+const getCampaignSuggestionImpactSummary = (suggestion = {}) => {
+  const secondaryTags = Array.isArray(suggestion.secondaryTags) ? suggestion.secondaryTags : [];
+  const tags = secondaryTags.map((item) => normalizeCampaignInsightText(item)).filter(Boolean).slice(0, 3);
+  if (tags.length) return tags.join(' | ');
+  const impact = normalizeCampaignInsightText(suggestion.impactSummary || suggestion.riskSummary || suggestion.reason || '');
+  return impact || 'Etki detayda';
+};
+
 const getCampaignToneClass = (value) => {
   const key = String(value || '').toLowerCase();
   if (key === 'critical' || key === 'high') return 'is-danger';
@@ -559,7 +662,7 @@ const getCampaignActionTone = (recommendation = '') => {
   const text = String(recommendation || '').toLowerCase();
   if (text.includes('hızlı indirim') || text.includes('indirim')) return 'is-danger';
   if (text.includes('fiyat art')) return 'is-success';
-  if (text.includes('çoklu alım')) return 'is-warning';
+  if (text.includes('Çoklu alım')) return 'is-warning';
   return 'is-neutral';
 };
 const getExpiryStatusBadgeMeta = (daysToExpiry) => {
@@ -581,7 +684,7 @@ const CAMPAIGN_METRIC_EXPLANATIONS = [
   },
   {
     title: 'Ortalama marj',
-    description: 'Seçili ürünlerin brüt marjı.',
+    description: 'Seçili Ürünlerin brüt marjı.',
   },
   {
     title: 'Stok tükenme süresi',
@@ -719,7 +822,7 @@ const buildCampaignSimulationSnapshot = ({
       previewProductCount: analysisCandidateCount,
       title: 'Etki simülasyonu hazır değil',
       emptyMessage,
-      recommendation: 'Kapsam seçimi yaptıktan veya veri geldikten sonra simülasyon hesaplanır.',
+      recommendation: 'Kapsam seçimi yaptiktan veya veri geldikten sonra simülasyon hesaplanır.',
       riskLevel: 'Bilgi yok',
       salesIncreasePct: 0,
       revenueChange: 0,
@@ -755,8 +858,8 @@ const buildCampaignSimulationSnapshot = ({
   const totalDailySales = scopedRows.reduce((sum, row) => sum + Math.max(0, Number(row?.salesVelocity || 0)), 0);
   if (totalDailySales <= 0) {
     const scopeCountText = productCount > analysisCandidateCount
-      ? `${formatNumber(productCount)} ürün kapsamı ve ${formatNumber(analysisCandidateCount)} analiz adayı`
-      : `${formatNumber(analysisCandidateCount)} ürün`;
+      ? `${formatNumber(productCount)} Ürün kapsamı ve ${formatNumber(analysisCandidateCount)} analiz adayı`
+      : `${formatNumber(analysisCandidateCount)} Ürün`;
     return {
       isEmpty: false,
       scopeLabel,
@@ -784,8 +887,8 @@ const buildCampaignSimulationSnapshot = ({
         reason: 'missing_sales_velocity',
       },
       riskLevel: 'Bilgi yok',
-      recommendation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.',
-      explanation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.',
+      recommendation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadıgindan tahmin Üretilemedi.',
+      explanation: 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadıgindan tahmin Üretilemedi.',
       metricsSummary: `${scopeCountText} • satış geçmişi yok`,
     };
   }
@@ -845,19 +948,19 @@ const buildCampaignSimulationSnapshot = ({
   const riskLevel = riskScore >= 55 ? 'Kritik' : riskScore >= 36 ? 'Yüksek' : riskScore >= 18 ? 'Orta' : 'Düşük';
 
   const scopeCountText = productCount > analysisCandidateCount
-    ? `${formatNumber(productCount)} ürün kapsamı ve ${formatNumber(analysisCandidateCount)} analiz adayı`
-    : `${formatNumber(analysisCandidateCount)} ürün`;
-  let recommendation = `${scopeLabel} için ${scopeCountText} üzerinden hesaplanan simülasyon hazır.`;
+    ? `${formatNumber(productCount)} Ürün kapsamı ve ${formatNumber(analysisCandidateCount)} analiz adayı`
+    : `${formatNumber(analysisCandidateCount)} Ürün`;
+  let recommendation = `${scopeLabel} için ${scopeCountText} Üzerinden hesaplanan simülasyon hazır.`;
   if (negativeMarginShare > 0.2) {
     recommendation = 'İndirim oranı mevcut marjı fazla zorluyor; kampanyayı daraltın veya oranı düşürün.';
   } else if (zeroStockShare > 0.15) {
-    recommendation = 'Stok bulunmayan ürünler etkiyi sınırlıyor; kampanya kapsamını stoğu hazır ürünlerle netleştirin.';
+    recommendation = 'Stok bulunmayan Ürünler etkiyi sınırlıyor; kampanya kapsamını stoğu hazır Ürünlerle netleştirin.';
   } else if (expiryPressureShare > 0.35) {
-    recommendation = 'SKT baskısı yüksek ürünler kampanyayı destekliyor; kısa süreli ve görünürlük odaklı bir akış önerilir.';
+    recommendation = 'SKT baskısı yüksek Ürünler kampanyayı destekliyor; kısa süreli ve görünürlük odaklı bir akis Önerilir.';
   } else if (overStockShare > 0.3 && slowSellerShare > 0.35) {
     recommendation = 'Yavaş satan yüksek stoklu ürünlerde kampanya stok devrini anlamlı biçimde hızlandırabilir.';
   } else if (fastSellerShare > 0.35 && safeDiscount >= 20) {
-    recommendation = 'Hızlı satan ürünlerde yüksek indirim gereksiz marj kaybı yaratabilir; oranı daha kontrollü tutun.';
+    recommendation = 'Hızlı satan Ürünlerde yüksek indirim gereksiz marj kaybı yaratabilir; oranı daha kontrollü tutun.';
   }
 
   return {
@@ -896,8 +999,8 @@ const CAMPAIGN_MODULE_TABLE_TITLES = {
     archive: 'Kampanya Arşivi',
   },
   general: {
-    active: 'Genel Kampanya Aktif Listesi',
-    archive: 'Genel Kampanya Arşivi',
+    active: 'Mağaza Geneli Aktif Kampanya Listesi',
+    archive: 'Mağaza Geneli Kampanya Arşivi',
   },
   product: {
     active: 'Ürün Bazlı Aktif Kampanya Listesi',
@@ -926,7 +1029,7 @@ const CAMPAIGN_MODULE_TABLE_TITLES = {
 };
 
 const CAMPAIGN_MODULE_SINGLE_TABLE_TITLES = {
-  general: 'Genel Kampanya Listesi',
+  general: 'Mağaza Geneli Kampanya Listesi',
   product: 'Ürün Bazlı Kampanya Listesi',
   category: 'Kategori Bazlı Kampanya Listesi',
   brand: 'Marka Bazlı Kampanya Listesi',
@@ -940,8 +1043,8 @@ const CAMPAIGN_TABLE_SECTION_META = {
     archive: { title: 'Kampanya Arşivi', description: 'Geçmiş, pasif veya arşivlenmiş kampanyalar.', icon: CalendarDays },
   },
   general: {
-    active: { title: 'Genel Kampanya Aktif Listesi', description: 'Genel kapsamlı aktif kampanyalar.', icon: Megaphone },
-    archive: { title: 'Genel Kampanya Arşivi', description: 'Genel kampanyaların kapanan kayıtları.', icon: CalendarDays },
+    active: { title: 'Mağaza Geneli Aktif Kampanya Listesi', description: 'Mağaza geneli aktif kampanyalar.', icon: Megaphone },
+    archive: { title: 'Mağaza Geneli Kampanya Arşivi', description: 'Mağaza geneli kampanyaların kapanan kayıtları.', icon: CalendarDays },
   },
   product: {
     active: { title: 'Ürün Bazlı Aktif Kampanya Listesi', description: 'Ürün seçimine dayalı aktif kampanyalar.', icon: Gift },
@@ -968,12 +1071,11 @@ const CAMPAIGN_TABLE_SECTION_META = {
 const CAMPAIGN_TYPE_FILTER_TABS = [
   { key: 'all', label: 'Ana Sayfa', type: '' },
   { key: 'giftCards', label: 'Hediye Kartı', type: 'giftCards' },
-  { key: 'general', label: 'Genel', type: 'general' },
+  { key: 'expiry', label: 'SKT Bazlı', type: 'expiry' },
+  { key: 'sales', label: 'Satış Bazlı', type: 'sales' },
   { key: 'product', label: 'Ürün Bazlı', type: 'product' },
   { key: 'category', label: 'Kategori Bazlı', type: 'category' },
   { key: 'brand', label: 'Marka Bazlı', type: 'brand' },
-  { key: 'expiry', label: 'SKT Bazlı', type: 'expiry' },
-  { key: 'sales', label: 'Satış Bazlı', type: 'sales' },
 ];
 
 const CAMPAIGN_TYPE_TAB_ICONS = {
@@ -1023,141 +1125,218 @@ const SETTINGS_TURKISH_TEXT_REPLACEMENTS = [
   ['\u00e2\u0080\u00a2', '\u2022'],
 ];
 
+const CAMPAIGN_UI_TURKISH_WORD_REPLACEMENTS = [
+  [/\bMağaza\b/g, 'Mağaza'],
+  [/\bmağaza\b/g, 'mağaza'],
+  [/\bUrun\b/g, 'Ürün'],
+  [/\burun\b/g, 'ürün'],
+  [/\bUrunler\b/g, 'Ürünler'],
+  [/\burunler\b/g, 'ürünler'],
+  [/\bUrunlerde\b/g, 'Ürünlerde'],
+  [/\burunlerde\b/g, 'ürünlerde'],
+  [/\bSatış\b/g, 'Satış'],
+  [/\bsatış\b/g, 'satış'],
+  [/\bSecili\b/g, 'Seçili'],
+  [/\bsecili\b/g, 'seçili'],
+  [/\bSecim\b/g, 'Seçim'],
+  [/\bsecim\b/g, 'seçim'],
+  [/\bSecilen\b/g, 'Seçilen'],
+  [/\bsecilen\b/g, 'seçilen'],
+  [/\bTum\b/g, 'Tüm'],
+  [/\btum\b/g, 'tüm'],
+  [/\bYuksek\b/g, 'Yüksek'],
+  [/\byuksek\b/g, 'yüksek'],
+  [/\bDusuk\b/g, 'Düşük'],
+  [/\bdusuk\b/g, 'düşük'],
+  [/\bÖncelik\b/g, 'Öncelik'],
+  [/\boncelik\b/g, 'öncelik'],
+  [/\bOneri\b/g, 'Öneri'],
+  [/\boneri\b/g, 'öneri'],
+  [/\bOnerileri\b/g, 'Önerileri'],
+  [/\bonerileri\b/g, 'önerileri'],
+  [/\bOnerilen\b/g, 'Önerilen'],
+  [/\bonerilen\b/g, 'önerilen'],
+  [/\bGorunum\b/g, 'Görünüm'],
+  [/\bgorunum\b/g, 'görünüm'],
+  [/\bGorunurluk\b/g, 'Görünürlük'],
+  [/\bgorunurluk\b/g, 'görünürlük'],
+  [/\bHızlı\b/g, 'Hızlı'],
+  [/\bhızlı\b/g, 'hızlı'],
+  [/\bİndirim\b/g, 'İndirim'],
+  [/\bindirim\b/g, 'indirim'],
+  [/\bFırsat\b/g, 'Fırsat'],
+  [/\bfırsat\b/g, 'fırsat'],
+  [/\bFırsatlari\b/g, 'Fırsatları'],
+  [/\bfırsatları\b/g, 'fırsatları'],
+  [/\bYaklasan\b/g, 'Yaklaşan'],
+  [/\byaklaşan\b/g, 'yaklaşan'],
+  [/\bBaslangic\b/g, 'Başlangıç'],
+  [/\bbaslangic\b/g, 'başlangıç'],
+  [/\bBitis\b/g, 'Bitiş'],
+  [/\bbitiş\b/g, 'bitiş'],
+  [/\bIptal\b/g, 'İptal'],
+  [/\biptal\b/g, 'iptal'],
+  [/\bIcerik\b/g, 'İçerik'],
+  [/\bicerik\b/g, 'içerik'],
+  [/\bIc\b/g, 'İç'],
+  [/\bic\b/g, 'iç'],
+  [/\bSoguk\b/g, 'Soğuk'],
+  [/\bsoguk\b/g, 'soğuk'],
+  [/\bSehirlerarasi\b/g, 'Şehirlerarası'],
+  [/\bsehirlerarasi\b/g, 'şehirlerarası'],
+  [/\bCarsamba\b/g, 'Çarşamba'],
+  [/\bPersembe\b/g, 'Perşembe'],
+  [/\bSali\b/g, 'Salı'],
+  [/\bKayit\b/g, 'Kayıt'],
+  [/\bkayit\b/g, 'kayıt'],
+  [/\bArsiv\b/g, 'Arşiv'],
+  [/\barsiv\b/g, 'arşiv'],
+  [/\bYayinda\b/g, 'Yayında'],
+  [/\byayında\b/g, 'yayında'],
+  [/\bPlanlandı\b/g, 'Planlandı'],
+  [/\bplanlandi\b/g, 'planlandı'],
+];
+
 const normalizeCampaignUiText = (value) => {
-  const repaired = repairSettingsMojibake(String(value || ''));
-  return SETTINGS_TURKISH_TEXT_REPLACEMENTS.reduce(
+  const repaired = normalizeMojibakeText(repairSettingsMojibake(String(value || '')));
+  const normalized = SETTINGS_TURKISH_TEXT_REPLACEMENTS.reduce(
     (text, [wrong, correct]) => text.split(wrong).join(correct),
     repaired,
   );
+  const withTurkishWords = CAMPAIGN_UI_TURKISH_WORD_REPLACEMENTS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    normalized,
+  );
+  return normalizeMojibakeText(withTurkishWords);
 };
 
 const CAMPAIGN_INSIGHT_TURKISH_WORD_REPLACEMENTS = [
   [/\bURUN\b/g, 'ÜRÜN'],
   [/\bUrun\b/g, 'Ürün'],
-  [/\burun\b/g, 'ürün'],
-  [/\bSATIS\b/g, 'SATIŞ'],
-  [/\bSatis\b/g, 'Satış'],
-  [/\bsatis\b/g, 'satış'],
+  [/\burun\b/g, 'Ürün'],
+  [/\bSATIS\b/g, 'SATIS'],
+  [/\bSatış\b/g, 'Satış'],
+  [/\bsatış\b/g, 'satış'],
   [/\bONERI\b/g, 'ÖNERİ'],
   [/\bOneri\b/g, 'Öneri'],
-  [/\boneri\b/g, 'öneri'],
+  [/\boneri\b/g, 'Öneri'],
   [/\bONERILEN\b/g, 'ÖNERİLEN'],
   [/\bOnerilen\b/g, 'Önerilen'],
-  [/\bonerilen\b/g, 'önerilen'],
+  [/\bonerilen\b/g, 'Önerilen'],
   [/\bGUNLUK\b/g, 'GÜNLÜK'],
   [/\bGunluk\b/g, 'Günlük'],
   [/\bgunluk\b/g, 'günlük'],
   [/\bDUSUK\b/g, 'DÜŞÜK'],
   [/\bDusuk\b/g, 'Düşük'],
   [/\bdusuk\b/g, 'düşük'],
-  [/\bSECILDI\b/g, 'SEÇİLDİ'],
+  [/\bSEÇİLDI\b/g, 'SEÇİLDİ'],
   [/\bSecildi\b/g, 'Seçildi'],
   [/\bsecildi\b/g, 'seçildi'],
-  [/\bSECIM\b/g, 'SEÇİM'],
+  [/\bSEÇİM\b/g, 'SEÇİM'],
   [/\bSecim\b/g, 'Seçim'],
   [/\bsecim\b/g, 'seçim'],
-  [/\bSECILI\b/g, 'SEÇİLİ'],
+  [/\bSEÇİLI\b/g, 'SEÇİLİ'],
   [/\bSecili\b/g, 'Seçili'],
   [/\bsecili\b/g, 'seçili'],
   [/\bONCELIK\b/g, 'ÖNCELİK'],
-  [/\bOncelik\b/g, 'Öncelik'],
-  [/\boncelik\b/g, 'öncelik'],
-  [/\bYETERLILIGI\b/g, 'YETERLİLİĞİ'],
-  [/\bYeterliligi\b/g, 'Yeterliliği'],
-  [/\byeterliligi\b/g, 'yeterliliği'],
+  [/\bÖncelik\b/g, 'Öncelik'],
+  [/\boncelik\b/g, 'Öncelik'],
+  [/\bYETERLILIGI\b/g, 'YETERLILIGI'],
+  [/\bYeterliligi\b/g, 'Yeterliligi'],
+  [/\byeterliligi\b/g, 'yeterliligi'],
   [/\bTUKENME\b/g, 'TÜKENME'],
   [/\bTukenme\b/g, 'Tükenme'],
   [/\btukenme\b/g, 'tükenme'],
   [/\bBRUT\b/g, 'BRÜT'],
   [/\bBrut\b/g, 'Brüt'],
   [/\bbrut\b/g, 'brüt'],
-  [/\bISLEM\b/g, 'İŞLEM'],
+  [/\bISLEM\b/g, 'ISLEM'],
   [/\bIslem\b/g, 'İşlem'],
-  [/\bislem\b/g, 'işlem'],
+  [/\bişlem\b/g, 'işlem'],
   [/\bHIZLI\b/g, 'HIZLI'],
-  [/\bHizli\b/g, 'Hızlı'],
-  [/\bhizli\b/g, 'hızlı'],
-  [/\bOLUSTUR\b/g, 'OLUŞTUR'],
-  [/\bOlustur\b/g, 'Oluştur'],
-  [/\bolustur\b/g, 'oluştur'],
+  [/\bHızlı\b/g, 'Hızlı'],
+  [/\bhızlı\b/g, 'hızlı'],
+  [/\bOLUSTUR\b/g, 'OLUSTUR'],
+  [/\bOluştur\b/g, 'Oluştur'],
+  [/\boluştur\b/g, 'oluştur'],
   [/\bGERCEK\b/g, 'GERÇEK'],
   [/\bGercek\b/g, 'Gerçek'],
   [/\bgercek\b/g, 'gerçek'],
-  [/\bINDIRIM\b/g, 'İNDİRİM'],
-  [/\bIndirim\b/g, 'İndirim'],
+  [/\bINDIRIM\b/g, 'INDIRIM'],
+  [/\bİndirim\b/g, 'İndirim'],
   [/\bindirim\b/g, 'indirim'],
-  [/\bARTISI\b/g, 'ARTIŞI'],
-  [/\bArtisi\b/g, 'Artışı'],
-  [/\bartisi\b/g, 'artışı'],
+  [/\bARTISI\b/g, 'ARTISI'],
+  [/\bArtisi\b/g, 'Artisi'],
+  [/\bartışı\b/g, 'artışı'],
   [/\bURUNDE\b/g, 'ÜRÜNDE'],
   [/\bUrunde\b/g, 'Üründe'],
-  [/\burunde\b/g, 'üründe'],
+  [/\burunde\b/g, 'Üründe'],
   [/\bURUNLERDE\b/g, 'ÜRÜNLERDE'],
   [/\bUrunlerde\b/g, 'Ürünlerde'],
-  [/\burunlerde\b/g, 'ürünlerde'],
+  [/\burunlerde\b/g, 'Ürünlerde'],
   [/\bYAKLASAN\b/g, 'YAKLAŞAN'],
   [/\bYaklasan\b/g, 'Yaklaşan'],
-  [/\byaklasan\b/g, 'yaklaşan'],
+  [/\byaklaşan\b/g, 'yaklaşan'],
   [/\bBASKISI\b/g, 'BASKISI'],
-  [/\bBaskisi\b/g, 'Baskısı'],
-  [/\bbaskisi\b/g, 'baskısı'],
-  [/\bDEGERLENDIRILDI\b/g, 'DEĞERLENDİRİLDİ'],
-  [/\bDegerlendirildi\b/g, 'Değerlendirildi'],
-  [/\bdegerlendirildi\b/g, 'değerlendirildi'],
+  [/\bBaskisi\b/g, 'Baskisi'],
+  [/\bbaskısı\b/g, 'baskısı'],
+  [/\bDEGERLENDIRILDI\b/g, 'DEGERLENDIRILDI'],
+  [/\bDegerlendirildi\b/g, 'Degerlendirildi'],
+  [/\bdeğerlendirildi\b/g, 'değerlendirildi'],
   [/\bHIZI\b/g, 'HIZI'],
-  [/\bHizi\b/g, 'Hızı'],
-  [/\bhizi\b/g, 'hızı'],
+  [/\bHızı\b/g, 'Hızı'],
+  [/\bhızı\b/g, 'hızı'],
   [/\bORANI\b/g, 'ORANI'],
-  [/\bOrani\b/g, 'Oranı'],
-  [/\borani\b/g, 'oranı'],
-  [/\bAKISINA\b/g, 'AKIŞINA'],
-  [/\bAkisina\b/g, 'Akışına'],
-  [/\bakisina\b/g, 'akışına'],
+  [/\bOrani\b/g, 'Orani'],
+  [/\boranı\b/g, 'oranı'],
+  [/\bAKISINA\b/g, 'AKISINA'],
+  [/\bAkisina\b/g, 'Akisina'],
+  [/\bakisina\b/g, 'akisina'],
   [/\bAKTARILIR\b/g, 'AKTARILIR'],
-  [/\bAktarilir\b/g, 'Aktarılır'],
-  [/\baktarilir\b/g, 'aktarılır'],
+  [/\bAktarilir\b/g, 'Aktarilir'],
+  [/\baktarilir\b/g, 'aktarilir'],
   [/\bHIZINI\b/g, 'HIZINI'],
-  [/\bHizini\b/g, 'Hızını'],
-  [/\bhizini\b/g, 'hızını'],
+  [/\bHızıni\b/g, 'Hızıni'],
+  [/\bhızıni\b/g, 'hızıni'],
   [/\bARTIRMA\b/g, 'ARTIRMA'],
-  [/\bArtirma\b/g, 'Artırma'],
-  [/\bartirma\b/g, 'artırma'],
+  [/\bArtirma\b/g, 'Artirma'],
+  [/\bartırma\b/g, 'artırma'],
   [/\bGOSTER\b/g, 'GÖSTER'],
   [/\bGoster\b/g, 'Göster'],
   [/\bgoster\b/g, 'göster'],
-  [/\bKirtasiye\b/g, 'Kırtasiye'],
-  [/\bkirtasiye\b/g, 'kırtasiye'],
+  [/\bKirtasiye\b/g, 'Kirtasiye'],
+  [/\bkirtasiye\b/g, 'kirtasiye'],
   [/\bIcecek\b/g, 'İçecek'],
   [/\bicecek\b/g, 'içecek'],
-  [/\bKagit\b/g, 'Kağıt'],
-  [/\bkagit\b/g, 'kağıt'],
-  [/\bislak\b/g, 'ıslak'],
+  [/\bKagit\b/g, 'Kagit'],
+  [/\bkagit\b/g, 'kagit'],
+  [/\bislak\b/g, 'islak'],
   [/\bSut\b/g, 'Süt'],
   [/\bsut\b/g, 'süt'],
-  [/\bKahvaltilik\b/g, 'Kahvaltılık'],
-  [/\bkahvaltilik\b/g, 'kahvaltılık'],
-  [/\bGida\b/g, 'Gıda'],
-  [/\bgida\b/g, 'gıda'],
-  [/\bFirin\b/g, 'Fırın'],
-  [/\bfirin\b/g, 'fırın'],
-  [/\bKisisel\b/g, 'Kişisel'],
-  [/\bkisisel\b/g, 'kişisel'],
-  [/\bBakim\b/g, 'Bakım'],
-  [/\bbakim\b/g, 'bakım'],
-  [/\bSaglik\b/g, 'Sağlık'],
-  [/\bsaglik\b/g, 'sağlık'],
-  [/\bYasam\b/g, 'Yaşam'],
-  [/\byasam\b/g, 'yaşam'],
-  [/\bHazir\b/g, 'Hazır'],
-  [/\bhazir\b/g, 'hazır'],
-  [/\bBalik\b/g, 'Balık'],
-  [/\bbalik\b/g, 'balık'],
-  [/\bAtistirmalik\b/g, 'Atıştırmalık'],
-  [/\batistirmalik\b/g, 'atıştırmalık'],
+  [/\bKahvaltilik\b/g, 'Kahvaltilik'],
+  [/\bkahvaltilik\b/g, 'kahvaltilik'],
+  [/\bGida\b/g, 'Gida'],
+  [/\bgida\b/g, 'gida'],
+  [/\bFirin\b/g, 'Firin'],
+  [/\bfirin\b/g, 'firin'],
+  [/\bKisisel\b/g, 'Kisisel'],
+  [/\bkisisel\b/g, 'kisisel'],
+  [/\bBakim\b/g, 'Bakim'],
+  [/\bbakim\b/g, 'bakim'],
+  [/\bSaglik\b/g, 'Saglik'],
+  [/\bsaglik\b/g, 'saglik'],
+  [/\bYasam\b/g, 'Yasam'],
+  [/\byasam\b/g, 'yasam'],
+  [/\bHazir\b/g, 'Hazir'],
+  [/\bhazır\b/g, 'hazır'],
+  [/\bBalik\b/g, 'Balik'],
+  [/\bbalik\b/g, 'balik'],
+  [/\bAtıştırmalık\b/g, 'Atıştırmalık'],
+  [/\batistirmalik\b/g, 'atistirmalik'],
   [/\bTedarikci\b/g, 'Tedarikçi'],
   [/\btedarikci\b/g, 'tedarikçi'],
   [/\bCok\b/g, 'Çok'],
-  [/\bcok\b/g, 'çok'],
+  [/\bcok\b/g, 'Çok'],
   [/\bDusuk\b/g, 'Düşük'],
   [/\bdusuk\b/g, 'düşük'],
   [/\bYuksek\b/g, 'Yüksek'],
@@ -1170,9 +1349,11 @@ const CAMPAIGN_INSIGHT_TURKISH_WORD_REPLACEMENTS = [
   [/\btum\b/g, 'tüm'],
 ];
 
-const normalizeCampaignInsightText = (value) => CAMPAIGN_INSIGHT_TURKISH_WORD_REPLACEMENTS.reduce(
-  (text, [pattern, replacement]) => text.replace(pattern, replacement),
-  normalizeCampaignText(value),
+const normalizeCampaignInsightText = (value) => normalizeCampaignUiText(
+  CAMPAIGN_INSIGHT_TURKISH_WORD_REPLACEMENTS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    normalizeCampaignText(value),
+  )
 );
 
 const formatCampaignInsightMetaLine = (...parts) => parts
@@ -1206,12 +1387,12 @@ const getCampaignPriorityValueLabel = (priority) => {
 Object.assign(CAMPAIGN_STATUS_LABELS, {
   active: 'Aktif',
   paused: 'Beklemede',
-  archived: 'Arşiv',
+  archived: 'Arsiv',
 });
 
 Object.assign(CAMPAIGN_MODULE_TABLE_TITLES, {
   all: { active: 'Aktif Kampanya Listesi', archive: 'Kampanya Arşivi' },
-  general: { active: 'Genel Kampanya Aktif Listesi', archive: 'Genel Kampanya Arşivi' },
+  general: { active: 'Mağaza Geneli Aktif Kampanya Listesi', archive: 'Mağaza Geneli Kampanya Arşivi' },
   product: { active: 'Ürün Bazlı Aktif Kampanya Listesi', archive: 'Ürün Bazlı Kampanya Arşivi' },
   category: { active: 'Kategori Bazlı Aktif Kampanya Listesi', archive: 'Kategori Bazlı Kampanya Arşivi' },
   brand: { active: 'Marka Bazlı Aktif Kampanya Listesi', archive: 'Marka Bazlı Kampanya Arşivi' },
@@ -1245,37 +1426,6 @@ const CAMPAIGN_PRIORITY_OPTIONS = [
   { value: 'low', label: 'Düşük' },
 ];
 
-const CAMPAIGN_EXPIRY_DAY_BANDS = [
-  { value: 'all', label: 'Tüm Gün Bantları' },
-  { value: 'today-past', label: 'Bugün / geçmiş' },
-  { value: '1-3', label: '1-3 gün' },
-  { value: '4-7', label: '4-7 gün' },
-  { value: '8-14', label: '8-14 gün' },
-  { value: '15+', label: '15+ gün' },
-];
-
-const CAMPAIGN_SALES_VELOCITY_OPTIONS = [
-  { value: 'all', label: 'Tüm Satış Hızları' },
-  { value: 'none', label: 'Satış yok' },
-  { value: 'slow', label: 'Yavaş' },
-  { value: 'balanced', label: 'Normal' },
-  { value: 'fast', label: 'Hızlı' },
-];
-
-const CAMPAIGN_STOCK_TURN_OPTIONS = [
-  { value: 'all', label: 'Tüm Stok Devirleri' },
-  { value: 'critical', label: 'Yavaş devir' },
-  { value: 'moderate', label: 'Normal' },
-  { value: 'healthy', label: 'Hızlı devir' },
-];
-
-const CAMPAIGN_MARGIN_OPTIONS = [
-  { value: 'all', label: 'Tüm Marjlar' },
-  { value: 'low', label: 'Düşük marj' },
-  { value: 'medium', label: 'Sağlıklı marj' },
-  { value: 'high', label: 'Yüksek marj' },
-];
-
 const RISK_RULE_OPTIONS = [
   { value: 'critical_stock', label: 'Kritik Stok' },
   { value: 'high_risk_demand', label: 'Yüksek Risk Talep' },
@@ -1288,7 +1438,7 @@ const RISK_RULE_OPTIONS = [
 ];
 
 const RULE_ACTION_OPTIONS = [
-  { value: 'notify', label: 'Bildirim Gönder' },
+  { value: 'notify', label: 'Bildirim Günder' },
   { value: 'create_task', label: 'Görev Oluştur' },
   { value: 'notify_and_task', label: 'Bildirim + Görev' },
   { value: 'create_campaign', label: 'Kampanya Oluştur' },
@@ -1296,33 +1446,7 @@ const RULE_ACTION_OPTIONS = [
   { value: 'assign_task', label: 'Görev Ata' },
 ];
 
-const READABLE_CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
 const normalizeCodeValue = (value) => String(value || '').trim().toUpperCase();
-
-export const generateRandomCode = ({
-  length = 5,
-  charset = READABLE_CODE_CHARSET,
-  excludedCodes = new Set(),
-  maxAttempts = 300,
-} = {}) => {
-  const normalizedExcluded = new Set(Array.from(excludedCodes || []).map((code) => normalizeCodeValue(code)));
-  const safeLength = Number.isInteger(length) && length > 0 ? length : 5;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    let candidate = '';
-    for (let index = 0; index < safeLength; index += 1) {
-      const randomIndex = Math.floor(Math.random() * charset.length);
-      candidate += charset[randomIndex];
-    }
-
-    if (!normalizedExcluded.has(candidate)) {
-      return candidate;
-    }
-  }
-
-  return '';
-};
 
 const normalizeGiftCards = (items) => {
   if (!Array.isArray(items)) return [];
@@ -1369,7 +1493,7 @@ const normalizeCustomerDisplayName = (value) => {
   CUSTOMER_NAME_ENCODING_FIXES.forEach(([wrong, correct]) => {
     text = text.split(wrong).join(correct);
   });
-  if (text === 'Zeynep ^ahin') return 'Zeynep Şahin';
+  if (text === 'Zeynep ^ahin') return 'Zeynep Sahin';
   return text;
 };
 
@@ -1431,6 +1555,12 @@ const normalizeCampaigns = (items) => {
         conflictPolicy: String(item?.conflictPolicy || 'highest_priority').trim().toLowerCase() || 'highest_priority',
         targetCategoryIds: Array.isArray(item?.targetCategoryIds) ?
            item.targetCategoryIds.map((id) => String(id || '').trim()).filter(Boolean)
+          : [],
+        targetCategoryLabelIds: Array.isArray(item?.targetCategoryLabelIds) ?
+           item.targetCategoryLabelIds.map((id) => String(id || '').trim()).filter(Boolean)
+          : [],
+        targetCategoryLabels: Array.isArray(item?.targetCategoryLabels) ?
+           item.targetCategoryLabels.map((label) => normalizeCampaignInsightText(label)).filter(Boolean)
           : [],
         targetProductIds: Array.isArray(item?.targetProductIds) ?
            item.targetProductIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -1504,14 +1634,17 @@ const getCampaignEndBoundary = (campaign = {}) => {
   return endsAt;
 };
 
-const isPastCampaignClutter = (campaign = {}, now = new Date()) => {
-  if (isCampaignCurrentlyActive(campaign, now) || isCampaignPlanned(campaign, now)) return false;
-  const status = String(campaign?.status || '').trim().toLowerCase();
-  const endedStatuses = new Set(['archived', 'expired', 'cancelled', 'canceled', 'deleted']);
-  if (endedStatuses.has(status)) return true;
+const isCampaignPastEndDate = (campaign = {}, now = new Date()) => {
+  if (!campaign || campaign.isIndefinite) return false;
   const endsAt = getCampaignEndBoundary(campaign);
-  return Boolean(endsAt && endsAt < now);
+  return Boolean(endsAt && now > endsAt);
 };
+
+const isDefaultCampaignArchiveRow = (campaign = {}, now = new Date()) => (
+  !isCampaignCurrentlyActive(campaign, now)
+  && !isCampaignPlanned(campaign, now)
+  && !isCampaignPastEndDate(campaign, now)
+);
 
 const formatCampaignDate = (value) => {
   const date = value ? new Date(value) : null;
@@ -1524,14 +1657,21 @@ const normalizeCampaignBrandKey = (value) => String(value || '').trim().toLocale
 const getCampaignProductMatch = (campaign = {}, product = {}) => {
   const productId = String(product?.id || product?.productId || '').trim();
   const categoryId = String(product?.categoryId || '').trim();
+  const categoryLabelId = String(product?.labelId || product?.tagId || product?.selectedTagId || product?.categoryLabelId || '').trim();
+  const categoryLabelName = normalizeSearchText(product?.etiket || product?.categoryLabelName || product?.labelName || product?.tag || '');
   const brand = normalizeCampaignBrandKey(product?.brand || product?.brandName);
   const targetProductIds = Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
   const targetCategoryIds = Array.isArray(campaign.targetCategoryIds) ? campaign.targetCategoryIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  const targetCategoryLabelIds = Array.isArray(campaign.targetCategoryLabelIds) ? campaign.targetCategoryLabelIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  const targetCategoryLabelNames = Array.isArray(campaign.targetCategoryLabels) ? campaign.targetCategoryLabels.map(normalizeSearchText).filter(Boolean) : [];
   const targetBrands = Array.isArray(campaign.targetBrands) ? campaign.targetBrands.map(normalizeCampaignBrandKey).filter(Boolean) : [];
   const productMatched = productId && targetProductIds.includes(productId);
-  const categoryMatched = categoryId && targetCategoryIds.includes(categoryId);
+  const labelMatched = targetCategoryLabelIds.length
+    ? (categoryLabelId && targetCategoryLabelIds.includes(categoryLabelId)) || (categoryLabelName && targetCategoryLabelNames.includes(categoryLabelName))
+    : true;
+  const categoryMatched = categoryId && targetCategoryIds.includes(categoryId) && labelMatched;
   const brandMatched = brand && targetBrands.includes(brand);
-  const hasExplicitScope = targetProductIds.length || targetCategoryIds.length || targetBrands.length;
+  const hasExplicitScope = targetProductIds.length || targetCategoryIds.length || targetCategoryLabelIds.length || targetBrands.length;
   const type = String(campaign.type || 'general').trim().toLocaleLowerCase('tr-TR') || 'general';
 
   if (productMatched) return { scope: 'product', specificity: 5 };
@@ -1568,13 +1708,15 @@ const normalizeAutomationCenter = (value) => {
   };
 };
 
-const mapSettingsToForm = (data = {}) => ({
+const mapSettingsToForm = (data = {}) => {
+  const source = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  return {
   ...(() => {
     const weeklySchedule = normalizeWeeklySchedule({
-      weeklySchedule: data.weeklySchedule,
-      openingTime: data.openingTime,
-      closingTime: data.closingTime,
-      closedDays: data.closedDays,
+      weeklySchedule: source.weeklySchedule,
+      openingTime: source.openingTime,
+      closingTime: source.closingTime,
+      closedDays: source.closedDays,
     });
     const legacy = deriveLegacyWorkingHours(weeklySchedule);
     return {
@@ -1582,25 +1724,26 @@ const mapSettingsToForm = (data = {}) => ({
       closingTime: legacy.closingTime,
       closedDays: legacy.closedDays,
       weeklySchedule,
-      holidayMode: Boolean(data.holidayMode),
-      specialDays: normalizeSpecialDays(data.specialDays),
+      holidayMode: Boolean(source.holidayMode),
+      specialDays: normalizeSpecialDays(source.specialDays),
     };
   })(),
   currency: 'TRY',
-  dateFormat: data.dateFormat || 'DD.MM.YYYY',
-  storeName: data.storeName || '',
-  branchCode: data.branchCode || '',
-  storeAddress: data.storeAddress || '',
-  storePhone: data.storePhone || '',
-  storeEmail: data.storeEmail || SUPPORT_CONTACT.email,
-  taxNumber: data.taxNumber || STANDARD_TAX_NUMBER,
-  logisticsTariffs: normalizeLogisticsTariffs(data.logisticsTariffs),
+  dateFormat: source.dateFormat || 'DD.MM.YYYY',
+  storeName: source.storeName || '',
+  branchCode: source.branchCode || '',
+  storeAddress: source.storeAddress || '',
+  storePhone: source.storePhone || '',
+  storeEmail: source.storeEmail || SUPPORT_CONTACT.email,
+  taxNumber: source.taxNumber || STANDARD_TAX_NUMBER,
+  logisticsTariffs: normalizeLogisticsTariffs(source.logisticsTariffs),
   customerRelations: {
-    giftCards: normalizeGiftCards(data?.customerRelations?.giftCards),
-    campaigns: normalizeCampaigns(data?.customerRelations?.campaigns),
-    automationCenter: normalizeAutomationCenter(data?.customerRelations?.automationCenter),
+    giftCards: normalizeGiftCards(source?.customerRelations?.giftCards),
+    campaigns: normalizeCampaigns(source?.customerRelations?.campaigns),
+    automationCenter: normalizeAutomationCenter(source?.customerRelations?.automationCenter),
   },
-});
+  };
+};
 
 const SYSTEM_DESK_ROWS = [
   { code: 'B1', label: 'Kasa 1 PIN' },
@@ -1610,13 +1753,26 @@ const SYSTEM_DESK_ROWS = [
   { code: 'B5', label: 'Kasa 5 PIN' },
   { code: 'B6', label: 'Kasa 6 PIN' },
   { code: 'B7', label: 'Kasa 7 PIN' },
-  { code: 'B8', label: 'Yönetim Kasası PIN' },
+  { code: 'B8', label: 'Yönetim Kasasi PIN' },
 ];
 
 const AUTO_SALE_DESK_OPTIONS = SYSTEM_DESK_ROWS.map((row) => ({
   code: row.code,
   label: row.label.replace(/\s*PIN$/i, ''),
 }));
+
+const AUTO_SALE_PAYMENT_LABELS = {
+  cash: 'Nakit',
+  card: 'Kart',
+  qr: 'QR Ödeme',
+  eft: 'Havale/EFT',
+  giftcard: 'Hediye Kartı',
+};
+
+const AUTO_SALE_TRANSACTION_TYPE_LABELS = {
+  sale: 'Satış',
+  return: 'Iade',
+};
 
 const formatAutoSaleRemainingTime = (milliseconds) => {
   if (milliseconds === null || milliseconds === undefined) return 'Manuel';
@@ -1812,6 +1968,12 @@ const formatLogJsonForDisplay = (value) => {
     try {
       return JSON.stringify(JSON.parse(normalized), null, 2);
     } catch {
+      try {
+        window.localStorage.removeItem('pricingCampaignDraft');
+        window.localStorage.removeItem('orderCampaignDraft');
+      } catch {
+        // ignore cleanup errors
+      }
       return normalized;
     }
   }
@@ -1882,7 +2044,7 @@ const buildLogDetailLines = (value, prefix = '') => {
     return text ? [`${prefix || 'Detay'}: ${text}`] : [];
   }
   if (Array.isArray(parsed)) {
-    return parsed.flatMap((item, index) => buildLogDetailLines(item, prefix ? `${prefix} ${index + 1}` : `Satır ${index + 1}`));
+    return parsed.flatMap((item, index) => buildLogDetailLines(item, prefix ? `${prefix} ${index + 1}` : `Satir ${index + 1}`));
   }
   return Object.entries(parsed).flatMap(([key, item]) => {
     const nextPrefix = prefix ? `${prefix} / ${formatLogDetailKey(key)}` : formatLogDetailKey(key);
@@ -1914,7 +2076,7 @@ const getDeveloperLogPresentation = (row) => {
   const responseDetails = buildLogDetailLines(log.response, 'Yanıt');
   const extraDetails = [
     log.statusCode ? `Durum kodu: ${log.statusCode}` : '',
-    log.errorType ? `Hata Sınıfı: ${log.errorType}` : '',
+    log.errorType ? `Hata Sinifi: ${log.errorType}` : '',
     log.requestId ? `Request ID: ${log.requestId}` : '',
     log.correlationId ? `Correlation ID: ${log.correlationId}` : '',
     log.repeatCount && Number(log.repeatCount) > 1 ? `Tekrar: ${log.repeatCount}` : '',
@@ -1979,14 +2141,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [roleManagementPinError, setRoleManagementPinError] = useState('');
   const [savingRoleManagementPin, setSavingRoleManagementPin] = useState(false);
   const [availableCategories, setAvailableCategories] = useState([]);
+  const [availableCategoryLabels, setAvailableCategoryLabels] = useState([]);
   const [availableProducts, setAvailableProducts] = useState([]);
   const [availableBrands, setAvailableBrands] = useState([]);
+  const [availableProductsLoading, setAvailableProductsLoading] = useState(false);
+  const [availableProductsLoaded, setAvailableProductsLoaded] = useState(false);
 
   const [giftCardModalOpen, setGiftCardModalOpen] = useState(false);
   const [customerRelationsModalTab, setCustomerRelationsModalTab] = useState('giftCards');
   const [giftCardCloseConfirmOpen, setGiftCardCloseConfirmOpen] = useState(false);
   const [giftCardDraft, setGiftCardDraft] = useState(createDefaultGiftCardDraft());
-  const [campaignDraft, setCampaignDraft] = useState(createDefaultCampaignDraft());
   const [automationRuleDraft, setAutomationRuleDraft] = useState(createDefaultAutomationRuleDraft());
   const [loginActivities, setLoginActivities] = useState([]);
   const [loginActivitiesTotal, setLoginActivitiesTotal] = useState(null);
@@ -2023,6 +2187,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [autoSaleSummary, setAutoSaleSummary] = useState(DEFAULT_AUTO_SALE_SUMMARY);
   const [autoSaleError, setAutoSaleError] = useState('');
   const [autoSaleRemainingMs, setAutoSaleRemainingMs] = useState(null);
+  const [autoSaleRecentTransactions, setAutoSaleRecentTransactions] = useState([]);
+  const [autoSaleAvailability, setAutoSaleAvailability] = useState(null);
   const [campaignTypeView, setCampaignTypeView] = useState(() => {
     if (typeof window === 'undefined') return 'all';
     try {
@@ -2032,25 +2198,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return 'all';
     }
   });
-  const [campaignSearch, setCampaignSearch] = useState('');
-  const [campaignStatusView, setCampaignStatusView] = useState('all');
-  const [selectedCampaignIds, setSelectedCampaignIds] = useState([]);
+  const [selectedCampaignIdsByModule, setSelectedCampaignIdsByModule] = useState({});
   const [bulkDiscountRate, setBulkDiscountRate] = useState('15');
-  const [campaignSuggestionFilter, setCampaignSuggestionFilter] = useState('all');
   const [suggestionRefreshKey, setSuggestionRefreshKey] = useState(0);
   const [campaignSuggestionRefreshing, setCampaignSuggestionRefreshing] = useState(false);
-  const [campaignSuggestionRefreshedAt, setCampaignSuggestionRefreshedAt] = useState(() => new Date());
-  const [campaignSuggestionPage, setCampaignSuggestionPage] = useState(1);
-  const [giftCardSearch, setGiftCardSearch] = useState('');
-  const [giftCardAmountFilter, setGiftCardAmountFilter] = useState('');
+  const [campaignSuggestionRefreshedAt, setCampaignSuggestionRefreshedAt] = useState(null);
+  const [campaignCandidatePagesByModule, setCampaignCandidatePagesByModule] = useState({});
   const [campaignTablePages, setCampaignTablePages] = useState({});
+  const [homeCampaignTableView, setHomeCampaignTableView] = useState('active');
   const [selectedCampaignDetail, setSelectedCampaignDetail] = useState(null);
   const [editingCampaignId, setEditingCampaignId] = useState('');
   const [selectedCampaignSuggestion, setSelectedCampaignSuggestion] = useState(null);
-  const [productCampaignSearch, setProductCampaignSearch] = useState('');
-  const [productCampaignCategoryFilter, setProductCampaignCategoryFilter] = useState('');
-  const [productCampaignBrandFilter, setProductCampaignBrandFilter] = useState('');
-  const [brandCampaignSearch, setBrandCampaignSearch] = useState('');
+  const [openCampaignActionMenuId, setOpenCampaignActionMenuId] = useState(null);
+  const [campaignModuleUiState, setCampaignModuleUiState] = useState({});
   const [automationHistory, setAutomationHistory] = useState([]);
   const [assignableUsers, setAssignableUsers] = useState([]);
   const [campaignCustomers, setCampaignCustomers] = useState([]);
@@ -2066,20 +2226,78 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [crossModuleError, setCrossModuleError] = useState('');
   const [giftCardAssignmentDraft, setGiftCardAssignmentDraft] = useState({ cardCode: '', customerId: '', customerQuery: '' });
   const [giftCardAssignmentLoading, setGiftCardAssignmentLoading] = useState(false);
-  const [expiryDayBandFilter, setExpiryDayBandFilter] = useState('all');
-  const [expiryRiskFilter, setExpiryRiskFilter] = useState('all');
-  const [expiryCategoryFilter, setExpiryCategoryFilter] = useState('');
-  const [expirySearch, setExpirySearch] = useState('');
-  const [salesVelocityFilter, setSalesVelocityFilter] = useState('all');
-  const [salesStockTurnFilter, setSalesStockTurnFilter] = useState('all');
-  const [salesCategoryFilter, setSalesCategoryFilter] = useState('');
-  const [salesMarginFilter, setSalesMarginFilter] = useState('all');
-  const [salesSupplierFilter, setSalesSupplierFilter] = useState('');
-  const [salesSectionFilter, setSalesSectionFilter] = useState('');
-  const [salesProductTypeFilter, setSalesProductTypeFilter] = useState('all');
-  const [salesRecommendationFilter, setSalesRecommendationFilter] = useState('all');
-  const [salesSearch, setSalesSearch] = useState('');
   const [campaignInsightPages, setCampaignInsightPages] = useState({});
+  const {
+    activeCampaignDraftModule,
+    campaignDraft,
+    updateCampaignDraft,
+    hydrateCampaignDraft,
+    resetCampaignDraft,
+    resetAllCampaignDrafts,
+  } = useCampaignDrafts(campaignTypeView);
+  const setCampaignDraft = (updater) => updateCampaignDraft(activeCampaignDraftModule, updater);
+  const getCampaignModuleUiState = (moduleKey = activeCampaignDraftModule) => {
+    const safeModuleKey = normalizeCampaignDraftModuleKey(moduleKey, 'general');
+    return campaignModuleUiState[safeModuleKey] || {};
+  };
+  const updateCampaignModuleUiState = (moduleKey, patch) => {
+    const safeModuleKey = normalizeCampaignDraftModuleKey(moduleKey, 'general');
+    setCampaignModuleUiState((current) => ({
+      ...current,
+      [safeModuleKey]: {
+        ...(current[safeModuleKey] || {}),
+        ...(typeof patch === 'function' ? patch(current[safeModuleKey] || {}) : patch),
+      },
+    }));
+  };
+  const activeCampaignModuleUiState = getCampaignModuleUiState(activeCampaignDraftModule);
+  const productCampaignSearch = activeCampaignModuleUiState.productSearch || '';
+  const categoryLabelSearch = activeCampaignModuleUiState.categoryLabelSearch || '';
+  const brandCampaignSearch = activeCampaignModuleUiState.brandSearch || '';
+  const setProductCampaignSearch = (value) => updateCampaignModuleUiState(activeCampaignDraftModule, { productSearch: value });
+  const setCategoryLabelSearch = (value) => updateCampaignModuleUiState(activeCampaignDraftModule, { categoryLabelSearch: value });
+  const setBrandCampaignSearch = (value) => updateCampaignModuleUiState(activeCampaignDraftModule, { brandSearch: value });
+  const selectedCampaignIds = selectedCampaignIdsByModule[campaignTypeView] || [];
+  const setSelectedCampaignIds = (updater) => {
+    setSelectedCampaignIdsByModule((current) => {
+      const previous = current[campaignTypeView] || [];
+      const next = typeof updater === 'function' ? updater(previous) : updater;
+      return {
+        ...current,
+        [campaignTypeView]: Array.isArray(next) ? next : [],
+      };
+    });
+  };
+
+  const loadCampaignProducts = async ({ forceRefresh = false, includeCampaignDetails = true } = {}) => {
+    if (availableProductsLoading) return;
+    if (availableProductsLoaded && !forceRefresh) return;
+    setAvailableProductsLoading(true);
+    try {
+      const products = await productService.list({
+        universe: 'listed_active',
+        includeUnlisted: false,
+        includeTotal: false,
+        fetchAll: true,
+        includeCampaignDetails,
+        forceRefresh,
+      });
+      const list = Array.isArray(products) ? products : [];
+      setAvailableProducts(list);
+      setAvailableBrands(buildCampaignBrandOptions(list));
+      setAvailableProductsLoaded(true);
+    } catch (error) {
+      setAvailableProducts([]);
+      setAvailableBrands([]);
+      setToast({
+        type: 'error',
+        title: 'Kampanya Ürünleri',
+        message: error?.message || 'Ürün verileri yüklenemedi.',
+      });
+    } finally {
+      setAvailableProductsLoading(false);
+    }
+  };
   const campaignEditScope = ['general', 'product', 'category', 'brand'].includes(String(campaignDraft.type || '').trim())
     ? String(campaignDraft.type || '').trim()
     : 'general';
@@ -2105,15 +2323,20 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const [showPinGate, setShowPinGate] = useState(false);
 
   const isAdmin = user?.role === 'admin';
+  const autoSaleValidationMessage = useMemo(
+    () => autoSaleRunner.validate(autoSaleConfig),
+    [autoSaleConfig],
+  );
   const resolvedPageMode = pageMode === 'campaign' || pageMode === 'settings'
     ? pageMode
     : (location.pathname === '/kampanya-yonetimi' ? 'campaign' : 'settings');
   const isCampaignPage = resolvedPageMode === 'campaign';
   const isSettingsPage = resolvedPageMode === 'settings';
+  const safeForm = form && typeof form === 'object' && !Array.isArray(form) ? form : initialForm;
   const isAnyPinSaving = Boolean(savingDeskCode) || savingSystemManagementPin || savingRoleManagementPin;
   const weeklyScheduleRows = useMemo(
-    () => normalizeWeeklySchedule({ weeklySchedule: form.weeklySchedule }),
-    [form.weeklySchedule],
+    () => normalizeWeeklySchedule({ weeklySchedule: safeForm.weeklySchedule }),
+    [safeForm.weeklySchedule],
   );
   const selectedScheduleRow = useMemo(
     () => weeklyScheduleRows.find((row) => row.dayKey === selectedScheduleDay) || weeklyScheduleRows[0] || null,
@@ -2161,11 +2384,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       characterData: true,
     });
     return () => observer.disconnect();
-  }, [isCampaignPage, isSettingsPage, campaignTypeView, campaignStatusView, campaignSuggestionPage, campaignSuggestionRefreshedAt, activityLogTab]);
+  }, [isCampaignPage, isSettingsPage, campaignTypeView, campaignSuggestionRefreshedAt, activityLogTab]);
 
   const logisticsCargoTypeSummary = useMemo(() => {
     const grouped = new Map();
-    normalizeLogisticsTariffs(form.logisticsTariffs).forEach((row) => {
+    normalizeLogisticsTariffs(safeForm.logisticsTariffs).forEach((row) => {
       if (!grouped.has(row.cargoTypeCode)) {
         grouped.set(row.cargoTypeCode, {
           cargoTypeCode: row.cargoTypeCode,
@@ -2180,7 +2403,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       current.isActive = current.isActive || row.isActive === true;
     });
     return Array.from(grouped.values());
-  }, [form.logisticsTariffs]);
+  }, [safeForm.logisticsTariffs]);
 
   const logisticsStats = useMemo(() => ({
     activeCargoTypeCount: logisticsCargoTypeSummary.filter((item) => item.isActive).length,
@@ -2229,6 +2452,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   };
 
   const startAutoSaleAutomation = () => {
+    setAutoSaleError('');
+    autoSaleRunner.clearError();
+    if (autoSaleValidationMessage) {
+      setAutoSaleError(autoSaleValidationMessage);
+      return;
+    }
     const validationError = autoSaleRunner.start(autoSaleConfig);
     if (validationError) {
       setAutoSaleError(validationError);
@@ -2246,10 +2475,31 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setAutoSaleSummary(snapshot.summary || DEFAULT_AUTO_SALE_SUMMARY);
       setAutoSaleError(snapshot.error || '');
       setAutoSaleRemainingMs(snapshot.remainingMs);
+      setAutoSaleRecentTransactions(Array.isArray(snapshot.recentTransactions) ? snapshot.recentTransactions : []);
     });
     autoSaleRunner.resumeIfNeeded();
+    void autoSaleRunner.refreshRecentTransactions();
     return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (isCampaignPage || !autoSalePanelOpen) return undefined;
+    let cancelled = false;
+    const loadAvailability = async () => {
+      try {
+        const result = await posService.getAutomaticSaleAvailability();
+        if (!cancelled) setAutoSaleAvailability(result || null);
+      } catch {
+        if (!cancelled) setAutoSaleAvailability(null);
+      }
+    };
+    loadAvailability();
+    const intervalId = window.setInterval(loadAvailability, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [autoSalePanelOpen, autoSaleSummary.totalCount, isCampaignPage]);
 
   useEffect(() => {
     if (!weeklyScheduleRows.length) return;
@@ -2258,29 +2508,32 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
   }, [weeklyScheduleRows, selectedScheduleDay]);
 
-  const normalizeForm = (value) => ({
-    ...value,
-    closedDays: [...(value.closedDays || [])].sort(),
-    weeklySchedule: normalizeWeeklySchedule({ weeklySchedule: value.weeklySchedule }),
-    specialDays: normalizeSpecialDays(value.specialDays)
+  const normalizeForm = (value) => {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : initialForm;
+    return {
+    ...source,
+    closedDays: [...(source.closedDays || [])].sort(),
+    weeklySchedule: normalizeWeeklySchedule({ weeklySchedule: source.weeklySchedule }),
+    specialDays: normalizeSpecialDays(source.specialDays)
       .sort((left, right) => {
         const byDate = left.date.localeCompare(right.date, 'tr-TR');
         if (byDate !== 0) return byDate;
         return left.id.localeCompare(right.id, 'tr-TR');
       }),
-    logisticsTariffs: normalizeLogisticsTariffs(value.logisticsTariffs),
+    logisticsTariffs: normalizeLogisticsTariffs(source.logisticsTariffs),
     customerRelations: {
-      giftCards: normalizeGiftCards(value?.customerRelations?.giftCards)
+      giftCards: normalizeGiftCards(source?.customerRelations?.giftCards)
         .map((item) => ({
           ...item,
           allowedCategoryIds: [...item.allowedCategoryIds].sort(),
         }))
         .sort((a, b) => a.code.localeCompare(b.code, 'tr-TR')),
-      campaigns: normalizeCampaigns(value?.customerRelations?.campaigns)
+      campaigns: normalizeCampaigns(source?.customerRelations?.campaigns)
         .sort((a, b) => a.name.localeCompare(b.name, 'tr-TR')),
-      automationCenter: normalizeAutomationCenter(value?.customerRelations?.automationCenter),
+      automationCenter: normalizeAutomationCenter(source?.customerRelations?.automationCenter),
     },
-  });
+    };
+  };
 
   const isDirty = useMemo(() => {
     return JSON.stringify(normalizeForm(form)) !== JSON.stringify(normalizeForm(savedForm));
@@ -2289,16 +2542,28 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const loadSettings = async () => {
     try {
       setIsLoading(true);
-      const [data, loginRows, auditRows, developerRows] = await Promise.all([
+      const [settingsResult, loginResult, auditResult, developerResult] = await Promise.allSettled([
         settingsService.get(),
         !isCampaignPage && isAdmin ? settingsService.getLoginActivities(20) : Promise.resolve([]),
         !isCampaignPage && isAdmin ? settingsService.getAuditLogs(80) : Promise.resolve([]),
         !isCampaignPage && isAdmin ? settingsService.getDeveloperLogs({ limit: 120 }) : Promise.resolve([]),
       ]);
-      const mapped = mapSettingsToForm(data);
+      const data = settingsResult.status === 'fulfilled' ? settingsResult.value : {};
+      if (settingsResult.status === 'rejected') {
+        console.error('[SettingsCampaignShell:settingsPayload]', settingsResult.reason);
+        setToast({ type: 'error', title: 'Sistem Ayarları', message: settingsResult.reason?.message || 'Ayarlar yüklenemedi, varsayılan değerlerle açıldı.' });
+      }
+      const loginRows = loginResult.status === 'fulfilled' ? loginResult.value : [];
+      const auditRows = auditResult.status === 'fulfilled' ? auditResult.value : [];
+      const developerRows = developerResult.status === 'fulfilled' ? developerResult.value : [];
+      if (loginResult.status === 'rejected') console.error('[SettingsCampaignShell:loginActivities]', loginResult.reason);
+      if (auditResult.status === 'rejected') console.error('[SettingsCampaignShell:auditLogs]', auditResult.reason);
+      if (developerResult.status === 'rejected') console.error('[SettingsCampaignShell:developerLogs]', developerResult.reason);
+      const settingsData = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+      const mapped = mapSettingsToForm(settingsData);
       setForm(mapped);
       setSavedForm(mapped);
-      setUpdatedAt(data.updatedAt || '');
+      setUpdatedAt(settingsData.updatedAt || '');
       setLoginActivities(sanitizeObjectRows(loginRows));
       setLoginActivitiesTotal(extractResponseTotal(loginRows));
       setAuditLogs(sanitizeObjectRows(auditRows));
@@ -2306,12 +2571,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setDeveloperLogs(sanitizeObjectRows(developerRows));
       setDeveloperLogsTotal(extractResponseTotal(developerRows));
       if (isAdmin) {
-        setDeskPins(createDefaultDeskPins(data.deskPins || {}));
-        setSystemManagementPin(String(data.posPin || '1234').slice(0, 4));
-        setRoleManagementPin(String(data.roleManagementPin || '1234').slice(0, 4));
+        setDeskPins(createDefaultDeskPins(settingsData.deskPins || {}));
+        setSystemManagementPin(String(settingsData.posPin || '1234').slice(0, 4));
+        setRoleManagementPin(String(settingsData.roleManagementPin || '1234').slice(0, 4));
       }
     } catch (error) {
-      setToast({ type: 'error', title: 'Sistem Ayarları', message: error.message || 'Ayarlar yüklenemedi.' });
+      setToast({ type: 'error', title: 'Sistem Ayarlari', message: error.message || 'Ayarlar yüklenemedi.' });
     } finally {
       setIsLoading(false);
     }
@@ -2335,20 +2600,18 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     loadSettings();
     Promise.allSettled([
       categoryService.list(),
-      productService.list({ universe: 'listed_active', includeUnlisted: false, includeTotal: false, fetchAll: true, includeCampaignDetails: true }),
-    ]).then(([categoryResult, productResult]) => {
+      categoryService.listLabels(),
+    ]).then(([categoryResult, labelResult]) => {
       setAvailableCategories(categoryResult.status === 'fulfilled' && Array.isArray(categoryResult.value) ? categoryResult.value : []);
-      const products = productResult.status === 'fulfilled' && Array.isArray(productResult.value) ? productResult.value : [];
-      setAvailableProducts(products);
-      const brands = buildCampaignBrandOptions(products);
-      setAvailableBrands(brands);
+      setAvailableCategoryLabels(labelResult.status === 'fulfilled' && Array.isArray(labelResult.value) ? labelResult.value : []);
     });
     if (isCampaignPage) return;
     reportService.getDashboard().then((d) => {
+      const overview = d?.overview && typeof d.overview === 'object' ? d.overview : {};
       setStats({
-        totalProducts: d.overview.totalProducts,
-        totalSuppliers: d.overview.totalSuppliers,
-        totalStockQuantity: d.overview.totalStockQuantity,
+        totalProducts: Number(overview.totalProducts || 0) || 0,
+        totalSuppliers: Number(overview.totalSuppliers || 0) || 0,
+        totalStockQuantity: Number(overview.totalStockQuantity || 0) || 0,
       });
     }).catch(() => {});
   }, [isCampaignPage]);
@@ -2360,18 +2623,28 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       try {
         setCrossModuleLoading(true);
         setCrossModuleError('');
-        const [pricingAnalysis, purchaseSuggestions, campaignAnalysis] = await Promise.all([
-          pricingAnalysisService.getAnalysis({ full: true, forceRefresh: true }),
-          procurementService.listSuggestions({ status: 'pending' }),
-          campaignAnalysisService.getSuggestions({ full: true, limit: 1000, forceRefresh: true }),
+        const shouldForceRefresh = Number(suggestionRefreshKey || 0) > 0;
+        const [purchaseResult, campaignResult] = await Promise.allSettled([
+          procurementService.listSuggestions({ status: 'pending', limit: 40 }),
+          campaignAnalysisService.getSuggestions({
+            full: false,
+            limit: 80,
+            forceRefresh: shouldForceRefresh,
+          }),
         ]);
-        setPricingSignals(pricingAnalysis?.sections || {});
+        if (purchaseResult.status === 'rejected') console.error('[SettingsCampaignShell:purchaseSuggestions]', purchaseResult.reason);
+        if (campaignResult.status === 'rejected') console.error('[SettingsCampaignShell:campaignAnalyticsSnapshot]', campaignResult.reason);
+        const purchaseSuggestions = purchaseResult.status === 'fulfilled' ? purchaseResult.value : [];
+        const campaignAnalysis = campaignResult.status === 'fulfilled' ? campaignResult.value : {};
+        setPricingSignals({});
         setBackendCampaignRows(Array.isArray(campaignAnalysis?.rows) ? campaignAnalysis.rows : []);
-        setBackendCampaignSuggestions(Array.isArray(campaignAnalysis?.suggestions) ? campaignAnalysis.suggestions : []);
-        setCampaignEligibleProductCount(Math.max(0, Number(campaignAnalysis?.eligibleProductCount || pricingAnalysis?.summary?.totalAnalyzedProducts || 0) || 0));
+        setBackendCampaignSuggestions([
+          ...(Array.isArray(campaignAnalysis?.suggestions) ? campaignAnalysis.suggestions : []),
+        ]);
+        setCampaignEligibleProductCount(Math.max(0, Number(campaignAnalysis?.eligibleProductCount || 0) || 0));
         setOrderSuggestionSignals(Array.isArray(purchaseSuggestions) ? purchaseSuggestions : []);
       } catch (error) {
-        setCrossModuleError(error.message || 'Modüller arası veri yüklenemedi.');
+        setCrossModuleError(error.message || 'Modüller arasi veri yüklenemedi.');
         setPricingSignals({});
         setBackendCampaignRows([]);
         setBackendCampaignSuggestions([]);
@@ -2379,6 +2652,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         setOrderSuggestionSignals([]);
       } finally {
         setCrossModuleLoading(false);
+        setCampaignSuggestionRefreshing(false);
+        setCampaignSuggestionRefreshedAt(new Date());
       }
     };
 
@@ -2403,6 +2678,18 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   }, [isCampaignPage]);
 
   useEffect(() => {
+    const productBackedCampaignViews = new Set(['product', 'brand']);
+    if (isCampaignPage && productBackedCampaignViews.has(campaignTypeView)) {
+      void loadCampaignProducts();
+    }
+  }, [campaignTypeView, isCampaignPage]);
+
+  useEffect(() => {
+    if (isCampaignPage || !autoSalePanelOpen) return;
+    void loadCampaignProducts({ includeCampaignDetails: false });
+  }, [autoSalePanelOpen, isCampaignPage]);
+
+  useEffect(() => {
     if (!isCampaignPage || typeof window === 'undefined') return;
 
     try {
@@ -2410,22 +2697,27 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       if (pricingDraftRaw) {
         const pricingDraft = JSON.parse(pricingDraftRaw);
         const productIds = Array.isArray(pricingDraft?.productIds) ? pricingDraft.productIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-        setCampaignDraft((current) => ({
+        const targetModule = productIds.length ? 'product' : 'dynamic';
+        updateCampaignDraft(targetModule, (current) => ({
           ...current,
           type: productIds.length ? 'product' : 'dynamic',
-          name: 'Price Recommendations kaynaklı kampanya',
+          name: pricingDraft?.campaignName || current.name || 'Seçili Ürünlerde İndirim',
+          sourceContext: pricingDraft?.source || 'pricing_demand_analysis',
           discountRate: String(pricingDraft?.discountRate || current.discountRate || 12),
           targetProductIds: productIds,
           targetProductIdsText: productIds.length ? productIds.join(', ') : current.targetProductIdsText,
         }));
         if (productIds.length) setCampaignTypeView('product');
+        window.localStorage.removeItem('orderCampaignDraft');
+        window.localStorage.removeItem('pricingCampaignDraft');
       }
 
       const orderDraftRaw = window.localStorage.getItem('orderCampaignDraft');
       if (orderDraftRaw) {
         const orderDraft = JSON.parse(orderDraftRaw);
         const productIds = Array.isArray(orderDraft?.productIds) ? orderDraft.productIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-        setCampaignDraft((current) => ({
+        const targetModule = productIds.length ? 'product' : normalizeCampaignDraftModuleKey(orderDraft?.type || 'category', 'category');
+        updateCampaignDraft(targetModule, (current) => ({
           ...current,
           name: orderDraft?.name || current.name || 'Order Recommendations kaynaklı kampanya',
           type: productIds.length ? 'product' : (orderDraft?.type || current.type || 'category'),
@@ -2435,7 +2727,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         if (productIds.length) setCampaignTypeView('product');
       }
     } catch {
-      // Local draft parse hatasi kampanya ekranini kesmemeli.
+      // Local draft parse hatası kampanya ekranini kesmemeli.
     }
   }, [isCampaignPage]);
 
@@ -2445,7 +2737,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       window.localStorage.setItem(NOTIFICATION_SOUND_ENABLED_KEY, notificationSoundEnabled ? 'true' : 'false');
       window.localStorage.setItem(NOTIFICATION_SOUND_VOLUME_KEY, String(clampSoundVolume(notificationSoundVolume)));
     } catch {
-      // Local storage erişim hatası kritik değil.
+      // Local storage erisim hatası kritik değil.
     }
   }, [notificationSoundEnabled, notificationSoundVolume]);
 
@@ -2483,14 +2775,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const handlePreviewNotificationSound = async () => {
     if (!notificationSoundEnabled) {
-      setToast({ type: 'warning', title: 'Ses Ayarları', message: 'Önce bildirim sesini aktif edin.' });
+      setToast({ type: 'warning', title: 'Ses Ayarlari', message: 'Önce bildirim sesini aktif edin.' });
       return;
     }
 
     try {
       await playNotificationTone(clampSoundVolume(notificationSoundVolume));
     } catch {
-      setToast({ type: 'error', title: 'Ses Ayarları', message: 'Ses Önizlemesi başlatılamadı.' });
+      setToast({ type: 'error', title: 'Ses Ayarlari', message: 'Ses Önizlemesi baslatilamadı.' });
     }
   };
 
@@ -2547,11 +2839,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   };
 
   const createAndDownloadPdf = async ({ flow, filename, docDefinition, rowCount }) => {
-    logPdfExportStep(flow, 'Başladı', { rowCount });
+    logPdfExportStep(flow, 'Basladı', { rowCount });
 
     const { pdfMake, ready } = await ensurePdfMakeReady();
     if (!ready) {
-      throw new Error('PDF font altyapısı hazır değil');
+      throw new Error('PDF font altyapisi hazır değil');
     }
 
     logPdfExportStep(flow, 'Font hazır', { vfsEntries: Object.keys(pdfMake.vfs || {}).length });
@@ -2576,7 +2868,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const getPdfExportErrorMessage = (error) => {
     const text = String(error?.message || '').toLocaleLowerCase('tr-TR');
-    if (text.includes('kayıt bulunamadı') || text.includes('kayit bulunamadi')) {
+    if (text.includes('kayıt bulunamadı') || text.includes('kayıt bulunamadı')) {
       return 'Dışa aktarılacak kayıt bulunamadı.';
     }
     return 'PDF dışa aktarma sırasında bir sorun oluştu. Lütfen tekrar deneyin.';
@@ -2589,12 +2881,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       const sourceRows = Array.isArray(rowsOverride) ? rowsOverride : (auditLogs || []);
       const rows = sourceRows.map((row) => ({
         'Tarih/Saat': formatDateTime(row.createdAt || row.at),
-        Kullanici: row.actorName || row.actor || row.userName || '-',
+        'Kullanıcı': row.actorName || row.actor || row.userName || '-',
         Aksiyon: row.actionLabel || row.action || '-',
         Detay: row.details || row.detail || row.summary || '-',
       }));
 
-      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', Kullanici: '-', Aksiyon: '-', Detay: '-' }]);
+      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', 'Kullanıcı': '-', Aksiyon: '-', Detay: '-' }]);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Audit Log');
       XLSX.writeFile(workbook, `audit-log-raporu-${reportDate}.xlsx`);
@@ -2745,11 +3037,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         'Hata Tipi': getLogLevelLabel(row.level),
         Mesaj: row.message || '-',
         Kaynak: row.source || '-',
-        Islem: row.action || '-',
-        Kullanici: row.userName || row.user || '-',
+        'İşlem': row.action || '-',
+        'Kullanıcı': row.userName || row.user || '-',
       }));
 
-      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', 'Hata Tipi': '-', Mesaj: '-', Kaynak: '-', Islem: '-', Kullanici: '-' }]);
+      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', 'Hata Tipi': '-', Mesaj: '-', Kaynak: '-', 'İşlem': '-', 'Kullanıcı': '-' }]);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Developer Logs');
       XLSX.writeFile(workbook, `developer-log-raporu-${reportDate}.xlsx`);
@@ -2790,7 +3082,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           : [[
             { text: '-', style: 'tableCellSubtle' },
             { text: '-', style: 'tableCell' },
-            { text: 'Filtre kriterlerine uygun kayit bulunamadi.', style: 'tableCellWrap' },
+            { text: 'Filtre kriterlerine uygun kayıt bulunamadı.', style: 'tableCellWrap' },
             { text: '-', style: 'tableCell' },
             { text: '-', style: 'tableCell' },
             { text: '-', style: 'tableCell' },
@@ -2821,7 +3113,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             table: {
               widths: [120, '*'],
               body: [
-                [{ text: 'Toplam Kayit', style: 'metaLabel' }, { text: String(rows.length), style: 'metaValue' }],
+                [{ text: 'Toplam Kayıt', style: 'metaLabel' }, { text: String(rows.length), style: 'metaValue' }],
                 [{ text: 'Rapor Tarihi', style: 'metaLabel' }, { text: reportDate, style: 'metaValue' }],
               ],
             },
@@ -2900,17 +3192,17 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     const sheetRows = rows.map((item) => {
       const { os, browser } = parseUserAgentInfo(item);
       return {
-        'Personel Adi': item.userName || '-',
+        'Personel Adı': item.userName || '-',
         'Sicil No': item.registerPin || '-',
         'E-posta': item.email || item.username || '-',
         'IP Adresi': item.ipAddress || item.ip || '-',
-        'Isletim Sistemi': os,
-        Tarayici: browser,
+        'İşletim Sistemi': os,
+        'Tarayıcı': browser,
         'Tarih/Saat': formatDateTime(resolveLoginActivityDate(item)),
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ 'Personel Adi': '-', 'Sicil No': '-', 'E-posta': '-', 'IP Adresi': '-', 'Isletim Sistemi': '-', Tarayici: '-', 'Tarih/Saat': '-' }]);
+    const worksheet = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ 'Personel Adı': '-', 'Sicil No': '-', 'E-posta': '-', 'IP Adresi': '-', 'İşletim Sistemi': '-', 'Tarayıcı': '-', 'Tarih/Saat': '-' }]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Giriş Aktiviteleri');
     XLSX.writeFile(workbook, `login-aktivite-raporu-${toReportDate()}.xlsx`);
@@ -3127,9 +3419,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       await loadDeveloperLogs();
       setDeveloperLogCreateModalOpen(false);
       setDeveloperLogDraft(createDeveloperLogDraft());
-      setToast({ type: 'success', title: 'Sistem Kayıtları', message: 'Kayıt başarıyla oluşturuldu.' });
+      setToast({ type: 'success', title: 'Sistem Kayıtlari', message: 'Kayıt basariyla oluşturuldu.' });
     } catch (error) {
-      setToast({ type: 'error', title: 'Sistem Kayıtları', message: error.message || 'Kayıt oluşturulamadı.' });
+      setToast({ type: 'error', title: 'Sistem Kayıtlari', message: error.message || 'Kayıt oluşturulamadı.' });
     } finally {
       setCreatingDeveloperLog(false);
     }
@@ -3345,12 +3637,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     const labels = {
       activity: 'aktivite kayıtları',
       audit: 'audit kayıtları',
-      developer: 'geliştirici logları',
+      developer: 'geliştirici loglari',
     };
     const label = labels[type] || 'log kayıtları';
     const approved = await dialog.confirm({
       title: 'Kayıtlar temizlensin mi?',
-      description: 'Bu işlem seçili log türündeki kayıtları temizler.',
+      description: 'Bu işlem seçili log tÜründeki kayıtları temizler.',
       confirmText: 'Temizle',
       cancelText: 'Vazgeç',
       tone: 'danger',
@@ -3373,9 +3665,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setAuditLogsTotal(extractResponseTotal(auditRows));
       setDeveloperLogs(sanitizeObjectRows(developerRows));
       setDeveloperLogsTotal(extractResponseTotal(developerRows));
-      setToast({ type: 'success', title: 'Log Kayıtları', message: `${label} temizlendi.` });
+      setToast({ type: 'success', title: 'Log Kayıtlari', message: `${label} temizlendi.` });
     } catch (error) {
-      setToast({ type: 'error', title: 'Log Kayıtları', message: error.message || 'Log kayıtları temizlenemedi.' });
+      setToast({ type: 'error', title: 'Log Kayıtlari', message: error.message || 'Log kayıtları temizlenemedi.' });
     } finally {
       if (type === 'developer') setDeveloperLogsLoading(false);
     }
@@ -3396,7 +3688,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setAuditLogAppliedFilters(DEFAULT_AUDIT_LOG_FILTERS);
       setAuditLogManagerModalOpen(true);
     } catch (error) {
-      setToast({ type: 'error', title: 'Audit Log', message: error.message || 'Audit log detayları yüklenemedi.' });
+      setToast({ type: 'error', title: 'Audit Log', message: error.message || 'Audit log detaylari yüklenemedi.' });
     } finally {
       setAuditLogManagerLoading(false);
     }
@@ -3507,7 +3799,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return;
     }
     if (specialDayDraft.dateMode === 'range' && !specialDayDraft.endDate) {
-      setToast({ type: 'warning', title: 'Ayarlar', message: 'Tarih aralığı için bitiş tarihi zorunludur.' });
+      setToast({ type: 'warning', title: 'Ayarlar', message: 'Tarih araligi için bitiş tarihi zorunludur.' });
       return;
     }
 
@@ -3581,10 +3873,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setUpdatedAt(next.updatedAt);
       setForm(mapped);
       setSavedForm(mapped);
-      setToast({ type: 'success', title: 'Sistem Ayarları', message: 'Ayarlar kaydedildi' });
+      setToast({ type: 'success', title: 'Sistem Ayarlari', message: 'Ayarlar kaydedildi' });
     } catch (error) {
       const errorMsg = error?.payload?.message || error?.message || 'Ayarlar kaydedilemedi.';
-      setToast({ type: 'error', title: 'Sistem Ayarları', message: errorMsg });
+      setToast({ type: 'error', title: 'Sistem Ayarlari', message: errorMsg });
     } finally {
       setIsSaving(false);
     }
@@ -3669,7 +3961,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const resetForm = () => {
     setForm(savedForm);
     setGiftCardDraft(createDefaultGiftCardDraft());
-    setCampaignDraft(createDefaultCampaignDraft());
+    resetAllCampaignDrafts();
     setAutomationRuleDraft(createDefaultAutomationRuleDraft());
   };
 
@@ -3716,11 +4008,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return;
     }
     if (!Number.isFinite(usageLimit) || usageLimit < 1) {
-      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: 'Kullanım hakkı en az 1 olmalıdır.' });
+      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: 'Kullanim hakkı en az 1 olmalıdır.' });
       return;
     }
     if (!giftCardDraft.isAllCategoriesSelected && giftCardDraft.allowedCategoryIds.length === 0) {
-      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: 'En az bir kategori seçin veya tüm kategoriler toggleını açın.' });
+      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: "En az bir kategori seçin veya tüm kategoriler toggle'ını açın." });
       return;
     }
 
@@ -3765,7 +4057,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     });
 
     if (!generatedCode) {
-      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: 'Kart kodu üretilemedi. Lütfen tekrar deneyin.' });
+      setToast({ type: 'error', title: 'Müşteri İlişkileri', message: 'Kart kodu Üretilemedi. Lütfen tekrar deneyin.' });
       return;
     }
 
@@ -3815,19 +4107,22 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }
   };
 
-  const giftCards = form.customerRelations?.giftCards || [];
-  const campaigns = form.customerRelations?.campaigns || [];
-  const automationCenter = normalizeAutomationCenter(form.customerRelations?.automationCenter);
+  const customerRelations = safeForm.customerRelations && typeof safeForm.customerRelations === 'object'
+    ? safeForm.customerRelations
+    : initialForm.customerRelations;
+  const giftCards = Array.isArray(customerRelations.giftCards) ? customerRelations.giftCards : [];
+  const campaigns = Array.isArray(customerRelations.campaigns) ? customerRelations.campaigns : [];
+  const automationCenter = normalizeAutomationCenter(customerRelations.automationCenter);
   const automationRules = automationCenter.rules || [];
   const pricingRows = useMemo(() => (
-    backendCampaignRows.length ? backendCampaignRows : mapPricingRowsForCampaigns({ sections: pricingSignals })
+    Array.isArray(backendCampaignRows) && backendCampaignRows.length ? backendCampaignRows : mapPricingRowsForCampaigns({ sections: pricingSignals })
   ), [backendCampaignRows, pricingSignals]);
   const availableProductMap = useMemo(
-    () => new Map(availableProducts.map((product) => [String(product?.id || ''), product])),
+    () => new Map((Array.isArray(availableProducts) ? availableProducts : []).map((product) => [String(product?.id || ''), product])),
     [availableProducts],
   );
   const campaignAnalyticsRows = useMemo(() => {
-    return pricingRows.map((row) => {
+    return (Array.isArray(pricingRows) ? pricingRows : []).map((row) => {
       const product = availableProductMap.get(String(row?.productId || row?.id || '')) || null;
       const currentPrice = Math.max(0, Number(row?.currentPrice ?? product?.currentPrice ?? product?.salePrice ?? product?.price ?? 0) || 0);
       const cost = Math.max(0, Number(row?.cost ?? product?.cost ?? product?.purchasePrice ?? product?.costPrice ?? 0) || 0);
@@ -3844,6 +4139,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         barcode: String(row?.barcode || product?.barcode || product?.barcodes?.[0] || '').trim(),
         categoryId: String(row?.categoryId || product?.categoryId || product?.category || ''),
         category: normalizeCampaignInsightText(String(row?.category || product?.categoryName || product?.category || '-').trim() || '-'),
+        categoryLabelId: String(row?.categoryLabelId || row?.labelId || row?.tagId || product?.categoryLabelId || product?.labelId || product?.tagId || product?.selectedTagId || ''),
+        categoryLabelName: normalizeCampaignInsightText(String(row?.categoryLabelName || row?.labelName || row?.etiket || product?.categoryLabelName || product?.labelName || product?.etiket || product?.tag || '').trim()),
         brand: normalizeCampaignInsightText(normalizeCampaignBrandLabel(row?.brand || product?.brand || product?.brandName || '')),
         supplierName: normalizeCampaignInsightText(String(row?.supplierName || product?.supplierName || product?.supplier || '-').trim() || '-'),
         sectionName: normalizeCampaignInsightText(String(row?.sectionName || product?.sectionName || product?.section || product?.shelfName || '-').trim() || '-'),
@@ -3858,6 +4155,74 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       };
     });
   }, [availableProductMap, pricingRows]);
+  const selectedCategoryIdSet = useMemo(
+    () => new Set((campaignDraft.targetCategoryIds || []).map((id) => String(id || '').trim()).filter(Boolean)),
+    [campaignDraft.targetCategoryIds],
+  );
+  const allCategoryLabelOptions = useMemo(() => {
+    const optionMap = new Map();
+    const addOption = ({ id, label, categoryId, categoryName }) => {
+      const safeId = String(id || label || '').trim();
+      const safeLabel = normalizeCampaignInsightText(String(label || safeId || '').trim());
+      const safeCategoryId = String(categoryId || '').trim();
+      if (!safeId || !safeLabel || !safeCategoryId) return;
+      optionMap.set(safeId, {
+        id: safeId,
+        label: safeLabel,
+        categoryId: safeCategoryId,
+        categoryName: normalizeCampaignInsightText(String(categoryName || '').trim()),
+      });
+    };
+
+    (Array.isArray(availableCategoryLabels) ? availableCategoryLabels : []).forEach((item) => {
+      addOption({
+        id: item?.labelId || item?.id || item?.tagId || item?.selectedTagId || item?.labelName,
+        label: item?.labelName || item?.name || item?.etiket || item?.label,
+        categoryId: item?.categoryId || item?.categoryCode || item?.category?.id,
+        categoryName: item?.categoryName || item?.category?.name,
+      });
+    });
+
+    (Array.isArray(availableCategories) ? availableCategories : []).forEach((category) => {
+      const categoryId = String(category?.id || category?.categoryId || '').trim();
+      const categoryName = String(category?.name || category?.categoryName || categoryId).trim();
+      const rawLabels = Array.isArray(category?.etiketler)
+        ? category.etiketler
+        : String(category?.etiketler || '').split(',').map((item) => item.trim()).filter(Boolean);
+      rawLabels.forEach((label) => {
+        const labelName = typeof label === 'object' ? (label.labelName || label.name || label.etiket || label.label) : label;
+        const labelId = typeof label === 'object' ? (label.labelId || label.id || label.tagId || labelName) : `${categoryId}:${labelName}`;
+        addOption({ id: labelId, label: labelName, categoryId, categoryName });
+      });
+    });
+
+    return [...optionMap.values()].sort((left, right) => left.label.localeCompare(right.label, 'tr-TR'));
+  }, [availableCategories, availableCategoryLabels]);
+  const selectedCategoryLabelIdSet = useMemo(
+    () => new Set((campaignDraft.targetCategoryLabelIds || []).map((id) => String(id || '').trim()).filter(Boolean)),
+    [campaignDraft.targetCategoryLabelIds],
+  );
+  const selectedCategoryLabelOptions = useMemo(
+    () => allCategoryLabelOptions.filter((option) => selectedCategoryLabelIdSet.has(option.id)),
+    [allCategoryLabelOptions, selectedCategoryLabelIdSet],
+  );
+  const visibleCategoryLabelOptions = useMemo(() => {
+    if (!selectedCategoryIdSet.size) return [];
+    const needle = normalizeSearchText(categoryLabelSearch);
+    return allCategoryLabelOptions
+      .filter((option) => selectedCategoryIdSet.has(option.categoryId))
+      .filter((option) => !needle || normalizeSearchText(`${option.label} ${option.categoryName}`).includes(needle))
+      .slice(0, 40);
+  }, [allCategoryLabelOptions, categoryLabelSearch, selectedCategoryIdSet]);
+
+  useEffect(() => {
+    if (!campaignDraft.targetCategoryLabelIds?.length) return;
+    const allowedIds = new Set(allCategoryLabelOptions.filter((option) => selectedCategoryIdSet.has(option.categoryId)).map((option) => option.id));
+    const nextIds = campaignDraft.targetCategoryLabelIds.filter((id) => allowedIds.has(String(id || '').trim()));
+    if (nextIds.length !== campaignDraft.targetCategoryLabelIds.length) {
+      setCampaignDraft((current) => ({ ...current, targetCategoryLabelIds: nextIds }));
+    }
+  }, [allCategoryLabelOptions, campaignDraft.targetCategoryLabelIds, selectedCategoryIdSet]);
 
   const campaignSuggestions = useMemo(() => {
     const base = Array.isArray(backendCampaignSuggestions) ? backendCampaignSuggestions : [];
@@ -3865,30 +4230,56 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     return buildCampaignSuggestionPresentation(base).all;
   }, [backendCampaignSuggestions, suggestionRefreshKey]);
 
+  const filteredCampaignSuggestions = campaignSuggestions;
+
   const campaignSuggestionPresentation = useMemo(
-    () => buildCampaignSuggestionPresentation(campaignSuggestions),
-    [campaignSuggestions]
+    () => buildCampaignSuggestionPresentation(filteredCampaignSuggestions),
+    [filteredCampaignSuggestions]
+  );
+  const actionableCampaignSuggestions = useMemo(
+    () => filteredCampaignSuggestions.filter(isCampaignSuggestionActionable),
+    [filteredCampaignSuggestions]
+  );
+  const actionableCampaignSuggestionPresentation = useMemo(
+    () => buildCampaignSuggestionPresentation(actionableCampaignSuggestions),
+    [actionableCampaignSuggestions]
   );
 
-  const dashboardCampaignSuggestions = campaignSuggestionPresentation.dashboardHighlights;
-  const moduleCampaignSuggestions = campaignSuggestionPresentation.byModule[campaignTypeView] || [];
+  const dashboardCampaignSuggestions = actionableCampaignSuggestionPresentation.dashboardHighlights;
+  const campaignSuggestionCandidateRows = actionableCampaignSuggestionPresentation.all;
+  const moduleCampaignSuggestions = actionableCampaignSuggestionPresentation.byModule[campaignTypeView] || [];
   const visibleCampaignSuggestions = campaignTypeView === 'all'
     ? dashboardCampaignSuggestions
     : moduleCampaignSuggestions;
 
-  useEffect(() => {
-    setCampaignSuggestionPage(1);
-  }, [visibleCampaignSuggestions.length, campaignTypeView]);
-
-  const campaignSuggestionTotalPages = Math.max(1, Math.ceil(visibleCampaignSuggestions.length / CAMPAIGN_SUGGESTIONS_PAGE_SIZE));
-  const safeCampaignSuggestionPage = Math.min(campaignSuggestionPage, campaignSuggestionTotalPages);
-  const pagedCampaignSuggestions = useMemo(
-    () => visibleCampaignSuggestions.slice(
-      (safeCampaignSuggestionPage - 1) * CAMPAIGN_SUGGESTIONS_PAGE_SIZE,
-      safeCampaignSuggestionPage * CAMPAIGN_SUGGESTIONS_PAGE_SIZE,
-    ),
-    [visibleCampaignSuggestions, safeCampaignSuggestionPage],
+  const campaignCandidatePage = Math.max(1, Number(campaignCandidatePagesByModule[campaignTypeView] || 1));
+  const setCampaignCandidatePage = (updater) => {
+    setCampaignCandidatePagesByModule((current) => {
+      const previous = Math.max(1, Number(current[campaignTypeView] || 1));
+      const next = typeof updater === 'function' ? updater(previous) : updater;
+      return { ...current, [campaignTypeView]: Math.max(1, Number(next) || 1) };
+    });
+  };
+  const campaignCandidateTotalPages = Math.max(1, Math.ceil(campaignSuggestionCandidateRows.length / CAMPAIGN_CANDIDATE_PAGE_SIZE));
+  const safeCampaignCandidatePage = Math.min(campaignCandidatePage, campaignCandidateTotalPages);
+  const campaignCandidateStartIndex = campaignSuggestionCandidateRows.length
+    ? ((safeCampaignCandidatePage - 1) * CAMPAIGN_CANDIDATE_PAGE_SIZE) + 1
+    : 0;
+  const campaignCandidateEndIndex = Math.min(
+    campaignSuggestionCandidateRows.length,
+    safeCampaignCandidatePage * CAMPAIGN_CANDIDATE_PAGE_SIZE,
   );
+  const pagedCampaignSuggestionCandidateRows = useMemo(
+    () => campaignSuggestionCandidateRows.slice(
+      (safeCampaignCandidatePage - 1) * CAMPAIGN_CANDIDATE_PAGE_SIZE,
+      safeCampaignCandidatePage * CAMPAIGN_CANDIDATE_PAGE_SIZE,
+    ),
+    [campaignSuggestionCandidateRows, safeCampaignCandidatePage],
+  );
+
+  useEffect(() => {
+    setCampaignCandidatePage(1);
+  }, [campaignSuggestionCandidateRows.length, campaignTypeView]);
 
   const expirySignalRows = useMemo(
     () => campaignAnalyticsRows
@@ -3906,40 +4297,39 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     [campaignAnalyticsRows]
   );
 
-  const campaignSupplierOptions = useMemo(
-    () => [...new Set(campaignAnalyticsRows.map((row) => String(row?.supplierName || '').trim()).filter((value) => value && value !== '-'))].sort((a, b) => a.localeCompare(b, 'tr-TR')),
-    [campaignAnalyticsRows]
-  );
-  const campaignSectionOptions = useMemo(
-    () => [...new Set(campaignAnalyticsRows.map((row) => String(row?.sectionName || '').trim()).filter((value) => value && value !== '-'))].sort((a, b) => a.localeCompare(b, 'tr-TR')),
-    [campaignAnalyticsRows]
-  );
   const campaignScenarioOptions = useMemo(() => ({
     'discount-10': { label: '%10 indirim', discountRate: 10, description: 'Daha kontrollü hacim artışı hedefler.' },
     'discount-20': { label: '%20 indirim', discountRate: 20, description: 'SKT ve stok baskısında dengeli hızlanma sağlar.' },
-    'discount-30': { label: '%30 indirim', discountRate: 30, description: 'Çok kritik ürünlerde hızlı tüketim etkisi üretir.' },
+    'discount-30': { label: '%30 indirim', discountRate: 30, description: 'Çok kritik Ürünlerde hızlı tüketim etkisi Üretir.' },
     'bundle': { label: 'Çoklu alım', discountRate: 16, description: 'Sepet büyütme ile stok eritme arasında dengeli bir seçenek sunar.' },
-    'price-up': { label: 'Fiyat artışı testi', discountRate: 0, description: 'Güçlü talep gören ürünlerde marj optimizasyonu odaklıdır.' },
+    'price-up': { label: 'Fiyat artışı testi', discountRate: 0, description: 'Güçlü talep gören Ürünlerde marj optimizasyonu odaklıdir.' },
   }), []);
 
   const expirySuggestions = useMemo(
-    () => campaignSuggestionPresentation.byModule.expiry || [],
-    [campaignSuggestionPresentation]
+    () => actionableCampaignSuggestionPresentation.byModule.expiry || [],
+    [actionableCampaignSuggestionPresentation]
   );
 
   const salesSuggestions = useMemo(
-    () => campaignSuggestionPresentation.byModule.sales || [],
-    [campaignSuggestionPresentation]
+    () => actionableCampaignSuggestionPresentation.byModule.sales || [],
+    [actionableCampaignSuggestionPresentation]
   );
+
+  const campaignMatchesActiveModule = (item, { includeModule = true } = {}) => {
+    if (includeModule && campaignTypeView !== 'all' && !isCampaignInModule(item, campaignTypeView)) return false;
+    return true;
+  };
 
   const campaignSummary = useMemo(() => {
     const now = new Date();
-    const activeCampaignItems = campaigns.filter((item) => isCampaignCurrentlyActive(item, now));
+    const summaryCampaigns = campaigns;
+    const activeCampaignItems = summaryCampaigns.filter((item) => isCampaignCurrentlyActive(item, now));
     const active = activeCampaignItems.length;
-    const planned = campaigns.filter((item) => isCampaignPlanned(item, now)).length;
-    const dynamic = campaigns.filter((item) => item.type === 'dynamic').length;
-    const categoryBased = campaigns.filter((item) => item.type === 'category').length;
-    const urgentSuggestionCount = campaignSuggestions.filter((item) => item.priority === 'critical' || item.priority === 'high').length;
+    const planned = summaryCampaigns.filter((item) => isCampaignPlanned(item, now)).length;
+    const archive = summaryCampaigns.filter((item) => isDefaultCampaignArchiveRow(item, now)).length;
+    const dynamic = summaryCampaigns.filter((item) => item.type === 'dynamic').length;
+    const categoryBased = summaryCampaigns.filter((item) => item.type === 'category').length;
+    const urgentSuggestionCount = filteredCampaignSuggestions.filter((item) => item.priority === 'critical' || item.priority === 'high').length;
     const expiringSoon = activeCampaignItems.filter((item) => {
       if (item.isIndefinite || !item.endsAt) return false;
       const end = new Date(item.endsAt);
@@ -3948,79 +4338,46 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return diffDays >= 0 && diffDays <= 7;
     }).length;
     const campaignProductIds = new Set();
-    activeCampaignItems.forEach((campaign) => {
-      campaignAnalyticsRows.forEach((row) => {
-        if (getCampaignProductMatch(campaign, row)) {
-          const id = String(row?.productId || row?.id || '').trim();
-          if (id) campaignProductIds.add(id);
-        }
+    if (campaignTypeView === 'all') {
+      activeCampaignItems.forEach((campaign) => {
+        campaignAnalyticsRows.forEach((row) => {
+          if (getCampaignProductMatch(campaign, row)) {
+            const id = String(row?.productId || row?.id || '').trim();
+            if (id) campaignProductIds.add(id);
+          }
+        });
+        (Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : []).forEach((id) => {
+          const productId = String(id || '').trim();
+          if (productId) campaignProductIds.add(productId);
+        });
       });
-      (Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : []).forEach((id) => {
-        const productId = String(id || '').trim();
-        if (productId) campaignProductIds.add(productId);
-      });
-    });
+    }
 
     return {
-      total: campaigns.length,
+      total: summaryCampaigns.length,
       active,
       planned,
+      archive,
       dynamic,
       categoryBased,
       expiringSoon,
       promotedProducts: campaignProductIds.size,
       urgentSuggestionCount,
     };
-  }, [campaignAnalyticsRows, campaigns, campaignSuggestions]);
+  }, [campaignAnalyticsRows, campaignTypeView, campaigns, filteredCampaignSuggestions]);
 
   const filteredCampaigns = useMemo(() => {
-    const byType = campaignTypeView === 'all'
-      ? campaigns
-      : campaigns.filter((item) => isCampaignInModule(item, campaignTypeView));
-
-    const byStatus = campaignStatusView === 'all' ?
-       byType
-      : byType.filter((item) => {
-        if (campaignStatusView === 'active') return isCampaignCurrentlyActive(item);
-        if (campaignStatusView === 'planned') return isCampaignPlanned(item);
-        if (campaignStatusView === 'inactive') return !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item);
-        if (campaignStatusView === 'expiring') {
-          if (item.isIndefinite || !item.endsAt) return false;
-          const end = new Date(item.endsAt);
-          if (Number.isNaN(end.getTime())) return false;
-          const diffDays = Math.ceil((end.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
-          return diffDays >= 0 && diffDays <= 7;
-        }
-        return true;
-      });
-
-    const needle = String(campaignSearch || '').trim().toLowerCase();
-    if (!needle) return byStatus;
-
-    return byStatus.filter((item) => (
-      String(item.name || '').toLowerCase().includes(needle)
-      || String(item.type || '').toLowerCase().includes(needle)
-      || String(item.status || '').toLowerCase().includes(needle)
-    ));
-  }, [campaigns, campaignTypeView, campaignStatusView, campaignSearch]);
+    return campaigns.filter((item) => campaignMatchesActiveModule(item));
+  }, [campaignTypeView, campaigns]);
 
   const moduleCampaignRows = useMemo(() => {
     if (!['general', 'product', 'category', 'brand', 'expiry', 'sales'].includes(campaignTypeView)) {
       return [];
     }
 
-    const byType = campaigns.filter((item) => isCampaignInModule(item, campaignTypeView));
-    const needle = String(campaignSearch || '').trim().toLowerCase();
-    const searchedRows = needle
-      ? byType.filter((item) => (
-        String(item.name || '').toLowerCase().includes(needle)
-        || String(item.type || '').toLowerCase().includes(needle)
-        || String(item.status || '').toLowerCase().includes(needle)
-      ))
-      : byType;
-
-    return [...searchedRows].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-  }, [campaignSearch, campaignTypeView, campaigns]);
+    return [...filteredCampaigns.filter((item) => isCampaignInModule(item, campaignTypeView))]
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [campaignTypeView, filteredCampaigns]);
 
   const campaignSimulationDurationDays = useMemo(() => {
     const startsAt = String(campaignDraft.startsAt || '').trim();
@@ -4075,14 +4432,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return campaignAnalyticsRows.filter((row) => selectedProductIds.has(String(row?.productId || row?.id || '').trim()));
     }
     if (campaignDraft.type === 'category') {
-      const selectedCategoryIds = new Set((campaignDraft.targetCategoryIds || []).map((id) => String(id || '').trim()).filter(Boolean));
-      return campaignAnalyticsRows.filter((row) => selectedCategoryIds.has(String(row?.categoryId || '').trim()));
+      const selectedLabelIds = new Set((campaignDraft.targetCategoryLabelIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+      const selectedLabelNames = new Set(selectedCategoryLabelOptions.map((item) => normalizeSearchText(item.label)).filter(Boolean));
+      return campaignAnalyticsRows.filter((row) => {
+        if (!selectedCategoryIdSet.has(String(row?.categoryId || '').trim())) return false;
+        if (!selectedLabelIds.size) return true;
+        const rowLabelId = String(row?.categoryLabelId || '').trim();
+        const rowLabelName = normalizeSearchText(row?.categoryLabelName || row?.etiket || '');
+        return (rowLabelId && selectedLabelIds.has(rowLabelId)) || (rowLabelName && selectedLabelNames.has(rowLabelName));
+      });
     }
     if (campaignDraft.type === 'brand') {
       return campaignAnalyticsRows.filter((row) => selectedBrandKeySet.has(normalizeSearchText(row?.brand || '')));
     }
     return campaignAnalyticsRows;
-  }, [campaignAnalyticsRows, campaignDraft.targetCategoryIds, campaignDraft.targetProductIds, campaignDraft.type, selectedBrandKeySet]);
+  }, [campaignAnalyticsRows, campaignDraft.targetCategoryLabelIds, campaignDraft.targetProductIds, campaignDraft.type, selectedBrandKeySet, selectedCategoryIdSet, selectedCategoryLabelOptions]);
   const campaignDraftScopeProductCount = useMemo(() => {
     if (campaignDraft.type === 'general') {
       return Math.max(
@@ -4103,7 +4467,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         ? 'Kategori Bazlı Kampanya'
         : campaignTypeView === 'brand'
           ? 'Marka Bazlı Kampanya'
-          : 'Genel Mağaza İndirimi',
+          : 'Mağaza Geneli İndirim',
     currency: form.currency,
     emptyMessage: campaignDraft.type === 'product'
       ? 'Simülasyon için en az bir Ürün seçin.'
@@ -4124,6 +4488,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       isIndefinite: Boolean(campaignDraft.isIndefinite),
       targetProductIds: requestType === 'product' && Array.isArray(campaignDraft.targetProductIds) ? campaignDraft.targetProductIds : [],
       targetCategoryIds: requestType === 'category' && Array.isArray(campaignDraft.targetCategoryIds) ? campaignDraft.targetCategoryIds : [],
+      targetCategoryLabelIds: requestType === 'category' && Array.isArray(campaignDraft.targetCategoryLabelIds) ? campaignDraft.targetCategoryLabelIds : [],
+      targetCategoryLabels: requestType === 'category' ? selectedCategoryLabelOptions.map((item) => item.label).filter(Boolean) : [],
       targetBrands: requestType === 'brand' ? selectedCampaignBrands : [],
       scopeLabel: campaignTypeView === 'product'
         ? 'Ürün Bazlı Kampanya'
@@ -4131,7 +4497,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           ? 'Kategori Bazlı Kampanya'
           : campaignTypeView === 'brand'
             ? 'Marka Bazlı Kampanya'
-            : 'Genel Mağaza İndirimi',
+            : 'Mağaza Geneli İndirim',
       currency: form.currency,
     };
   }, [
@@ -4140,12 +4506,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     campaignDraft.isIndefinite,
     campaignDraft.startsAt,
     campaignDraft.targetCategoryIds,
+    campaignDraft.targetCategoryLabelIds,
     campaignDraft.targetProductIds,
     campaignDraft.type,
     campaignSimulationDurationDays,
     campaignTypeView,
     form.currency,
     selectedCampaignBrands,
+    selectedCategoryLabelOptions,
   ]);
   const campaignSimulationRequestKey = useMemo(
     () => JSON.stringify(campaignSimulationRequest),
@@ -4154,6 +4522,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   useEffect(() => {
     if (!isCampaignPage) return;
+    if (!['product', 'category', 'brand'].includes(campaignTypeView)) {
+      setBackendCampaignSimulation(null);
+      setCampaignSimulationLoading(false);
+      setCampaignSimulationError('');
+      return;
+    }
     let cancelled = false;
 
     const loadCampaignSimulation = async () => {
@@ -4176,7 +4550,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     return () => {
       cancelled = true;
     };
-  }, [campaignSimulationRequestKey, isCampaignPage]);
+  }, [campaignSimulationRequestKey, campaignTypeView, isCampaignPage]);
 
   const campaignSimulation = useMemo(() => {
     if (backendCampaignSimulation) {
@@ -4222,7 +4596,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     durationDays: Math.max(3, campaignSimulationDurationDays),
     scopeLabel: 'Otomasyon Kampanya Etkisi',
     currency: form.currency,
-    emptyMessage: 'Mevcut kural koşullarına uyan Ürün bulunamadı.',
+    emptyMessage: 'Mevcut kural kosullarina uyan Ürün bulunamadı.',
   }), [automationPreviewRows, campaignDraft.discountRate, campaignDraft.dynamicRule?.discountRate, campaignSimulationDurationDays, form.currency]);
 
   const crossModuleInsights = useMemo(() => mergeCrossModuleIntelligence({
@@ -4232,12 +4606,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
   const campaignEmptyState = useMemo(() => buildCampaignEmptyState({
     campaigns: filteredCampaigns,
-    suggestions: campaignSuggestions,
+    suggestions: filteredCampaignSuggestions,
     tab: campaignTypeView,
-  }), [filteredCampaigns, campaignSuggestions, campaignTypeView]);
+  }), [filteredCampaigns, filteredCampaignSuggestions, campaignTypeView]);
 
   const campaignHomeSummary = useMemo(() => {
-    const cards = form.customerRelations?.giftCards || [];
+    const cards = giftCards;
     const activeCards = cards.filter((card) => card.isActive !== false).length;
     const inactiveCards = Math.max(0, cards.length - activeCards);
     const utilizationRate = cards.length ? Number(((inactiveCards / cards.length) * 100).toFixed(1)) : 0;
@@ -4263,49 +4637,51 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       marginImpact,
       expiringRows,
     };
-  }, [campaigns, form.customerRelations?.giftCards]);
+  }, [campaigns, giftCards]);
 
-  const activeCampaignRows = useMemo(
-    () => campaigns
-      .filter((item) => isCampaignCurrentlyActive(item))
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
-    [campaigns],
-  );
-
-  const plannedCampaignRows = useMemo(
-    () => campaigns
-      .filter((item) => isCampaignPlanned(item))
-      .sort((a, b) => new Date(a.startsAt || 0).getTime() - new Date(b.startsAt || 0).getTime()),
-    [campaigns],
-  );
-
-  const archiveCampaignRows = useMemo(
-    () => campaigns
-      .filter((item) => !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item))
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
-    [campaigns],
-  );
-
-  const activeFilteredCampaignRows = useMemo(
-    () => filteredCampaigns
-      .filter((item) => isCampaignCurrentlyActive(item))
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
-    [filteredCampaigns],
-  );
-
-  const plannedFilteredCampaignRows = useMemo(
-    () => filteredCampaigns
-      .filter((item) => isCampaignPlanned(item))
-      .sort((a, b) => new Date(a.startsAt || 0).getTime() - new Date(b.startsAt || 0).getTime()),
-    [filteredCampaigns],
-  );
-
-  const archiveFilteredCampaignRows = useMemo(
-    () => filteredCampaigns
-      .filter((item) => !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item))
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
-    [filteredCampaigns],
-  );
+  const homeCampaignTableConfig = useMemo(() => {
+    const now = new Date();
+    if (homeCampaignTableView === 'planned') {
+      return {
+        title: 'Planlanan Kampanyalar',
+        description: 'Henüz başlamamış, başlangıç tarihini bekleyen kampanyalar burada izlenir.',
+        rows: filteredCampaigns
+          .filter((item) => isCampaignPlanned(item, now))
+          .sort((a, b) => new Date(a.startsAt || 0).getTime() - new Date(b.startsAt || 0).getTime()),
+        tableKey: 'home-planned',
+        mode: 'planned',
+        sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.active,
+        emptyTitle: 'Planlanan kampanya bulunmuyor',
+        emptyDescription: 'Başlangıç tarihini bekleyen kampanya kaydı yok.',
+      };
+    }
+    if (homeCampaignTableView === 'archive') {
+      return {
+        title: CAMPAIGN_TABLE_SECTION_META.all.archive.title,
+        description: 'Bitiş tarihi geçmiş eski kampanyalar gizlenerek pasif veya arşivlenmiş güncel kayıtlar izlenir.',
+        rows: filteredCampaigns
+          .filter((item) => isDefaultCampaignArchiveRow(item, now))
+          .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
+        tableKey: 'home-archive',
+        mode: 'archive',
+        sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.archive,
+        emptyTitle: 'Arşiv kaydı bulunmuyor',
+        emptyDescription: 'Varsayılan arşivde gösterilecek güncel kayıt yok.',
+      };
+    }
+    return {
+      title: 'Aktif Kampanyalar',
+      description: 'Şu an yayında olan gerçek kampanya kayıtları burada izlenir.',
+      rows: filteredCampaigns
+        .filter((item) => isCampaignCurrentlyActive(item, now))
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()),
+      tableKey: 'home-active',
+      mode: 'active',
+      sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.active,
+      emptyTitle: 'Aktif kampanya bulunmuyor',
+      emptyDescription: 'Şu an yayında olan kampanya kaydı yok.',
+    };
+  }, [filteredCampaigns, homeCampaignTableView]);
 
   const campaignTypeChartData = useMemo(() => {
     const buckets = {
@@ -4318,7 +4694,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       dynamic: 0,
     };
 
-    campaigns.forEach((item) => {
+    filteredCampaigns.forEach((item) => {
       const moduleKey = classifyCampaignModule(item);
       const typeKey = String(item?.type || '').trim().toLowerCase();
       const key = buckets[moduleKey] !== undefined ? moduleKey : typeKey;
@@ -4330,7 +4706,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     });
 
     return [
-      { name: 'Genel', count: buckets.general },
       { name: 'Ürün', count: buckets.product },
       { name: 'Kategori', count: buckets.category },
       { name: 'Marka', count: buckets.brand },
@@ -4338,12 +4713,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       { name: 'Satış', count: buckets.sales },
       { name: 'Dinamik', count: buckets.dynamic },
     ];
-  }, [campaigns]);
+  }, [filteredCampaigns]);
 
   const campaignStatusChartData = useMemo(() => ([
     { name: 'Yayında', count: campaignSummary.active },
     { name: 'Planlandı', count: campaignSummary.planned },
-    { name: 'Yayında Değil', count: Math.max(0, campaignSummary.total - campaignSummary.active - campaignSummary.planned) },
+    { name: 'Yayında Değil', count: campaignSummary.archive },
     { name: 'Yakında Bitecek', count: campaignSummary.expiringSoon },
   ]), [campaignSummary]);
 
@@ -4355,7 +4730,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       low: 0,
     };
 
-    campaignSuggestions.forEach((item) => {
+    actionableCampaignSuggestions.forEach((item) => {
       const priority = String(item?.priority || '').toLowerCase('tr-TR');
       if (priority === 'critical') buckets.critical += 1;
       else if (priority === 'high') buckets.high += 1;
@@ -4369,44 +4744,128 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       { name: 'Orta', count: buckets.medium },
       { name: 'Düşük', count: buckets.low },
     ];
-  }, [campaignSuggestions]);
-  const hasCampaignStatusChartData = campaignStatusChartData.some((item) => Number(item.count || 0) > 0);
-  const hasCampaignTypeChartData = campaignTypeChartData.some((item) => Number(item.count || 0) > 0);
-  const hasCampaignSuggestionChartData = campaignSuggestionChartData.some((item) => Number(item.count || 0) > 0);
+  }, [actionableCampaignSuggestions]);
+  const campaignStatusDistributionData = useMemo(() => {
+    const now = new Date();
+    const buckets = {
+      active: 0,
+      planned: 0,
+      expired: 0,
+      stopped: 0,
+    };
+
+    filteredCampaigns.forEach((item) => {
+      const rawStatus = String(item?.status || '').trim().toLowerCase();
+      const endsAt = getCampaignEndBoundary(item);
+      if (isCampaignCurrentlyActive(item, now)) {
+        buckets.active += 1;
+      } else if (isCampaignPlanned(item, now)) {
+        buckets.planned += 1;
+      } else if (!item?.isIndefinite && endsAt && endsAt < now) {
+        buckets.expired += 1;
+      } else if (['archived', 'paused', 'inactive', 'cancelled', 'canceled', 'deleted', 'expired'].includes(rawStatus) || item?.isActive === false) {
+        buckets.stopped += 1;
+      } else {
+        buckets.stopped += 1;
+      }
+    });
+
+    return [
+      { name: 'Yayında', count: buckets.active, color: '#059669' },
+      { name: 'Planlı', count: buckets.planned, color: '#d97706' },
+      { name: 'Bitmiş', count: buckets.expired, color: '#64748b' },
+      { name: 'Sonlandırılmış', count: buckets.stopped, color: '#dc2626' },
+    ];
+  }, [filteredCampaigns]);
+
+  const campaignTypeDistributionData = useMemo(() => {
+    const colors = ['#4f46e5', '#059669', '#0ea5e9', '#7c3aed', '#dc2626', '#d97706', '#0891b2'];
+    return campaignTypeChartData.map((item, index) => ({
+      ...item,
+      color: colors[index % colors.length],
+    }));
+  }, [campaignTypeChartData]);
+
+  const campaignSuggestionDistributionData = useMemo(() => {
+    const colors = ['#dc2626', '#ea580c', '#d97706', '#059669'];
+    return campaignSuggestionChartData.map((item, index) => ({
+      ...item,
+      color: colors[index % colors.length],
+    }));
+  }, [campaignSuggestionChartData]);
+
+  const hasCampaignStatusChartData = campaignStatusDistributionData.some((item) => Number(item.count || 0) > 0);
+  const hasCampaignTypeChartData = campaignTypeDistributionData.some((item) => Number(item.count || 0) > 0);
+  const hasCampaignSuggestionChartData = campaignSuggestionDistributionData.some((item) => Number(item.count || 0) > 0);
+  const campaignHeaderRefreshLabel = `Son güncelleme: ${formatCampaignRefreshDateTime(campaignSuggestionRefreshedAt)}`;
+  const campaignStatusEmptyState = campaigns.length
+    ? {
+        title: 'Seçili filtrelerde sonuç bulunamadı',
+        description: 'Kampanya durumu dağılımı için uygun kayıt görünmüyor.',
+      }
+    : {
+        title: 'Henüz kampanya verisi oluşmadı',
+        description: 'Kampanya kaydı oluşturulduğunda durum dağılımı burada görünecek.',
+      };
+  const campaignTypeEmptyState = campaigns.length
+    ? {
+        title: 'Bu dönem için dağılım verisi oluşmadı',
+        description: 'Seçili kapsamda kampanya tipi dağılımı bulunmuyor.',
+      }
+    : {
+        title: 'Gösterilecek kampanya verisi bulunmuyor',
+        description: 'Kampanya eklendiğinde tür dağılımı otomatik hesaplanacak.',
+      };
+  const campaignSuggestionEmptyState = crossModuleError
+    ? {
+        title: 'Veri yüklenemedi, lütfen yenileyin',
+        description: 'Öneri önceliği verisi alınamadı.',
+      }
+    : actionableCampaignSuggestions.length
+      ? {
+          title: 'Seçili filtrelerde sonuç bulunamadı',
+          description: 'Öneri önceliği dağılımı için uygun kayıt yok.',
+        }
+      : {
+          title: 'Öneri önceliği verisi henüz oluşmadı',
+          description: 'Kampanya önerileri üretildiğinde öncelik dağılımı burada görünecek.',
+        };
 
   const isHomeCampaignView = campaignTypeView === 'all';
-  const isCampaignBuilderView = ['general', 'product', 'category', 'brand'].includes(campaignTypeView);
+  const isCampaignBuilderView = ['product', 'category', 'brand'].includes(campaignTypeView);
+  const isManualOnlyCampaignModule = ['category', 'brand'].includes(campaignTypeView);
+  const shouldShowCampaignSuggestionPanel = isCampaignBuilderView && !isManualOnlyCampaignModule;
   const campaignBuilderMeta = useMemo(() => {
     if (campaignTypeView === 'product') {
       return {
         title: 'Ürün Bazlı Kampanya',
-        description: 'Kampanyanın uygulanacağı ürünleri seçin.',
+        description: 'Kampanyanin uygulanacagi Ürünleri seçin.',
         forcedType: 'product',
         scopeLabel: 'Ürün Seçimi',
-        scopeDescription: 'Kampanyanın uygulanacağı ürünleri seçin.',
+        scopeDescription: 'Kampanyanin uygulanacagi Ürünleri seçin.',
       };
     }
     if (campaignTypeView === 'category') {
       return {
         title: 'Kategori Bazlı Kampanya',
-        description: 'Kampanyanın uygulanacağı kategorileri seçin.',
+        description: 'Kampanyanin uygulanacagi kategorileri seçin.',
         forcedType: 'category',
         scopeLabel: 'Kategori Seçimi',
-        scopeDescription: 'Kampanyanın uygulanacağı kategorileri seçin.',
+        scopeDescription: 'Kampanyanin uygulanacagi kategorileri seçin.',
       };
     }
     if (campaignTypeView === 'brand') {
       return {
         title: 'Marka Bazlı Kampanya',
-        description: 'Kampanyanın uygulanacağı markaları seçin.',
+        description: 'Kampanyanin uygulanacagi markalari seçin.',
         forcedType: 'brand',
         scopeLabel: 'Marka Seçimi',
-        scopeDescription: 'Kampanyanın uygulanacağı markaları seçin.',
+        scopeDescription: 'Kampanyanin uygulanacagi markalari seçin.',
       };
     }
     return {
-      title: 'Genel Kampanya',
-      description: 'Tüm mağaza ürünlerine uygulanacak genel kampanya bilgilerini tanımlayın.',
+      title: 'Mağaza Geneli Kampanya',
+      description: 'Tüm mağaza Ürünlerine uygulanacak genel kampanya bilgilerini tanımlayın.',
       forcedType: 'general',
       scopeLabel: '',
       scopeDescription: '',
@@ -4437,40 +4896,40 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     if (!name) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Kampanya adı zorunludur.' });
-      return;
+      return false;
     }
 
     if (!['general', 'category', 'product', 'brand', 'dynamic'].includes(type)) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Kampanya tipi geçersiz.' });
-      return;
+      return false;
     }
 
     if (!Number.isFinite(discountRate) || discountRate <= 0 || discountRate > 100) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'İndirim oranı 1-100 arasında olmalıdır.' });
-      return;
+      return false;
     }
 
     if (!isIndefinite && (!startsAt || !endsAt)) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Başlangıç ve bitiş tarihi zorunludur.' });
-      return;
+      return false;
     }
 
     if (!isIndefinite && new Date(startsAt) > new Date(endsAt)) {
-      setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Bitiş tarihi başlangıçtan önce olamaz.' });
-      return;
+      setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Bitiş tarihi başlangıçtan Önce olamaz.' });
+      return false;
     }
 
     if (type === 'category' && (!Array.isArray(campaignDraft.targetCategoryIds) || campaignDraft.targetCategoryIds.length === 0)) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Kategori kampanyası için en az bir kategori seçin.' });
-      return;
+      return false;
     }
     if (type === 'product' && (!Array.isArray(campaignDraft.targetProductIds) || campaignDraft.targetProductIds.length === 0)) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Ürün kampanyası için en az bir Ürün seçin.' });
-      return;
+      return false;
     }
     if (type === 'brand' && (!Array.isArray(campaignDraft.targetBrands) || campaignDraft.targetBrands.length === 0)) {
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: 'Marka kampanyası için en az bir marka seçin.' });
-      return;
+      return false;
     }
 
     const previousCustomerRelations = form.customerRelations || {};
@@ -4510,6 +4969,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       priority,
       status: campaignDraft.isActive ? (draftWillBePlanned ? 'scheduled' : 'active') : 'paused',
       targetCategoryIds: type === 'category' ? campaignDraft.targetCategoryIds : [],
+      targetCategoryLabelIds: type === 'category' ? campaignDraft.targetCategoryLabelIds : [],
+      targetCategoryLabels: type === 'category' ? selectedCategoryLabelOptions.map((item) => item.label).filter(Boolean) : [],
       targetBrands: type === 'brand' ? selectedCampaignBrands : [],
       targetBrand: type === 'brand' ? selectedCampaignBrands.join(', ') : String(campaignDraft.targetBrand || '').trim(),
       targetProductIds,
@@ -4556,7 +5017,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       setUpdatedAt(response.updatedAt || '');
       invalidateProductCache();
 
-      setCampaignDraft(createDefaultCampaignDraft());
+      let notificationFailed = false;
+      if (!existingCampaign && String(campaignDraft.sourceContext || '').trim().toLowerCase() === 'pricing_demand_analysis') {
+        try {
+          await notificationService.create(buildCampaignCreatedNotificationPayload({
+            campaign: nextCampaign,
+            campaignName: nextCampaign.name,
+            source: 'pricing_demand_analysis',
+          }));
+        } catch (notificationError) {
+          notificationFailed = true;
+          console.warn('[campaign-notification:create:error]', notificationError);
+        }
+      }
+
+      resetCampaignDraft(activeCampaignDraftModule);
       setEditingCampaignId('');
       setSelectedCampaignDetail(null);
       setAutomationHistory((current) => ([
@@ -4570,18 +5045,22 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         ...current,
       ]).slice(0, 80));
       setToast({
-        type: 'success',
-        title: 'Kampanya Yönetimi',
-        message: draftWillBePlanned
-          ? `Bu kampanya ileri tarihli olarak planlandı. Kampanya ${formatCampaignDate(startsAt)} tarihinde başlayacak ve o tarihe kadar fiyatlara yansımayacaktır.`
+        type: notificationFailed ? 'warning' : 'success',
+        title: notificationFailed ? 'Kampanya kaydedildi' : 'Kampanya Yönetimi',
+        message: notificationFailed
+          ? 'Kampanya oluşturuldu ancak bildirim oluşturulamadı.'
+          : draftWillBePlanned
+          ? `Bu kampanya ileri tarihli olarak planlandi. Kampanya ${formatCampaignDate(startsAt)} tarihinde baslayacak ve o tarihe kadar fiyatlara yansimayacaktir.`
           : (existingCampaign ? 'Kampanya güncellendi.' : 'Kampanya eklendi.'),
       });
+      return true;
     } catch (error) {
       setForm((current) => ({
         ...current,
         customerRelations: previousCustomerRelations,
       }));
       setToast({ type: 'error', title: 'Kampanya Yönetimi', message: error?.message || (existingCampaign ? 'Kampanya güncellenemedi.' : 'Kampanya kaydedilemedi.') });
+      return false;
     }
   };
 
@@ -4600,6 +5079,15 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   };
 
   const createCampaignFromSuggestion = (suggestion) => {
+    if (!isCampaignSuggestionDiscountActionable(suggestion)) {
+      setSelectedCampaignSuggestion(suggestion);
+      setToast({
+        type: 'warning',
+        title: 'Kampanya YÃ¶netimi',
+        message: 'Bu sinyal indirim kampanyasÄ± deÄŸil; fiyat, maliyet ve marj koÅŸullarÄ±nÄ± detaydan inceleyin.',
+      });
+      return;
+    }
     const nextProductIds = Array.isArray(suggestion.productIds) ? suggestion.productIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
     const productIdSet = new Set(nextProductIds);
     const derivedCategoryIds = availableProducts
@@ -4612,60 +5100,59 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       .filter(isValidCampaignBrandLabel);
     const nextCategoryIds = Array.isArray(suggestion.categoryIds) && suggestion.categoryIds.length ? suggestion.categoryIds : derivedCategoryIds;
     const nextBrands = Array.isArray(suggestion.brandNames) && suggestion.brandNames.length ? suggestion.brandNames : derivedBrands;
-    const targetView = suggestion.type === 'product' || (suggestion.type === 'dynamic' && nextProductIds.length) ? 'product' : suggestion.type === 'category' ? 'category' : suggestion.type === 'brand' ? 'brand' : 'general';
-    const sourceModule = campaignTypeView === 'expiry'
-      ? 'expiry'
-      : campaignTypeView === 'sales'
-        ? 'sales'
-        : (String(suggestion?.id || '') === 'near-expiry'
-          ? 'expiry'
-          : String(suggestion?.id || '') === 'slow-moving'
-            ? 'sales'
-            : targetView);
+    const suggestionDraftTarget = resolveCampaignSuggestionDraftTarget({
+      ...suggestion,
+      productIds: nextProductIds,
+      categoryIds: nextCategoryIds,
+      brandNames: nextBrands,
+    }, campaignTypeView);
+    const targetView = suggestionDraftTarget.targetView;
+    if (!targetView) {
+      setSelectedCampaignSuggestion(suggestion);
+      setToast({
+        type: 'warning',
+        title: 'Kampanya Yönetimi',
+        message: 'Bu fırsat için önce ürün, kategori veya marka kapsamı netleşmeli.',
+      });
+      return;
+    }
+    const sourceModule = suggestionDraftTarget.sourceModule;
+    const recommendedDiscount = Number(suggestion.recommendedDiscount ?? suggestion.recommendedDiscountRate);
     const recommendationTitle = normalizeCampaignInsightText(suggestion.title || '');
     const publicName = resolvePublicCampaignName({
       name: recommendationTitle,
       type: targetView,
       sourceModule,
     });
-    setCampaignDraft((current) => ({
-      ...current,
+    hydrateCampaignDraft(targetView, {
+      ...createDefaultCampaignDraft(targetView),
       name: publicName,
       publicName,
       displayName: publicName,
       internalName: recommendationTitle,
       recommendationTitle,
-      type: targetView === 'product' ? 'product' : targetView === 'category' ? 'category' : targetView === 'brand' ? 'brand' : 'general',
+      type: targetView,
       sourceModule,
-      discountRate: String(suggestion.recommendedDiscount || 10),
+      discountRate: Number.isFinite(recommendedDiscount) && recommendedDiscount > 0 ? String(recommendedDiscount) : '',
       priority: suggestion.priority === 'critical' ? 9 : suggestion.priority === 'high' ? 7 : 5,
       targetProductIds: targetView === 'product' ? nextProductIds : [],
-      targetCategoryIds: targetView === 'category' ? [...new Set(nextCategoryIds.map((id) => String(id || '').trim()).filter(Boolean))] : current.targetCategoryIds,
-      targetBrands: targetView === 'brand' ? normalizeCampaignBrandSelections(nextBrands, availableBrandLabelMap) : current.targetBrands,
-    }));
+      targetCategoryIds: targetView === 'category' ? [...new Set(nextCategoryIds.map((id) => String(id || '').trim()).filter(Boolean))] : [],
+      targetCategoryLabelIds: [],
+      targetBrands: targetView === 'brand' ? normalizeCampaignBrandSelections(nextBrands, availableBrandLabelMap) : [],
+    });
     setCampaignTypeView(targetView);
     setSelectedCampaignSuggestion(null);
   };
 
   const applyCampaignKpiAction = (key) => {
-    if (key === 'expiring') {
-      setCampaignStatusView('expiring');
-      return;
-    }
-    if (key === 'planned') {
-      setCampaignStatusView('planned');
-      return;
-    }
     if (key === 'dynamic') {
       setCampaignTypeView('dynamic');
       return;
     }
     if (key === 'urgent') {
       setCampaignTypeView('all');
-      setCampaignSuggestionFilter('dynamic');
       return;
     }
-    setCampaignStatusView('all');
     setCampaignTypeView('all');
   };
 
@@ -4713,13 +5200,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         id: `log-${Date.now()}`,
         type: 'bulk_action',
         status: 'success',
-        message: `${selectedCampaignIds.length} kampanyada ${action} uygulandı`,
+        message: `${selectedCampaignIds.length} kampanyada ${action} uygulandi`,
         createdAt: new Date().toISOString(),
       },
       ...current,
     ]).slice(0, 80));
 
-    setToast({ type: 'success', title: 'Kampanya Yönetimi', message: 'Toplu işlem uygulandı.' });
+    setToast({ type: 'success', title: 'Kampanya Yönetimi', message: 'Toplu işlem uygulandi.' });
   };
 
   const removeCampaign = async (campaignId) => {
@@ -4727,29 +5214,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...(form.customerRelations || {}),
       campaigns: (form.customerRelations?.campaigns || []).filter((item) => item.id !== campaignId),
     }, 'Kampanya silindi.', 'Kampanya silinemedi.');
-  };
-
-  const clearPastCampaigns = async () => {
-    const currentCampaigns = form.customerRelations?.campaigns || [];
-    const removableCampaigns = currentCampaigns.filter((item) => isPastCampaignClutter(item));
-    if (!removableCampaigns.length) {
-      setToast({ type: 'info', title: 'Kampanya Yönetimi', message: 'Temizlenecek geçmiş kampanya bulunmuyor.' });
-      return;
-    }
-
-    const removableIds = new Set(removableCampaigns.map((item) => String(item.id || '')));
-    const keptCampaigns = currentCampaigns.filter((item) => !removableIds.has(String(item.id || '')));
-    const persisted = await persistCustomerRelations({
-      ...(form.customerRelations || {}),
-      campaigns: keptCampaigns,
-    }, `${removableCampaigns.length} geçmiş kampanya temizlendi.`, 'Geçmiş kampanyalar temizlenemedi.', {
-      skipCampaignPriceHistorySync: true,
-    });
-
-    if (persisted) {
-      setSelectedCampaignIds([]);
-      setCampaignStatusView('all');
-    }
   };
 
   const toggleCampaignStatus = async (campaignId) => {
@@ -4770,7 +5234,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           isActive: nextActive,
           status: nextActive ? (isCampaignPlanned(item) ? 'scheduled' : 'active') : 'paused',
           archivedAt: nextActive ? null : item.archivedAt || null,
-          archiveReason: nextActive ? '' : 'Yönetim tarafından sonlandırıldı',
+          archiveReason: nextActive ? '' : 'Yönetim tarafindan sonlandırıldı',
           updatedAt: new Date().toISOString(),
         };
       }),
@@ -4782,15 +5246,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...(form.customerRelations || {}),
       campaigns: (form.customerRelations?.campaigns || []).map((item) => (
         item.id === campaignId
-          ? { ...item, isActive: false, status: 'archived', archivedAt: new Date().toISOString(), archiveReason: 'Yönetim tarafından sonlandırıldı' }
+          ? { ...item, isActive: false, status: 'archived', archivedAt: new Date().toISOString(), archiveReason: 'Yönetim tarafindan sonlandırıldı' }
           : item
       )),
-    }, 'Kampanya arşive taşındı.', 'Kampanya arşive taşınamadı.');
+    }, 'Kampanya arsive tasindi.', 'Kampanya arsive tasinamadı.');
   };
 
   const editCampaignFromRow = (campaign) => {
-    setCampaignDraft((current) => ({
-      ...current,
+    const campaignModule = normalizeCampaignDraftModuleKey(
+      campaign?.type === 'dynamic' ? (campaign?.sourceModule || campaign?.module || classifyCampaignModule(campaign)) : campaign?.type,
+      'general'
+    );
+    hydrateCampaignDraft(campaignModule, {
+      ...createDefaultCampaignDraft(campaignModule),
       name: campaign.name || '',
       publicName: campaign.publicName || campaign.displayName || campaign.name || '',
       internalName: campaign.internalName || '',
@@ -4803,10 +5271,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       isIndefinite: Boolean(campaign.isIndefinite),
       priority: campaign.priority || 0,
       targetCategoryIds: Array.isArray(campaign.targetCategoryIds) ? campaign.targetCategoryIds : [],
+      targetCategoryLabelIds: Array.isArray(campaign.targetCategoryLabelIds) ? campaign.targetCategoryLabelIds : [],
       targetProductIds: Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : [],
       targetBrands: normalizeCampaignBrandSelections(Array.isArray(campaign.targetBrands) ? campaign.targetBrands : [], availableBrandLabelMap),
       isActive: campaign.isActive !== false,
-    }));
+    });
+    if (campaignModule !== activeCampaignDraftModule) {
+      setCampaignTypeView(campaignModule);
+    }
     setProductCampaignCategoryFilter('');
     setProductCampaignBrandFilter('');
     setBrandCampaignSearch('');
@@ -4821,9 +5293,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const closeCampaignEditModal = () => {
     setEditingCampaignId('');
     setSelectedCampaignDetail(null);
-    setCampaignDraft(createDefaultCampaignDraft());
-    setProductCampaignCategoryFilter('');
-    setProductCampaignBrandFilter('');
+    resetCampaignDraft(activeCampaignDraftModule);
     setBrandCampaignSearch('');
   };
 
@@ -4832,7 +5302,24 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       const nextSet = current.targetCategoryIds.includes(categoryId) ?
          current.targetCategoryIds.filter((id) => id !== categoryId)
         : [...current.targetCategoryIds, categoryId];
-      return { ...current, targetCategoryIds: nextSet };
+      const nextCategoryIds = new Set(nextSet);
+      const nextLabelIds = (current.targetCategoryLabelIds || []).filter((labelId) => {
+        const option = allCategoryLabelOptions.find((item) => item.id === labelId);
+        return option && nextCategoryIds.has(option.categoryId);
+      });
+      return { ...current, targetCategoryIds: nextSet, targetCategoryLabelIds: nextLabelIds };
+    });
+  };
+
+  const toggleCampaignCategoryLabel = (labelId) => {
+    const safeLabelId = String(labelId || '').trim();
+    if (!safeLabelId) return;
+    setCampaignDraft((current) => {
+      const currentLabels = Array.isArray(current.targetCategoryLabelIds) ? current.targetCategoryLabelIds : [];
+      const nextSet = currentLabels.includes(safeLabelId)
+        ? currentLabels.filter((id) => id !== safeLabelId)
+        : [...currentLabels, safeLabelId];
+      return { ...current, targetCategoryLabelIds: nextSet };
     });
   };
 
@@ -4945,11 +5432,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     }));
   };
 
-  const filteredGiftCards = useMemo(() => giftCards.filter((card) => {
-    const nameMatch = !giftCardSearch || String(card.name || '').toLowerCase().includes(giftCardSearch.toLowerCase());
-    const amountMatch = !giftCardAmountFilter || Number(card.value || 0) >= Number(giftCardAmountFilter);
-    return nameMatch && amountMatch;
-  }), [giftCardAmountFilter, giftCardSearch, giftCards]);
+  const filteredGiftCards = giftCards;
   const campaignCustomerGiftCardMap = useMemo(() => {
     const entries = new Map();
     campaignCustomers.forEach((customer) => {
@@ -5001,101 +5484,46 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const autoSaleEligibleProductCount = useMemo(() => (
     availableProducts.filter((product) => {
       if (!product?.id || product.isActive === false || product.isListed === false) return false;
-      const stock = Number(product.currentStock ?? product.stockLevel ?? product.quantity ?? product.shelfQuantity ?? 0);
+      const stock = Number(
+        product.shelfStock
+        ?? product.shelfQuantity
+        ?? product.currentStock
+        ?? product.stockLevel
+        ?? product.totalStock
+        ?? product.quantity
+        ?? 0
+      );
       const price = Number(product.effectivePrice ?? product.currentPrice ?? product.salePrice ?? product.price ?? 0);
       return stock > 0 && price > 0;
     }).length
   ), [availableProducts]);
+  const displayedAutoSaleEligibleProductCount = Number.isFinite(Number(autoSaleAvailability?.eligibleProductCount))
+    ? Number(autoSaleAvailability.eligibleProductCount)
+    : autoSaleEligibleProductCount;
 
-  const matchesCampaignRowSearch = (row, query) => {
-    const needle = normalizeSearchText(query);
-    if (!needle) return true;
-    return [
-      row?.productName,
-      row?.sku,
-      row?.barcode,
-      row?.category,
-      row?.sectionName,
-    ].some((value) => normalizeSearchText(value).includes(needle));
-  };
-
-  const filteredExpiryRows = useMemo(() => expirySignalRows.filter((row) => {
-    const days = Number(row?.daysToExpiry ?? 999);
-    const bandMatch =
-      expiryDayBandFilter === 'all'
-      || (expiryDayBandFilter === 'today-past' && days <= 0)
-      || (expiryDayBandFilter === '1-3' && days >= 1 && days <= 3)
-      || (expiryDayBandFilter === '4-7' && days >= 4 && days <= 7)
-      || (expiryDayBandFilter === '8-14' && days >= 8 && days <= 14)
-      || (expiryDayBandFilter === '15+' && days >= 15);
-    const riskMatch = expiryRiskFilter === 'all' || String(row?.riskLevel || '').toLowerCase() === expiryRiskFilter;
-    const categoryMatch = !expiryCategoryFilter || String(row?.category || '') === expiryCategoryFilter;
-    const searchMatch = matchesCampaignRowSearch(row, expirySearch);
-    return bandMatch && riskMatch && categoryMatch && searchMatch;
-  }), [expiryCategoryFilter, expiryDayBandFilter, expiryRiskFilter, expirySearch, expirySignalRows]);
+  const filteredExpiryRows = expirySignalRows;
 
   const filteredExpirySuggestions = useMemo(() => {
     if (!filteredExpiryRows.length) return [];
     const rowIds = new Set(filteredExpiryRows.map((row) => String(row?.productId || row?.id || '')));
     return expirySuggestions.filter((item) => {
-      const priorityMatch = expiryRiskFilter === 'all' || String(item?.priority || '') === expiryRiskFilter;
-      const categoryMatch = !expiryCategoryFilter || (Array.isArray(item?.categoryNames) && item.categoryNames.includes(expiryCategoryFilter));
+      if (!isCampaignSuggestionActionable(item)) return false;
       const rowMatch = Array.isArray(item?.productIds) && item.productIds.some((id) => rowIds.has(String(id)));
-      return priorityMatch && categoryMatch && rowMatch;
+      return rowMatch;
     });
-  }, [expiryCategoryFilter, expiryRiskFilter, expirySuggestions, filteredExpiryRows]);
+  }, [expirySuggestions, filteredExpiryRows]);
 
-  const filteredSalesRows = useMemo(() => salesSignalRows.filter((row) => {
-    const velocity = Number(row?.salesVelocity || 0);
-    const stockLevel = Number(row?.stockLevel || 0);
-    const margin = Number(row?.currentMarginPercent || 0);
-    const stockTurn = velocity > 0 ? stockLevel / velocity : stockLevel;
-    const signalType = getCampaignSignalType(row, 'sales');
-    const recommendationType = buildCampaignActionRecommendation(row, 'sales').toLowerCase();
-    const velocityMatch =
-      salesVelocityFilter === 'all'
-      || (salesVelocityFilter === 'none' && velocity <= 0)
-      || (salesVelocityFilter === 'slow' && velocity <= 1.2)
-      || (salesVelocityFilter === 'balanced' && velocity > 1.2 && velocity <= 3)
-      || (salesVelocityFilter === 'fast' && velocity > 3);
-    const stockTurnMatch =
-      salesStockTurnFilter === 'all'
-      || (salesStockTurnFilter === 'critical' && stockTurn >= 25)
-      || (salesStockTurnFilter === 'moderate' && stockTurn >= 12 && stockTurn < 25)
-      || (salesStockTurnFilter === 'healthy' && stockTurn < 12);
-    const categoryMatch = !salesCategoryFilter || String(row?.category || '') === salesCategoryFilter;
-    const supplierMatch = !salesSupplierFilter || String(row?.supplierName || '') === salesSupplierFilter;
-    const sectionMatch = !salesSectionFilter || String(row?.sectionName || '') === salesSectionFilter;
-    const marginMatch =
-      salesMarginFilter === 'all'
-      || (salesMarginFilter === 'low' && margin < 18)
-      || (salesMarginFilter === 'medium' && margin >= 18 && margin < 30)
-      || (salesMarginFilter === 'high' && margin >= 30);
-    const typeMatch =
-      salesProductTypeFilter === 'all'
-      || (salesProductTypeFilter === 'fast' && signalType === 'Çok Satıyor')
-      || (salesProductTypeFilter === 'slow' && signalType === 'Yavaş Satıyor')
-      || (salesProductTypeFilter === 'pressure' && signalType === 'Stok Baskısı')
-      || (salesProductTypeFilter === 'margin' && signalType === 'Marj Fırsatı');
-    const recommendationMatch =
-      salesRecommendationFilter === 'all'
-      || (salesRecommendationFilter === 'discount' && recommendationType.includes('indirim'))
-      || (salesRecommendationFilter === 'price-up' && recommendationType.includes('fiyat art'))
-      || (salesRecommendationFilter === 'bundle' && recommendationType.includes('çoklu alım'))
-      || (salesRecommendationFilter === 'hold' && (recommendationType.includes('aksiyon gerekmiyor') || recommendationType.includes('kampanya gerekmez')));
-    const searchMatch = matchesCampaignRowSearch(row, salesSearch);
-    return velocityMatch && stockTurnMatch && categoryMatch && supplierMatch && sectionMatch && marginMatch && typeMatch && recommendationMatch && searchMatch;
-  }), [salesCategoryFilter, salesMarginFilter, salesProductTypeFilter, salesRecommendationFilter, salesSearch, salesSectionFilter, salesSignalRows, salesStockTurnFilter, salesSupplierFilter, salesVelocityFilter]);
+  const filteredSalesRows = salesSignalRows;
 
   const filteredSalesSuggestions = useMemo(() => {
     if (!filteredSalesRows.length) return [];
     const rowIds = new Set(filteredSalesRows.map((row) => String(row?.productId || row?.id || '')));
     return salesSuggestions.filter((item) => {
-      const categoryMatch = !salesCategoryFilter || (Array.isArray(item?.categoryNames) && item.categoryNames.includes(salesCategoryFilter));
+      if (!isCampaignSuggestionActionable(item)) return false;
       const rowMatch = Array.isArray(item?.productIds) && item.productIds.some((id) => rowIds.has(String(id)));
-      return categoryMatch && rowMatch;
+      return rowMatch;
     });
-  }, [filteredSalesRows, salesCategoryFilter, salesSuggestions]);
+  }, [filteredSalesRows, salesSuggestions]);
 
   const expiryInsightCards = useMemo(
     () => filteredExpiryRows
@@ -5139,6 +5567,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           product.brand,
           product.brandName,
           product.categoryName,
+          product.categoryLabelName,
+          product.etiket,
+          product.tag,
           product.mainCategoryName,
           product.supplierName,
           product.supplierProductName,
@@ -5161,9 +5592,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   }, [giftCardDraft]);
 
   const isCampaignDraftDirty = useMemo(() => {
-    const base = createDefaultCampaignDraft();
+    const base = createDefaultCampaignDraft(activeCampaignDraftModule);
     return JSON.stringify(campaignDraft) !== JSON.stringify(base);
-  }, [campaignDraft]);
+  }, [activeCampaignDraftModule, campaignDraft]);
 
   const isAutomationRuleDraftDirty = useMemo(() => {
     const base = createDefaultAutomationRuleDraft();
@@ -5181,7 +5612,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ...createDefaultGiftCardDraft(),
       code: generatedCode || current.code,
     }));
-    setCampaignDraft(createDefaultCampaignDraft());
+    resetCampaignDraft(activeCampaignDraftModule);
     setAutomationRuleDraft(createDefaultAutomationRuleDraft());
     setGiftCardModalOpen(true);
   };
@@ -5189,12 +5620,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const closeGiftCardModal = () => {
     setGiftCardCloseConfirmOpen(false);
     setGiftCardDraft(createDefaultGiftCardDraft());
-    setCampaignDraft(createDefaultCampaignDraft());
+    resetCampaignDraft(activeCampaignDraftModule);
     setAutomationRuleDraft(createDefaultAutomationRuleDraft());
     setGiftCardModalOpen(false);
 
     if (location.pathname === '/kampanya-yonetimi') {
-      navigate('/sistem-ayarlari');
+      navigate('/sistem-ayarları');
     }
   };
 
@@ -5209,13 +5640,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const validatePinChange = (currentPin, nextPin) => {
     const normalized = String(nextPin || '').trim();
     if (!normalized) {
-      return 'Yeni PIN boş bırakılamaz.';
+      return 'Yeni PIN bos birakilamaz.';
     }
     if (!/^\d{4}$/.test(normalized)) {
       return 'PIN 4 haneli ve sadece sayı olmalıdır.';
     }
     if (String(currentPin || '').trim() === normalized) {
-      return 'Yeni PIN mevcut PIN ile aynı olamaz.';
+      return 'Yeni PIN mevcut PIN ile ayni olamaz.';
     }
     return '';
   };
@@ -5344,9 +5775,62 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     if (campaignSuggestionRefreshing) return;
     setCampaignSuggestionRefreshing(true);
     setSuggestionRefreshKey((current) => current + 1);
-    setCampaignSuggestionRefreshedAt(new Date());
-    window.setTimeout(() => setCampaignSuggestionRefreshing(false), 320);
   };
+
+  const renderCampaignBarChart = (rows = [], ariaLabel = 'Kampanya grafiği') => {
+    return <CampaignBarChart rows={rows} ariaLabel={ariaLabel} formatNumber={formatNumber} />;
+    const normalizedRows = rows.map((item) => ({
+      ...item,
+      count: Math.max(0, Number(item?.count || 0) || 0),
+    }));
+    const maxCount = Math.max(1, ...normalizedRows.map((item) => item.count));
+
+    return (
+      <div className="campaign-bar-chart" role="img" aria-label={ariaLabel}>
+        {normalizedRows.map((item) => {
+          const width = item.count > 0 ? Math.max(8, (item.count / maxCount) * 100) : 0;
+          return (
+            <div className="campaign-bar-chart-row" key={item.name}>
+              <div className="campaign-bar-chart-label">
+                <span>{item.name}</span>
+                <strong>{formatNumber(item.count)}</strong>
+              </div>
+              <div className="campaign-bar-chart-track" aria-hidden="true">
+                <span
+                  className="campaign-bar-chart-fill"
+                  style={{
+                    '--campaign-chart-bar-width': `${width}%`,
+                    '--campaign-chart-bar-color': item.color || '#4f46e5',
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderCampaignChartEmpty = ({ title, description, showRefresh = false } = {}) => (
+    <div className="campaign-chart-empty" role="status">
+      <span className="campaign-chart-empty-icon" aria-hidden="true">
+        {showRefresh ? <AlertTriangle size={18} /> : <Info size={18} />}
+      </span>
+      <strong>{title || 'Gösterilecek kampanya verisi bulunmuyor'}</strong>
+      <span>{description || 'Veri oluştuğunda bu alan otomatik güncellenecek.'}</span>
+      {showRefresh ? (
+        <button
+          type="button"
+          className="ghost-button campaign-chart-empty-action"
+          onClick={handleCampaignSuggestionsRefresh}
+          disabled={campaignSuggestionRefreshing}
+        >
+          <RefreshCw size={14} className={campaignSuggestionRefreshing ? 'is-spinning' : ''} />
+          Yenile
+        </button>
+      ) : null}
+    </div>
+  );
 
   const renderCampaignPagination = (key, total) => {
     const totalPages = Math.max(1, Math.ceil(total / CAMPAIGN_TABLE_PAGE_SIZE));
@@ -5357,11 +5841,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
     return (
       <div className="campaign-table-pagination">
-        <span>{start}-{end} / {formatNumber(total)} kayıt</span>
+        <span>{start}-{end} / {formatNumber(total)}</span>
         <div className="campaign-table-pagination-actions">
           <button type="button" className="ghost-button" disabled={page === 1 || totalPages === 1} onClick={() => setCampaignTablePage(key, page - 1)}>Önceki</button>
-          <span className="campaign-table-pagination-page">Sayfa {page} / {totalPages}</span>
-          <button type="button" className="primary-button" disabled={page === totalPages || totalPages === 1} onClick={() => setCampaignTablePage(key, page + 1)}>Sonraki</button>
+          <button type="button" className="ghost-button" disabled={page === totalPages || totalPages === 1} onClick={() => setCampaignTablePage(key, page + 1)}>Sonraki</button>
         </div>
       </div>
     );
@@ -5373,25 +5856,24 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     const page = Math.min(getCampaignInsightPage(key), totalPages);
     const start = total ? ((page - 1) * pageSize) + 1 : 0;
     const end = total ? Math.min(page * pageSize, total) : 0;
-    if (!total || totalPages <= 1) return null;
+    if (!total) return null;
 
     return (
       <div className="campaign-suggestions-pagination">
-        <span>{start}-{end} / {formatNumber(total)} kayıt</span>
+        <span>{start}-{end} / {formatNumber(total)}</span>
         <div className="campaign-suggestions-pagination-actions">
           <button
             type="button"
             className="ghost-button"
-            disabled={page === 1}
+            disabled={page === 1 || totalPages === 1}
             onClick={() => setCampaignInsightPage(key, page - 1)}
           >
             Önceki
           </button>
-          <span className="campaign-table-pagination-page">Sayfa {page} / {totalPages}</span>
           <button
             type="button"
-            className="primary-button"
-            disabled={page === totalPages}
+            className="ghost-button"
+            disabled={page === totalPages || totalPages === 1}
             onClick={() => setCampaignInsightPage(key, page + 1)}
           >
             Sonraki
@@ -5404,6 +5886,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const pagedExpirySuggestions = useMemo(
     () => paginateCampaignInsightRows(filteredExpirySuggestions, 'expiry-suggestions'),
     [filteredExpirySuggestions, campaignInsightPages]
+  );
+  const pagedProductSuggestions = useMemo(
+    () => paginateCampaignInsightRows(moduleCampaignSuggestions, 'product-suggestions'),
+    [campaignInsightPages, moduleCampaignSuggestions]
   );
   const pagedExpirySignals = useMemo(
     () => paginateCampaignInsightRows(expiryInsightCards, 'expiry-signals'),
@@ -5430,7 +5916,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const formatCampaignInsightValue = (value, fallback = 'Tahmin için veri yetersiz') => {
     const text = normalizeCampaignText(String(value || '')).trim();
     if (!text || text === '-') return fallback;
-    if (/sat[ıi][şs]\s+verisi\s+yok/i.test(text)) return 'Yeterli satış verisi yok';
+    if (/sat[ii][ss]\s+verisi\s+yok/i.test(text)) return 'Yeterli satış verisi yok';
     return text;
   };
 
@@ -5485,12 +5971,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   const renderCampaignKpiCards = (items, {
     showHeader = true,
     title = 'Kampanya Bilgileri',
-    description = 'Seçili filtrelere göre kritik kampanya göstergelerini tek satırda okuyun.',
+    description = 'Kritik kampanya göstergelerini tek satirda okuyun.',
     className = '',
     gridClassName = '',
     itemClassName = '',
   } = {}) => (
-    <section className={`campaign-dashboard-card campaign-summary-section ${className}`.trim()} aria-label="Kampanya özet göstergeleri">
+    <section className={`campaign-dashboard-card campaign-summary-section ${className}`.trim()} aria-label="Kampanya Özet göstergeleri">
       {showHeader ? (
         <div className="campaign-insight-panel-head campaign-insight-panel-head--stacked">
           <h4>{title}</h4>
@@ -5519,7 +6005,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   );
 
   const renderCampaignExplainerCards = (items) => (
-    <section className="campaign-dashboard-card campaign-explainer-section" aria-label="Kampanya bilgi notları">
+    <section className="campaign-dashboard-card campaign-explainer-section" aria-label="Kampanya bilgi notlari">
       <div className="campaign-dashboard-grid campaign-dashboard-insight-grid campaign-metric-explainer-grid campaign-metric-explainer-grid--insight">
         {items.map(({ icon: InsightIcon, title, description }) => (
           <article key={title} className="campaign-metric-explainer-card campaign-metric-explainer-card--soft">
@@ -5530,69 +6016,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </div>
           </article>
         ))}
-      </div>
-    </section>
-  );
-
-  const renderCampaignFilterPanel = ({
-    filters,
-    search,
-    onSearchChange,
-    searchPlaceholder = 'Ürün adı, SKU, barkod',
-    onReset,
-    description = 'Karar alanını daraltmak için filtreleri birlikte kullanın.',
-    searchFirst = false,
-    showRefreshAction = true,
-    className = '',
-    groupClassName = '',
-  }) => (
-    <section className={`campaign-dashboard-card campaign-filter-toolbar campaign-module-filterbar campaign-module-filterbar--wide campaign-module-filterbar--insight campaign-filter-panel ${className}`.trim()}>
-      <div className="campaign-filter-panel-head">
-        <h4>Filtreler</h4>
-        {description ? <p>{description}</p> : null}
-      </div>
-      <div className={`campaign-module-filter-group ${filters.length > 4 ? 'campaign-module-filter-group--sales' : ''} ${groupClassName}`.trim()}>
-        {searchFirst && onSearchChange ? (
-          <label className="field-group campaign-control-field campaign-control-field--search">
-            <span>Arama</span>
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder={searchPlaceholder}
-            />
-          </label>
-        ) : null}
-        {filters.map((filter) => (
-          <label key={filter.label} className="field-group campaign-control-field">
-            <span>{filter.label}</span>
-            <select value={filter.value} onChange={(event) => filter.onChange(event.target.value)}>
-              {filter.options.map((option) => (
-                <option key={option.value} value={option.value}>{normalizeCampaignInsightText(option.label)}</option>
-              ))}
-            </select>
-          </label>
-        ))}
-        {!searchFirst && onSearchChange ? (
-          <label className="field-group campaign-control-field campaign-control-field--search">
-            <span>Arama</span>
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder={searchPlaceholder}
-            />
-          </label>
-        ) : null}
-      </div>
-      <div className="campaign-module-filter-actions">
-        {showRefreshAction ? (
-          <button type="button" className="ghost-button" onClick={handleCampaignSuggestionsRefresh} disabled={campaignSuggestionRefreshing}>
-            <RefreshCw size={14} className={campaignSuggestionRefreshing ? 'is-spinning' : ''} />
-            <span>{campaignSuggestionRefreshing ? 'Yenileniyor...' : 'Önerileri Yenile'}</span>
-          </button>
-        ) : null}
-        <button type="button" className="outline-button" onClick={onReset}>Filtreleri Temizle</button>
       </div>
     </section>
   );
@@ -5629,6 +6052,44 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     </section>
   );
 
+  const renderCampaignSuggestionActions = (suggestion, primaryLabel = 'Kampanya Oluştur') => {
+    const menuId = String(suggestion?.id || suggestion?.title || suggestion?.recommendationType || primaryLabel);
+    const isMenuOpen = openCampaignActionMenuId === menuId;
+    const canCreateCampaign = isCampaignSuggestionDiscountActionable(suggestion);
+    return (
+      <div className="table-actions campaign-insight-row-actions campaign-row-actions--menu">
+        <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)} disabled={!canCreateCampaign} title={canCreateCampaign ? primaryLabel : 'Bu sinyal indirim kampanyasi olusturmaz'}>{canCreateCampaign ? primaryLabel : 'Indirim Yok'}</button>
+        <div className="campaign-row-action-menu">
+          <button
+            type="button"
+            className="campaign-row-action-menu-trigger"
+            aria-label="Diğer aksiyonlar"
+            aria-haspopup="menu"
+            aria-expanded={isMenuOpen}
+            title="Diğer aksiyonlar"
+            onClick={() => setOpenCampaignActionMenuId((current) => (current === menuId ? null : menuId))}
+          >
+            <MoreHorizontal size={17} aria-hidden="true" />
+          </button>
+          {isMenuOpen ? (
+            <div className="campaign-row-action-menu-panel" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpenCampaignActionMenuId(null);
+                  setSelectedCampaignSuggestion(suggestion);
+                }}
+              >
+                Detay
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   const renderCampaignActionCandidatesTable = ({
     title,
     description,
@@ -5637,6 +6098,36 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     rows,
     paginationKey,
     columns,
+    tableClassName = '',
+    rowClassName,
+    emptyTitle,
+    emptyDescription,
+  }) => (
+    <CampaignActionCandidatesTable
+      title={title}
+      description={description}
+      icon={SectionIcon}
+      total={total}
+      rows={rows}
+      pagination={renderCampaignInsightPagination(paginationKey, total)}
+      columns={columns}
+      tableClassName={tableClassName}
+      rowClassName={rowClassName}
+      emptyTitle={emptyTitle}
+      emptyDescription={emptyDescription}
+    />
+  );
+
+  const renderCampaignActionCandidatesTableLegacy = ({
+    title,
+    description,
+    icon: SectionIcon = Megaphone,
+    total,
+    rows,
+    paginationKey,
+    columns,
+    tableClassName = '',
+    rowClassName,
     emptyTitle,
     emptyDescription,
   }) => (
@@ -5649,15 +6140,15 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <p>{description}</p>
           </div>
         </div>
-        <span>{formatNumber(total)} kayıt</span>
+        {renderCampaignInsightPagination(paginationKey, total)}
       </div>
       {total ? (
         <div className="table-wrapper campaign-insight-table-wrap">
-          <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-suggestion-table">
+          <table className={`data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-suggestion-table ${tableClassName}`.trim()}>
             <thead><tr>{columns.map((column) => <th key={column.key} className={column.className || ''}>{column.label}</th>)}</tr></thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={typeof rowClassName === 'function' ? rowClassName(row) : ''}>
                   {columns.map((column) => <td key={column.key} className={column.className || ''}>{column.render(row)}</td>)}
                 </tr>
               ))}
@@ -5670,7 +6161,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           <span>{emptyDescription}</span>
         </div>
       )}
-      {renderCampaignInsightPagination(paginationKey, total)}
     </section>
   );
 
@@ -5694,7 +6184,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <p>{description}</p>
           </div>
         </div>
-        <span>{formatNumber(total)} kayıt</span>
+        {renderCampaignInsightPagination(paginationKey, total)}
       </div>
       {total ? (
         <div className="table-wrapper campaign-insight-table-wrap">
@@ -5716,7 +6206,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               {rows.map((row) => {
                 const detailSuggestion = {
                   id: `sales-inline-${row.id}`,
-                  title: `${normalizeCampaignInsightText(row.productName)} için aksiyon önerisi`,
+                  title: `${normalizeCampaignInsightText(row.productName)} için aksiyon Önerisi`,
                   reason: normalizeCampaignInsightText(row.summary),
                   affectedProductCount: 1,
                   recommendedDiscount: Math.max(8, Number(row?.suggestedDiscount || 12)),
@@ -5724,7 +6214,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   productIds: [row.productId || row.id],
                   priority: row.riskLevel || 'medium',
                   impactSummary: normalizeCampaignInsightText(row.recommendation),
-                  riskSummary: 'Aksiyon öncesi marj ve stok yeterliliği tekrar kontrol edilmelidir.',
+                  riskSummary: 'Aksiyon Öncesi marj ve stok yeterliligi tekrar kontrol edilmelidir.',
                 };
                 const inlineExpirySuggestion = {
                   id: `expiry-inline-${row.id}`,
@@ -5738,9 +6228,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   impactSummary: normalizeCampaignInsightText(row.recommendation),
                   riskSummary: 'SKT, stok ve marj etkisi kampanya taslağı oluşturulmadan önce birlikte kontrol edilmelidir.',
                   signalBullets: [
-                    'Satış hızı düşük ve stok bekleme riski yüksek ürünler seçildi.',
+                    'Satış hızı düşük ve stok bekleme riski yüksek Ürünler seçildi.',
                     'SKT, stok ve marj sinyalleri birlikte değerlendirildi.',
-                    'Önerilen indirim oranı kampanya taslağına başlangıç değeri olarak aktarılır.',
+                    'Önerilen indirim oranı kampanya taslağına başlangıç değeri olarak aktarilir.',
                   ],
                 };
                 const actionSuggestion = mode === 'expiry' ? inlineExpirySuggestion : detailSuggestion;
@@ -5766,8 +6256,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <td><span className={`campaign-action-pill ${getCampaignActionTone(row.recommendation)}`}>{normalizeCampaignInsightText(row.recommendation)}</span></td>
                     <td className="table-cell-actions">
                       <div className="table-actions campaign-insight-row-actions">
-                        <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(actionSuggestion)}>Detay analizi</button>
-                        <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(actionSuggestion)}>{mode === 'expiry' ? 'Hızlı indirim oluştur' : 'Kampanya Oluştur'}</button>
+                        <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(actionSuggestion)}>Detay</button>
+                        <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(actionSuggestion)}>Oluştur</button>
                       </div>
                     </td>
                   </tr>
@@ -5782,7 +6272,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           <span>{normalizeCampaignInsightText(emptyDescription)}</span>
         </div>
       )}
-      {renderCampaignInsightPagination(paginationKey, total)}
     </section>
   );
 
@@ -5849,7 +6338,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <div><span>Ortalama stok tükenme</span><strong>{hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays)} gün` : 'Yeterli satış verisi yok'}</strong></div>
           </div>
           <div className="campaign-form-tip campaign-simulation-note" style={{ marginTop: '12px' }}>
-            <strong>{simulation?.recommendation || 'Öneri üretilemedi.'}</strong>
+            <strong>{simulation?.recommendation || 'Öneri Üretilemedi.'}</strong>
                 {simulation?.metricsSummary ? <span>{normalizeCampaignInsightText(simulation.metricsSummary)}</span> : null}
           </div>
         </>
@@ -5866,7 +6355,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     metricTailLabel = 'Ortalama stok tükenme',
     selectedScenarioLabel = '',
     advisoryText = '',
-    emptyMessage = 'Filtrelere uygun veri bulunamadı.',
+    emptyMessage = 'Gösterilecek veri bulunamadı.',
     className = '',
   } = {}) => (
     <article className={`campaign-dashboard-card campaign-simulation-section campaign-form-group campaign-form-group--simulation-compact ${className}`.trim()}>
@@ -5882,7 +6371,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           </div>
           <div className="campaign-empty-state-box campaign-empty-state-box--compact campaign-empty-state-box--simulation" role="status">
             <strong>{emptyMessage}</strong>
-            <span>Filtre aralığını genişleterek daha fazla ürün sinyali görebilirsiniz.</span>
+            <span>Veri geldikçe daha fazla Ürün sinyali burada görünür.</span>
           </div>
         </>
       ) : (
@@ -5918,7 +6407,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           };
           const rawRecommendationText = normalizeCampaignInsightText(advisoryText || simulation?.recommendation || '');
           const recommendationText = /backend|analiz motoru|analiz verisi/i.test(rawRecommendationText)
-            ? 'Seçili aksiyonun etkisi satış hızı, stok ve marj sinyallerine göre hesaplandı.'
+            ? 'Seçili aksiyonun etkisi satış hızı, stok ve marj sinyallerine göre hesaplandi.'
             : rawRecommendationText;
           return (
             <>
@@ -5947,8 +6436,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                   <div>
                     <small>Kapsam</small>
-                    <b>{formatNumber(affectedCount)} ürün etkilenecek</b>
-                    {hasSeparateCandidateCount ? <small>Analiz önizlemesi {formatNumber(candidateCount)} aday ürün üzerinden hesaplandı</small> : null}
+                    <b>{formatNumber(affectedCount)} Ürün etkilenecek</b>
+                    {hasSeparateCandidateCount ? <small>Analiz Önizlemesi {formatNumber(candidateCount)} aday Ürün Üzerinden hesaplandi</small> : null}
                   </div>
                 </div>
                 <div className="campaign-preview-stats campaign-preview-stats--compact">
@@ -5957,7 +6446,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <div><span>Tahmini marj etkisi</span><strong>{formatSimulationPercent(simulation?.marginImpact)}</strong></div>
                   <div><span>Stok devir etkisi</span><strong>{formatSimulationPercent(simulation?.stockTurnEffect)}</strong></div>
                   <div><span>{metricTailLabel === 'SKT riski' ? 'SKT riski' : 'Risk seviyesi'}</span><strong>{metricTailLabel === 'SKT riski' ? formatSimulationPercent(simulation?.riskReductionScore) : normalizeCampaignInsightText(simulation?.riskLevel || '-')}</strong></div>
-                  <div><span>{metricTailLabel === 'SKT riski' ? 'Etkilenen ürün sayısı' : 'Ortalama stok tükenme'}</span><strong>{metricTailLabel === 'SKT riski' ? formatNumber(affectedCount) : (hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays)} gün` : 'Yeterli satış verisi yok')}</strong></div>
+                  <div><span>{metricTailLabel === 'SKT riski' ? 'Etkilenen Ürün sayısı' : 'Ortalama stok tükenme'}</span><strong>{metricTailLabel === 'SKT riski' ? formatNumber(affectedCount) : (hasStockDepletion ? `${formatNumber(simulation?.stockDepletionDays)} gün` : 'Yeterli satış verisi yok')}</strong></div>
                 </div>
               </div>
               {recommendationText ? (
@@ -5989,7 +6478,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     if (isError) {
       return {
         label: 'Yayında değil',
-        reason: 'Sistem tarafından sonlandırıldı',
+        reason: 'Sistem tarafindan sonlandırıldı',
         badgeClassName: 'danger',
         isActive: false,
         canEdit: false,
@@ -6030,8 +6519,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return {
         label: 'Yayında değil',
         reason: archiveReason && /sistem|system/i.test(archiveReason)
-          ? 'Sistem tarafından sonlandırıldı'
-          : 'Yönetim tarafından sonlandırıldı',
+          ? 'Sistem tarafindan sonlandırıldı'
+          : 'Yönetim tarafindan sonlandırıldı',
         badgeClassName: 'neutral',
         isActive: false,
         canEdit: false,
@@ -6042,7 +6531,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       label: 'Yayında değil',
       reason: rawStatus === 'draft' || rawStatus === 'paused' || rawStatus === 'inactive' || !archiveReason
         ? 'Yayında değil'
-        : 'Yönetim tarafından sonlandırıldı',
+        : 'Yönetim tarafindan sonlandırıldı',
       badgeClassName: 'neutral',
       isActive: false,
       canEdit: false,
@@ -6054,6 +6543,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     description,
     rows,
     tableKey,
+    mode = 'active',
     selectable = false,
     sectionMeta = null,
     cardClassName = '',
@@ -6072,12 +6562,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <span className="campaign-table-card-icon" aria-hidden="true">
               <SectionIcon size={16} />
             </span>
-            <div>
-              <h4>{title}</h4>
-              <p>{description}</p>
-            </div>
+          <div>
+            <h4>{title}</h4>
+            <p>{description}</p>
           </div>
-          <span>{formatNumber(rows.length)} kayıt</span>
+        </div>
+          {renderCampaignPagination(tableKey, rows.length)}
         </div>
         <div className="table-wrapper campaign-table-spacer">
           <table className="data-table campaign-active-table campaign-standard-table">
@@ -6097,10 +6587,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <tbody>
               {pageRows.length ? pageRows.map((item) => {
                 const statusMeta = getCampaignLifecycleMeta(item);
+                const detailActionLabel = mode === 'planned' ? 'Gözden Geçir' : 'Görüntüle';
+                const detailViewMode = mode === 'planned' ? 'planned' : (statusMeta.isActive ? 'active' : 'archive');
 
                 return (
                 <tr key={item.id} className="campaign-active-row">
-                  {selectable ? <td><input type="checkbox" aria-label={`${item.name} kampanyasını seç`} checked={selectedCampaignIds.includes(item.id)} onChange={(event) => toggleCampaignSelection(item.id, event.target.checked)} /></td> : null}
+                  {selectable ? <td><input type="checkbox" aria-label={`${item.name} kampanyasıni seç`} checked={selectedCampaignIds.includes(item.id)} onChange={(event) => toggleCampaignSelection(item.id, event.target.checked)} /></td> : null}
                   <td><strong>{item.name}</strong><div className="muted-text">{getCampaignPriorityDisplayLabel(item.priority)}</div></td>
                   <td>{CAMPAIGN_TYPE_LABELS[item.type] || item.type}</td>
                   <td>%{formatNumber(item.discountRate)}</td>
@@ -6110,11 +6602,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <td>{statusMeta.reason}</td>
                   <td className="table-cell-actions">
                     <div className="table-actions campaign-row-actions">
-                      <button className="text-button" type="button" onClick={() => setSelectedCampaignDetail({ ...item, __viewMode: statusMeta.isActive ? 'active' : 'archive' })}>Görüntüle</button>
+                      <button className="text-button" type="button" onClick={() => setSelectedCampaignDetail({ ...item, __viewMode: detailViewMode })}>{detailActionLabel}</button>
                       {statusMeta.canEdit ? (
                         <>
                           <button className="text-button" type="button" onClick={() => openCampaignEditModal(item)}>Düzenle</button>
-                          <button className="text-button danger" type="button" onClick={() => toggleCampaignStatus(item.id)}>Sonlandır</button>
+                          <button className="text-button danger" type="button" onClick={() => toggleCampaignStatus(item.id)}>Sonlandir</button>
                         </>
                       ) : null}
                     </div>
@@ -6134,7 +6626,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </tbody>
           </table>
         </div>
-        {renderCampaignPagination(tableKey, rows.length)}
       </section>
     );
   };
@@ -6189,10 +6680,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       });
     }
 
-    const activeRows = rows.filter((item) => isCampaignCurrentlyActive(item));
-    const plannedRows = rows.filter((item) => isCampaignPlanned(item));
-    const archiveRows = rows.filter((item) => !isCampaignCurrentlyActive(item) && !isCampaignPlanned(item));
+    const now = new Date();
+    const activeRows = rows.filter((item) => isCampaignCurrentlyActive(item, now));
+    const plannedRows = rows.filter((item) => isCampaignPlanned(item, now));
+    const archiveRows = rows.filter((item) => isDefaultCampaignArchiveRow(item, now));
     const moduleTitles = CAMPAIGN_MODULE_TABLE_TITLES[tableKeyPrefix] || CAMPAIGN_MODULE_TABLE_TITLES.all;
+    const activeDescription = tableKeyPrefix === 'expiry'
+      ? 'Yayındaki SKT odaklı kampanyaları takip edin.'
+      : tableKeyPrefix === 'sales'
+        ? 'Yayındaki satış performansı odaklı kampanyaları takip edin.'
+        : 'Yayındaki kampanyaları takip edin.';
+    const archiveDescription = tableKeyPrefix === 'expiry'
+      ? 'Geçmiş SKT kampanyalarını ve kapanma durumlarını inceleyin.'
+      : tableKeyPrefix === 'sales'
+        ? 'Geçmiş satış bazlı kampanyaları ve kapanma durumlarını inceleyin.'
+        : 'Geçmiş, pasif veya arşivlenmiş kampanyaları inceleyin.';
 
     return (
       <section className={`campaign-table-stack campaign-table-stack--lifecycle${sectionClassName ? ` ${sectionClassName}` : ''}`}>
@@ -6208,7 +6710,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         </div>
         {renderCampaignTable({
           title: moduleTitles.active,
-          description: tableKeyPrefix === 'expiry' ? 'Yayındaki SKT odaklı kampanyaları takip edin.' : 'Yayındaki satış performansı odaklı kampanyaları takip edin.',
+          description: activeDescription,
           rows: activeRows,
           tableKey: `${tableKeyPrefix}-active`,
           sectionMeta: CAMPAIGN_TABLE_SECTION_META[tableKeyPrefix]?.active,
@@ -6226,12 +6728,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         })}
         {renderCampaignTable({
           title: moduleTitles.archive,
-          description: tableKeyPrefix === 'expiry' ? 'Geçmiş SKT kampanyalarını ve kapanma durumlarını inceleyin.' : 'Geçmiş satış bazlı kampanyaları ve kapanma durumlarını inceleyin.',
+          description: archiveDescription,
           rows: archiveRows,
           tableKey: `${tableKeyPrefix}-archive`,
           sectionMeta: CAMPAIGN_TABLE_SECTION_META[tableKeyPrefix]?.archive,
           emptyTitle: 'Kayıt bulunamadı',
-          emptyDescription: tableKeyPrefix === 'expiry' ? 'Kampanya arşivi boş.' : 'Kampanya arşivi boş.',
+          emptyDescription: tableKeyPrefix === 'expiry' ? 'Kampanya arşivi bos.' : 'Kampanya arşivi bos.',
         })}
       </section>
     );
@@ -6262,14 +6764,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     durationDays: 7,
     scopeLabel: 'Kampanya etkisi',
     currency: form.currency,
-    emptyMessage: 'Önerinin bağlı olduğu ürün verisi bulunamadı.',
+    emptyMessage: 'Önerinin bagli oldugu Ürün verisi bulunamadı.',
   }), [form.currency, selectedCampaignSuggestion, selectedSuggestionRows]);
   const selectedSuggestionPriceUpSimulation = useMemo(() => {
     if (!selectedSuggestionRows.length) {
       return {
         isEmpty: true,
         title: 'Alternatif fiyat etkisi hazır değil',
-        emptyMessage: 'Ürün verisi olmadan fiyat etkisi hesaplanamıyor.',
+        emptyMessage: 'Ürün verisi olmadan fiyat etkisi hesaplanamiyor.',
       };
     }
     const rows = selectedSuggestionRows;
@@ -6288,9 +6790,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       stockTurnEffect: Number((Math.max(0, avgDailySales) * 4.5).toFixed(1)),
       stockDepletionDays: Number((averageCampaignMetric(rows, (row) => Number(row?.stockLevel || 0)) / Math.max(avgDailySales * 0.94, 0.1)).toFixed(1)),
       recommendation: avgDailySales >= 3
-        ? 'Talep güçlü olduğu için küçük bir fiyat artışı marj optimizasyonu için test edilebilir.'
-        : 'Satış hızı sınırlı ürünlerde fiyat artışı yerine kampanya veya görünürlük aksiyonu daha güvenlidir.',
-      metricsSummary: `${formatNumber(rows.length)} ürün • %5 fiyat artışı varsayımı • satışta sınırlı daralma kabulü`,
+        ? 'Talep güçlü oldugu için küçük bir fiyat artışı marj optimizasyonu için test edilebilir.'
+        : 'Satış hızı sınırlı Ürünlerde fiyat artışı yerine kampanya veya görünürlük aksiyonu daha güvenlidir.',
+      metricsSummary: `${formatNumber(rows.length)} Ürün • %5 fiyat artışı varsayımi • satışta sınırlı daralma kabulü`,
     };
   }, [selectedSuggestionRows]);
   const selectedCampaignDetailProductRows = useMemo(() => {
@@ -6365,25 +6867,6 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   }, [campaignEligibleProductCount, selectedCampaignDetail, selectedCampaignDetailProductRows.length]);
   const selectedCampaignDetailPreviewCount = selectedCampaignDetailProductRows.length;
 
-  const resetExpiryInsightFilters = () => {
-    setExpiryDayBandFilter('all');
-    setExpiryRiskFilter('all');
-    setExpiryCategoryFilter('');
-    setExpirySearch('');
-  };
-
-  const resetSalesInsightFilters = () => {
-    setSalesVelocityFilter('all');
-    setSalesStockTurnFilter('all');
-    setSalesCategoryFilter('');
-    setSalesMarginFilter('all');
-    setSalesSupplierFilter('');
-    setSalesSectionFilter('');
-    setSalesProductTypeFilter('all');
-    setSalesRecommendationFilter('all');
-    setSalesSearch('');
-  };
-
   const selectedDeveloperLogView = getDeveloperLogPresentation(selectedDeveloperLog);
   const clearAuditDetailView = () => {
     setSelectedAuditLog((current) => (current ? {
@@ -6452,8 +6935,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <Toast toast={toast} onClose={() => setToast(null)} />
       {showPinGate && (
         <PinGate
-          title="Güvenlik Doğrulaması"
-          description="Hassas ayarlara erişmek için PIN giriniz."
+          title="Güvenlik Dogrulamasi"
+          description="Hassas ayarlara erismek için PIN giriniz."
           type="settings"
           onSuccess={() => { setSecurityUnlocked(true); setSecurityEditMode(true); setShowPinGate(false); }}
           onCancel={() => setShowPinGate(false)}
@@ -6462,9 +6945,26 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <PageHeader
         className="dashboard-hero"
         icon={isCampaignPage ? <Megaphone size={22} /> : <SettingsIcon size={22} />}
-        title={isCampaignPage ? 'Kampanya Yönetimi' : 'Sistem Ayarları'}
+        title={isCampaignPage ? 'Kampanya Yönetimi' : 'Sistem Ayarlari'}
         description={isCampaignPage ? 'Kampanya performansını analiz edin.' : 'Mağaza ve sistem ayarlarını yapılandırın.'}
-        actions={!isCampaignPage ? (
+        actions={isCampaignPage ? (
+          <div className="campaign-header-actions" aria-label="Kampanya sayfası aksiyonları">
+            <span className="campaign-header-updated" aria-live="polite">
+              {campaignHeaderRefreshLabel}
+            </span>
+            <button
+              type="button"
+              className="primary-button campaign-header-refresh-button"
+              onClick={handleCampaignSuggestionsRefresh}
+              disabled={campaignSuggestionRefreshing}
+              title="Yenile"
+              aria-label="Kampanya verilerini yenile"
+            >
+              <RefreshCw size={15} className={campaignSuggestionRefreshing ? 'is-spinning' : ''} />
+              Yenile
+            </button>
+          </div>
+        ) : (
           <div className="settings-header-actions">
             <button
               type="button"
@@ -6489,7 +6989,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <SlidersHorizontal size={17} />
           </button>
           </div>
-        ) : null}
+        )}
       />
 
       {isCampaignPage ? (
@@ -6506,16 +7006,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   className={campaignTypeView === tab.key ? 'is-active active' : ''}
                   onClick={() => {
                     setCampaignTypeView(tab.key);
-                    if (['general', 'product', 'category', 'brand'].includes(tab.type)) {
-                      setCampaignDraft((current) => ({ ...current, type: tab.type }));
-                    }
                   }}
                 >
                   <TabIcon size={14} />
                   <span className="campaign-switch-label">{tab.label}</span>
-                  <span className="campaign-switch-count">
-                    {formatNumber(tab.key === 'all' ? dashboardCampaignSuggestions.length : (campaignSuggestionPresentation.counts[tab.key] || 0))}
-                  </span>
                 </button>
               );
             })}
@@ -6524,7 +7018,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       ) : null}
 
       {isCampaignPage && visibleCampaignSuggestions.length ? (
-        <div className="sr-only campaign-sr-actions" aria-label="Kampanya önerisi hızlı aksiyonları">
+        <div className="sr-only campaign-sr-actions" aria-label="Kampanya Önerisi hızlı aksiyonları">
           {visibleCampaignSuggestions.slice(0, 5).map((suggestion) => (
             <button key={`sr-${suggestion.id}`} type="button" aria-label="Öneriden kampanya oluştur" onClick={() => createCampaignFromSuggestion(suggestion)}>
               Öneriden kampanya oluştur
@@ -6538,16 +7032,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           <div className="s-card-header s-auto-sale-panel-header">
             <div className="s-auto-sale-title-group">
               <div className="s-card-icon s-icon-green"><Coins size={18} /></div>
-              <div>
+              <div className="s-auto-sale-title-copy">
                 <h3 className="s-card-title">Otomatik Satış Paneli</h3>
-                <p className="s-card-desc">Seçilen kasalarda gerçek ürün, stok ve ödeme akışıyla satış üretir.</p>
+                <p className="s-card-desc">Seçilen kasalarda gerçek Ürün, stok ve Ödeme akisiyla satış Üretir.</p>
               </div>
             </div>
             <div className="s-auto-sale-header-actions">
               <span className="s-auto-sale-source-note">Kaynak: Otomatik satış paneli</span>
               <span className={`s-auto-sale-status-badge ${autoSaleActive ? 'is-active' : 'is-passive'}`}>{autoSaleActive ? 'Aktif' : 'Pasif'}</span>
-              <button type="button" className="primary-button" onClick={startAutoSaleAutomation} disabled={autoSaleActive}>
-                Başlat
+              <button type="button" className="primary-button" onClick={startAutoSaleAutomation} disabled={autoSaleActive || Boolean(autoSaleValidationMessage)}>
+                Baslat
               </button>
               <button type="button" className="ghost-button danger" onClick={stopAutoSaleAutomation} disabled={!autoSaleActive}>
                 Durdur
@@ -6559,7 +7053,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             <div className="s-auto-sale-fieldset-title">Ayarlar</div>
             <div className="s-auto-sale-grid s-auto-sale-primary-grid">
               <label className="s-field">
-                <span className="s-field-label">Yoğunluk</span>
+                <span className="s-field-label">Yogunluk</span>
                 <select className="s-config-select" value={autoSaleConfig.density} onChange={(event) => updateAutoSaleConfig('density', event.target.value)} disabled={autoSaleActive}>
                   {AUTO_SALE_DENSITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
@@ -6573,19 +7067,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <input className="s-config-input" type="number" min="0.01" step="0.01" value={autoSaleConfig.maxAmount} onChange={(event) => updateAutoSaleConfig('maxAmount', event.target.value)} disabled={autoSaleActive} />
               </label>
               <label className="s-field">
-                <span className="s-field-label">İade oranı (%)</span>
+                <span className="s-field-label">Iade oranı (%)</span>
                 <input className="s-config-input" type="number" min="0" max="100" step="0.1" value={autoSaleConfig.returnRate} onChange={(event) => updateAutoSaleConfig('returnRate', event.target.value)} disabled={autoSaleActive} />
               </label>
               <label className="s-field">
-                <span className="s-field-label">Minimum ürün çeşidi</span>
+                <span className="s-field-label">Minimum Ürün çeşidi</span>
                 <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.minProductCount} onChange={(event) => updateAutoSaleConfig('minProductCount', event.target.value)} disabled={autoSaleActive} />
               </label>
               <label className="s-field">
-                <span className="s-field-label">Maksimum ürün çeşidi</span>
+                <span className="s-field-label">Maksimum Ürün çeşidi</span>
                 <input className="s-config-input" type="number" min="1" step="1" value={autoSaleConfig.maxProductCount} onChange={(event) => updateAutoSaleConfig('maxProductCount', event.target.value)} disabled={autoSaleActive} />
               </label>
               <label className="s-field">
-                <span className="s-field-label">Çalışma süresi</span>
+                <span className="s-field-label">Çalisma süresi</span>
                 <select className="s-config-select" value={autoSaleConfig.duration} onChange={(event) => updateAutoSaleConfig('duration', event.target.value)} disabled={autoSaleActive}>
                   {AUTO_SALE_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
@@ -6620,25 +7114,52 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               })}
             </div>
 
-            {autoSaleError ? <div className="s-auto-sale-error" role="alert">{autoSaleError}</div> : null}
+            {autoSaleError || autoSaleValidationMessage ? <div className="s-auto-sale-error" role="alert">{autoSaleError || autoSaleValidationMessage}</div> : null}
           </fieldset>
 
           <div className="s-auto-sale-bottom-grid">
             <section className="s-auto-sale-sub-card">
               <div className="s-auto-sale-sub-card-head">
                 <h4>Üretilen Satış Özeti</h4>
-                <span>{autoSaleActive ? 'Çalışıyor' : 'Beklemede'}</span>
+                <span>{autoSaleActive ? 'Çalisiyor' : 'Beklemede'}</span>
               </div>
               <div className="s-auto-sale-summary-grid">
                 <div><span>Toplam satış adedi</span><strong>{formatNumber(autoSaleSummary.totalCount)}</strong></div>
-                <div><span>Toplam satış tutarı</span><strong>{formatCurrency(autoSaleSummary.totalAmount)}</strong></div>
-                <div><span>Son satış zamanı</span><strong>{autoSaleSummary.lastSaleAt ? formatDate(autoSaleSummary.lastSaleAt) : '-'}</strong></div>
+                <div><span>Toplam satış tutari</span><strong>{formatCurrency(autoSaleSummary.totalAmount)}</strong></div>
+                <div><span>Son satış zamani</span><strong>{autoSaleSummary.lastSaleAt ? formatDate(autoSaleSummary.lastSaleAt) : '-'}</strong></div>
                 <div><span>Aktif kasalar</span><strong>{(autoSaleSummary.activeDeskCodes || autoSaleConfig.deskCodes).join(', ') || '-'}</strong></div>
-                <div><span>Stokta uygun ürün sayısı</span><strong>{formatNumber(autoSaleEligibleProductCount)}</strong></div>
+                <div><span>Stokta uygun Ürün sayısi</span><strong>{formatNumber(displayedAutoSaleEligibleProductCount)}</strong></div>
                 <div><span>Kalan süre</span><strong>{autoSaleActive ? formatAutoSaleRemainingTime(autoSaleRemainingMs) : '-'}</strong></div>
-                <div><span>İade oranı</span><strong>%{Number(autoSaleConfig.returnRate || 0).toLocaleString('tr-TR')}</strong></div>
-                <div><span>Oluşan iade adedi</span><strong>{formatNumber(autoSaleSummary.returnedCount || 0)}</strong></div>
+                <div><span>Iade oranı</span><strong>%{Number(autoSaleConfig.returnRate || 0).toLocaleString('tr-TR')}</strong></div>
+                <div><span>Olusan iade adedi</span><strong>{formatNumber(autoSaleSummary.returnedCount || 0)}</strong></div>
               </div>
+            </section>
+            <section className="s-auto-sale-sub-card s-auto-sale-recent-card">
+              <div className="s-auto-sale-sub-card-head">
+                <h4>Son 5 İşlem</h4>
+                <span>Otomatik panel</span>
+              </div>
+              {autoSaleRecentTransactions.length ? (
+                <div className="s-auto-sale-recent-list">
+                  {autoSaleRecentTransactions.map((transaction) => (
+                    <div className="s-auto-sale-recent-row" key={transaction.referenceNo}>
+                      <div className="s-auto-sale-recent-main">
+                        <strong>{transaction.referenceNo || '-'}</strong>
+                        <span>{AUTO_SALE_TRANSACTION_TYPE_LABELS[transaction.type] || transaction.type || '-'}</span>
+                      </div>
+                      <div className="s-auto-sale-recent-meta">
+                        <span>{formatCurrency(transaction.totalAmount || 0)}</span>
+                        <span>{transaction.deskCode || '-'}</span>
+                        <span>{AUTO_SALE_PAYMENT_LABELS[transaction.paymentMethod] || transaction.paymentMethod || '-'}</span>
+                        <span>{transaction.createdAt ? formatDate(transaction.createdAt) : '-'}</span>
+                        <span>{formatNumber(transaction.itemCount || 0)} Ürün</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="s-auto-sale-recent-empty">Henüz otomatik işlem yok.</div>
+              )}
             </section>
           </div>
         </section>
@@ -6653,8 +7174,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
             {isHomeCampaignView ? (
               <section className="mod-summary-grid five campaign-summary-grid b2b-kpi-strip campaign-section">
-                <button type="button" className="mod-stat campaign-stat-button" onClick={() => setCampaignStatusView('active')}>
-                  <div className="mod-stat-icon mod-icon-green"><ShieldCheck size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Aktif Kampanya</span><span className="mod-stat-value">{formatNumber(campaignSummary.active)}</span><span className="mod-stat-caption">Şu anda yayında</span></div>
+                <button type="button" className="mod-stat campaign-stat-button" onClick={() => applyCampaignKpiAction('active')}>
+                  <div className="mod-stat-icon mod-icon-green"><ShieldCheck size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Aktif Kampanya</span><span className="mod-stat-value">{formatNumber(campaignSummary.active)}</span><span className="mod-stat-caption">Su anda yayında</span></div>
                 </button>
                 <button type="button" className="mod-stat campaign-stat-button" onClick={() => applyCampaignKpiAction('planned')}>
                   <div className="mod-stat-icon mod-icon-amber"><CalendarDays size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Planlanan Kampanya</span><span className="mod-stat-value">{formatNumber(campaignSummary.planned)}</span><span className="mod-stat-caption">Başlangıcı ileri tarihli</span></div>
@@ -6665,14 +7186,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <button type="button" className="mod-stat campaign-stat-button" onClick={() => applyCampaignKpiAction('expiring')}>
                   <div className="mod-stat-icon mod-icon-rose"><Hash size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Yakında Bitecek Kampanya</span><span className="mod-stat-value">{formatNumber(campaignSummary.expiringSoon)}</span><span className="mod-stat-caption">7 gün içinde bitecek</span></div>
                 </button>
-                <button type="button" className="mod-stat campaign-stat-button" onClick={() => setCampaignStatusView('active')}>
-                  <div className="mod-stat-icon mod-icon-cyan"><Gift size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Kampanyalı Ürün</span><span className="mod-stat-value">{formatNumber(campaignSummary.promotedProducts)}</span><span className="mod-stat-caption">Aktif kampanya kapsamı</span></div>
+                <button type="button" className="mod-stat campaign-stat-button" onClick={() => applyCampaignKpiAction('active')}>
+                  <div className="mod-stat-icon mod-icon-cyan"><Gift size={20} /></div><div className="mod-stat-body"><span className="mod-stat-label">Kampanyali Ürün</span><span className="mod-stat-value">{formatNumber(campaignSummary.promotedProducts)}</span><span className="mod-stat-caption">Aktif kampanya kapsamı</span></div>
                 </button>
               </section>
             ) : null}
 
             {isHomeCampaignView ? (
-              <section className="campaign-chart-grid campaign-section" aria-label="Kampanya özet grafikleri">
+              <section className="campaign-chart-grid campaign-section" aria-label="Kampanya Özet grafikleri">
                 <article className="campaign-chart-card campaign-chart-card--status">
                   <div className="campaign-chart-head">
                     <span className="campaign-chart-badge campaign-chart-badge--indigo" aria-hidden="true"><BarChart3 size={16} /></span>
@@ -6684,17 +7205,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
                       {hasCampaignStatusChartData ? (
-                      <ResponsiveContainer width="100%" height={180}>
-                        <RBarChart data={campaignStatusChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
-                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip content={<CampaignChartTooltip />} />
-                          <Bar dataKey="count" fill="#4f46e5" radius={[8, 8, 0, 0]} />
-                        </RBarChart>
-                      </ResponsiveContainer>
+                        renderCampaignBarChart(campaignStatusDistributionData, 'Kampanya durumu dağılımı')
                       ) : (
-                        <div className="campaign-chart-empty">Gösterilecek kampanya kaydı yok.</div>
+                        renderCampaignChartEmpty(campaignStatusEmptyState)
                       )}
                     </div>
                   </div>
@@ -6711,17 +7224,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
                       {hasCampaignTypeChartData ? (
-                      <ResponsiveContainer width="100%" height={180}>
-                        <RBarChart data={campaignTypeChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
-                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip content={<CampaignChartTooltip />} />
-                          <Bar dataKey="count" fill="#059669" radius={[8, 8, 0, 0]} />
-                        </RBarChart>
-                      </ResponsiveContainer>
+                        renderCampaignBarChart(campaignTypeDistributionData, 'Kampanya tipi dağılımı')
                       ) : (
-                        <div className="campaign-chart-empty">Kampanya tipi verisi yok.</div>
+                        renderCampaignChartEmpty(campaignTypeEmptyState)
                       )}
                     </div>
                   </div>
@@ -6732,23 +7237,18 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <span className="campaign-chart-badge campaign-chart-badge--amber" aria-hidden="true"><Sparkles size={16} /></span>
                     <div>
                       <h4>Öneri Önceliği</h4>
-                      <p className="campaign-chart-desc">Kampanya önerilerinin öncelik seviyeleri.</p>
+                      <p className="campaign-chart-desc">Kampanya Önerilerinin Öncelik seviyeleri.</p>
                     </div>
                   </div>
                   <div className="campaign-chart-body">
                     <div className="campaign-chart-canvas">
                       {hasCampaignSuggestionChartData ? (
-                      <ResponsiveContainer width="100%" height={180}>
-                        <RBarChart data={campaignSuggestionChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                          <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
-                          <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                          <RTooltip content={<CampaignChartTooltip />} />
-                          <Bar dataKey="count" fill="#d97706" radius={[8, 8, 0, 0]} />
-                        </RBarChart>
-                      </ResponsiveContainer>
+                        renderCampaignBarChart(campaignSuggestionDistributionData, 'Öneri önceliği dağılımı')
                       ) : (
-                        <div className="campaign-chart-empty">Gösterilecek öneri verisi yok.</div>
+                        renderCampaignChartEmpty({
+                          ...campaignSuggestionEmptyState,
+                          showRefresh: Boolean(crossModuleError),
+                        })
                       )}
                     </div>
                   </div>
@@ -6757,108 +7257,87 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             ) : null}
 
             {isHomeCampaignView ? (
-              <section className="mod-card b2b-section-card campaign-home-decision-card">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-indigo"><Megaphone size={18} /></div>
-                  <div>
-                    <h3>Öne Çıkan Fırsatlar</h3>
-                    <p>Modül detaylarına taşınan öneriler yerine çapraz ve yönetici seviyesindeki özel fırsatları izleyin.</p>
+              <section className="campaign-table-card campaign-suggestion-candidates-card campaign-section" aria-label="Kampanya öneri adayları">
+                <div className="campaign-table-card-head">
+                  <div className="campaign-table-card-head-main">
+                    <span className="campaign-table-card-icon mod-icon-amber" aria-hidden="true"><Sparkles size={16} /></span>
+                    <div>
+                      <h4>Kampanya Öneri Adayları</h4>
+                      <p>Modüllerden bağımsız oluşan, kampanyaya dönüştürülebilecek öneri adayları.</p>
+                    </div>
                   </div>
-                  <div
-                    className="campaign-refresh-toolbar"
-                    aria-label="Kampanya önerileri yenileme aksiyonları"
-                    style={{ display: 'inline-flex', flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: '8px' }}
-                  >
-                    <span
-                      className="campaign-refresh-label"
-                      style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap' }}
-                    >
-                      Son yenileme: {formatCampaignRefreshDateTime(campaignSuggestionRefreshedAt)}
-                    </span>
-                    <button
-                      type="button"
-                      className="primary-button campaign-refresh-button"
-                      onClick={handleCampaignSuggestionsRefresh}
-                      disabled={campaignSuggestionRefreshing}
-                      aria-label="Kampanya önerilerini yenile"
-                      title="Yenile"
-                      style={{ display: 'inline-flex', flex: '0 0 auto' }}
-                    >
-                      <RefreshCw size={15} className={campaignSuggestionRefreshing ? 'is-spinning' : ''} />
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost-button campaign-clear-history-button"
-                      onClick={clearPastCampaigns}
-                      disabled={isSaving || archiveCampaignRows.length === 0}
-                    >
-                      <Eraser size={15} />
-                      Geçmiş Kampanyaları Temizle
-                    </button>
-                  </div>
-                </div>
-
-                <section className="campaign-suggestions-panel campaign-suggestions-panel--dashboard" aria-label="Öne çıkan kampanya fırsatları">
-                  <div className="campaign-suggestion-list">
-                    {pagedCampaignSuggestions.length ? pagedCampaignSuggestions.map((suggestion) => (
-                      <article key={suggestion.id} className="campaign-suggestion-row campaign-suggestion-row--special">
-                        <div className="campaign-suggestion-main">
-                          <strong>{suggestion.title}</strong>
-                          <p>{suggestion.reason}</p>
-                          <div className="campaign-suggestion-meta">
-                            <span>{formatNumber(suggestion.affectedProductCount)} Ürün</span>
-                            <span>Önerilen indirim %{formatNumber(suggestion.recommendedDiscount)}</span>
-                            <span>{suggestion.recommendationType || 'special_opportunity'}</span>
-                            <span>{suggestion.impactSummary || suggestion.expectedImpact || 'Tahmini etki kampanya taslağına yansıtılır.'}</span>
-                          </div>
-                          <div className="campaign-suggestion-meta campaign-suggestion-meta--secondary">
-                            <span>{CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta'} Öncelik</span>
-                            <span>{suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel'}</span>
-                            <span>{suggestion.moduleLabel || CAMPAIGN_SUGGESTION_MODULES.general.label}</span>
-                            {suggestion.giftCardRewardCode ? <span>Hediye kartı: {suggestion.giftCardRewardCode}</span> : null}
-                          </div>
-                        </div>
-                        <div className="campaign-suggestion-actions">
-                          <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>
-                            Detay
-                          </button>
-                          <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>
-                            Kampanya Oluştur
-                          </button>
-                        </div>
-                      </article>
-                    )) : (
-                      <div className="campaign-module-empty-state">
-                        <strong>Öne çıkan özel fırsat yok</strong>
-                        <span>Detaylı öneriler ilgili modül sekmelerine ayrıştırıldı. Sayı rozetlerinden modül önerilerini takip edebilirsiniz.</span>
-                      </div>
-                    )}
-                  </div>
-                  {visibleCampaignSuggestions.length > CAMPAIGN_SUGGESTIONS_PAGE_SIZE ? (
-                    <div className="campaign-suggestions-pagination">
-                      <span>Sayfa {safeCampaignSuggestionPage} / {campaignSuggestionTotalPages}</span>
-                      <div className="campaign-suggestions-pagination-actions">
-                        <button
-                          type="button"
-                          className="ghost-button"
-                          disabled={safeCampaignSuggestionPage === 1}
-                          onClick={() => setCampaignSuggestionPage((current) => Math.max(1, current - 1))}
-                        >
-                          Önceki
-                        </button>
-                        <button
-                          type="button"
-                          className="primary-button"
-                          disabled={safeCampaignSuggestionPage === campaignSuggestionTotalPages}
-                          onClick={() => setCampaignSuggestionPage((current) => Math.min(campaignSuggestionTotalPages, current + 1))}
-                        >
-                          Sonraki
-                        </button>
+                  {campaignSuggestionCandidateRows.length ? (
+                    <div className="campaign-candidate-pagination campaign-candidate-pagination--top" aria-label="Kampanya öneri adayları sayfalama">
+                      <span>{formatNumber(campaignCandidateStartIndex)}-{formatNumber(campaignCandidateEndIndex)} / {formatNumber(campaignSuggestionCandidateRows.length)}</span>
+                      <div>
+                        <button type="button" className="ghost-button" disabled={safeCampaignCandidatePage === 1} onClick={() => setCampaignCandidatePage((current) => Math.max(1, current - 1))}>Önceki</button>
+                        <button type="button" className="ghost-button" disabled={safeCampaignCandidatePage === campaignCandidateTotalPages} onClick={() => setCampaignCandidatePage((current) => Math.min(campaignCandidateTotalPages, current + 1))}>Sonraki</button>
                       </div>
                     </div>
                   ) : null}
-                </section>
+                </div>
 
+                {campaignSuggestionCandidateRows.length ? (
+                  <>
+                  <div className="table-wrapper campaign-suggestion-candidates-wrap">
+                    <table className="data-table campaign-standard-table campaign-suggestion-candidates-table">
+                      <thead>
+                        <tr>
+                          <th>Öneri Başlığı</th>
+                          <th>Modül / Kapsam</th>
+                          <th>Öneri Türü</th>
+                          <th>Öncelik</th>
+                          <th>Durum</th>
+                          <th>Etkilenen Ürün</th>
+                          <th>Önerilen Aksiyon</th>
+                          <th>Neden</th>
+                          <th>İşlemler</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedCampaignSuggestionCandidateRows.map((suggestion) => (
+                          <tr key={`candidate-${suggestion.id || suggestion.recommendationType || suggestion.title}`}>
+                            <td className="campaign-suggestion-candidate-title">
+                              <strong title={normalizeCampaignInsightText(suggestion.title)}>{normalizeCampaignInsightText(suggestion.title)}</strong>
+                              <span>{normalizeCampaignInsightText(suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Çapraz fırsat')}</span>
+                            </td>
+                            <td>
+                              <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(suggestion.moduleLabel || suggestion.primaryModule || 'Genel')}</span>
+                            </td>
+                            <td>{formatCampaignRecommendationType(suggestion.recommendationType || suggestion.id || 'campaign_opportunity')}</td>
+                            <td>
+                              <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>
+                                {getCampaignPriorityDisplayLabel(suggestion.priority)}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`campaign-signal-pill ${getCampaignSuggestionStatusToneClass(suggestion)}`}>
+                                {getCampaignSuggestionStatusDisplayLabel(suggestion)}
+                              </span>
+                            </td>
+                            <td>{formatNumber(suggestion.affectedProductCount || 0)} Ürün</td>
+                            <td className="campaign-suggestion-candidate-action">
+                              <span>{normalizeCampaignInsightText(suggestion.suggestedAction || 'Kampanya oluştur')}</span>
+                              {Number(suggestion.recommendedDiscount || 0) > 0 ? <small>%{formatNumber(suggestion.recommendedDiscount)} indirim</small> : null}
+                            </td>
+                            <td className="campaign-suggestion-candidate-reason">
+                              <span title={normalizeCampaignInsightText(suggestion.reason)}>{normalizeCampaignInsightText(suggestion.reason || 'Gerekçe verisi yok.')}</span>
+                            </td>
+                            <td className="table-cell-actions">
+                              {renderCampaignSuggestionActions(suggestion, 'Kampanya Oluştur')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  </>
+                ) : (
+                  <div className="campaign-table-empty">
+                    <strong>Gösterilecek kampanya öneri adayı bulunmuyor.</strong>
+                    <span>Analiz motorundan gelen uygun öneriler oluştuğunda bu listede görünür.</span>
+                  </div>
+                )}
               </section>
             ) : null}
 
@@ -6875,8 +7354,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <div className="campaign-form-groups">
                     <article className={`campaign-form-group ${campaignTypeView === 'general' ? 'campaign-form-group--general-compact' : ''} ${['product', 'category', 'brand'].includes(campaignTypeView) ? 'campaign-form-group--scope-compact' : ''}`.trim()}>
                       <div className="campaign-form-group-head">
-                        <h4>{campaignTypeView === 'general' ? 'Genel Mağaza İndirimi' : 'Kampanya Bilgileri'}</h4>
-                        <p>{campaignTypeView === 'general' ? 'Tüm mağaza ürünlerine uygulanacak genel kampanya bilgilerini tanımlayın.' : 'Kampanyanın temel kimliğini ve indirimi tanımlayın.'}</p>
+                        <h4>{campaignTypeView === 'general' ? 'Mağaza Geneli İndirim' : 'Kampanya Bilgileri'}</h4>
+                        <p>{campaignTypeView === 'general' ? 'Tüm mağaza Ürünlerine uygulanacak genel kampanya bilgilerini tanımlayın.' : 'Kampanyanin temel kimliğini ve indirimi tanımlayın.'}</p>
                       </div>
                       <div className="form-grid campaign-form-fields campaign-form-fields--three campaign-form-fields--general-info">
                         <label className="field-group"><span>Kampanya Adı</span><input type="text" value={campaignDraft.name} onChange={(event) => setCampaignDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Örn: Hafta Sonu Atıştırmalık" /></label>
@@ -6910,7 +7389,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       <article className="campaign-form-group">
                         <div className="campaign-form-group-head">
                           <h4>Ürün Seçimi</h4>
-                          <p>Arama ile Ürün ekleyin; tüm ürünler sayfa açılışında yüklenmez.</p>
+                          <p>Arama ile Ürün ekleyin; tüm Ürünler sayfa açilisinda yüklenmez.</p>
                         </div>
                         <div className="campaign-product-picker">
                           <div className="campaign-product-search-row">
@@ -6919,7 +7398,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                               <input
                                 type="search"
                                 value={productCampaignSearch}
-                                onChange={(event) => setProductCampaignSearch(event.target.value)}
+                                onFocus={() => { void loadCampaignProducts(); }}
+                                onChange={(event) => {
+                                  setProductCampaignSearch(event.target.value);
+                                  if (!availableProductsLoaded) void loadCampaignProducts();
+                                }}
                                 placeholder="Ürün adı, barkod veya SKU"
                               />
                             </label>
@@ -6937,15 +7420,17 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                                 </button>
                               );
                             }) : (
-                              productCampaignSearch ? (
+                              productCampaignSearch && availableProductsLoading ? (
+                                <div className="campaign-product-search-empty">Ürünler yükleniyor...</div>
+                              ) : productCampaignSearch ? (
                                 <div className="campaign-product-search-empty">Eşleşen Ürün bulunamadı.</div>
                               ) : null
                             )}
                           </div>
 
-                          <div className="campaign-selected-products" aria-label="Seçilen ürünler">
+                          <div className="campaign-selected-products" aria-label="Seçilen Ürünler">
                             <div className="campaign-selected-products-head">
-                              <strong>Seçilen ürünler</strong>
+                              <strong>Seçilen Ürünler</strong>
                               <span>{formatNumber(selectedCampaignProducts.length)} Ürün</span>
                             </div>
                             {selectedCampaignProducts.length ? (
@@ -6953,7 +7438,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                                 {selectedCampaignProducts.map((product) => (
                                   <span key={product.id} className="campaign-selected-product-chip">
                                     {product.label}
-                                    <button type="button" onClick={() => toggleCampaignProduct(product.id)} aria-label={`${product.label} Ürününü kaldır`}>
+                                    <button type="button" onClick={() => toggleCampaignProduct(product.id)} aria-label={`${product.label} Ürünönü kaldır`}>
                                       <X size={12} />
                                     </button>
                                   </span>
@@ -6971,22 +7456,73 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       <article className="campaign-form-group">
                         <div className="campaign-form-group-head">
                           <h4>Kategori Seçimi</h4>
-                          <p>Kampanyanın uygulanacağı kategorileri seçin.</p>
+                          <p>Kampanyanin uygulanacagi kategorileri seçin.</p>
                         </div>
-                        <div className="s-giftcard-category-grid">
-                          {availableCategories.map((category) => {
-                            const categoryId = String(category.id || '');
-                            return (
-                              <label key={categoryId} className={`s-giftcard-category-item ${campaignDraft.targetCategoryIds.includes(categoryId) ? 'is-selected' : ''}`}>
-                                <input
-                                  type="checkbox"
-                                  checked={campaignDraft.targetCategoryIds.includes(categoryId)}
-                                  onChange={() => toggleCampaignCategory(categoryId)}
-                                />
-                                <span>{String(category.name || categoryId)}</span>
-                              </label>
-                            );
-                          })}
+                        <div className="campaign-category-scope-layout">
+                          <section className="campaign-category-scope-pane">
+                            <div className="campaign-category-scope-pane-head">
+                              <h5>Kategori Seçimi</h5>
+                              <span>{formatNumber(campaignDraft.targetCategoryIds.length)} seçili</span>
+                            </div>
+                            <div className="s-giftcard-category-grid campaign-category-grid-list">
+                              {availableCategories.map((category) => {
+                                const categoryId = String(category.id || '');
+                                return (
+                                  <label key={categoryId} className={`s-giftcard-category-item ${campaignDraft.targetCategoryIds.includes(categoryId) ? 'is-selected' : ''}`}>
+                                    <input
+                                      type="checkbox"
+                                      checked={campaignDraft.targetCategoryIds.includes(categoryId)}
+                                      onChange={() => toggleCampaignCategory(categoryId)}
+                                    />
+                                    <span>{String(category.name || categoryId)}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </section>
+                          <section className="campaign-category-scope-pane">
+                            <div className="campaign-category-label-scope">
+                              <div className="campaign-category-label-toolbar">
+                                <label className="field-group">
+                                  <span>Etiket Ara <small>(Opsiyonel)</small></span>
+                                  <input
+                                    type="search"
+                                    value={categoryLabelSearch}
+                                    onChange={(event) => setCategoryLabelSearch(event.target.value)}
+                                    placeholder="Etiket adı veya kategori"
+                                  />
+                                </label>
+                                {selectedCategoryLabelOptions.length ? <span className="campaign-category-label-count">{formatNumber(selectedCategoryLabelOptions.length)} etiket seçildi</span> : null}
+                              </div>
+                              {selectedCategoryLabelOptions.length ? (
+                                <div className="campaign-category-label-selected" aria-label="Seçilen etiketler">
+                                  {selectedCategoryLabelOptions.map((option) => (
+                                    <span key={option.id} className="campaign-selected-product-chip">
+                                      {option.label}
+                                      <button type="button" onClick={() => toggleCampaignCategoryLabel(option.id)} aria-label={`${option.label} etiketini kaldır`}>
+                                        <X size={12} />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <div className="campaign-category-label-grid">
+                                {selectedCategoryIdSet.size && visibleCategoryLabelOptions.length ? (
+                                  visibleCategoryLabelOptions.map((option) => (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      className={`campaign-category-label-chip ${selectedCategoryLabelIdSet.has(option.id) ? 'is-selected' : ''}`}
+                                      onClick={() => toggleCampaignCategoryLabel(option.id)}
+                                    >
+                                      <span>{option.label}</span>
+                                      {option.categoryName ? <small>{option.categoryName}</small> : null}
+                                    </button>
+                                  ))
+                                ) : null}
+                              </div>
+                            </div>
+                          </section>
                         </div>
                       </article>
                     ) : null}
@@ -6995,7 +7531,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       <article className="campaign-form-group">
                         <div className="campaign-form-group-head">
                           <h4>Marka Seçimi</h4>
-                          <p>Kampanyanın uygulanacağı markaları seçin.</p>
+                          <p>Kampanyanin uygulanacagi markalari seçin.</p>
                         </div>
                         <div className="campaign-product-picker campaign-brand-picker">
                           <div className="campaign-brand-toolbar">
@@ -7004,8 +7540,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                               <input
                                 type="search"
                                 value={brandCampaignSearch}
-                                onChange={(event) => setBrandCampaignSearch(event.target.value)}
-                                placeholder="En az 2 karakter ile arayın"
+                                onFocus={() => { void loadCampaignProducts(); }}
+                                onChange={(event) => {
+                                  setBrandCampaignSearch(event.target.value);
+                                  if (!availableProductsLoaded) void loadCampaignProducts();
+                                }}
+                                placeholder="En az 2 karakter ile arayin"
                               />
                             </label>
                             <div className="campaign-form-tip campaign-brand-toolbar-info">
@@ -7020,7 +7560,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                                   <span>Görmek için arama yapın.</span>
                                 </>
                               ) : (
-                                <span>Markalar ürün verilerinden dinamik olarak listelenir.</span>
+                                <span>{availableProductsLoading ? 'Markalar yükleniyor...' : 'Markalar Ürün verilerinden dinamik olarak listelenir.'}</span>
                               )}
                             </div>
                             <div className="campaign-selected-products campaign-selected-products--inline" aria-label="Seçilen markalar">
@@ -7097,7 +7637,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         ? campaignSimulationError
                         : hasEnoughSimulationData
                           ? (campaignSimulation?.explanation || 'Simülasyon gerçek satış geçmişi, stok ve kampanya kapsamına göre hesaplanır.')
-                          : 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadığından tahmin üretilemedi.';
+                          : 'Bu kampanya kapsamı için yeterli satış geçmişi bulunmadıgindan tahmin Üretilemedi.';
 
                       return (
                         <article className="campaign-form-group">
@@ -7124,83 +7664,47 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
                   <div className="modal-actions campaign-form-actions">
                     <button className="primary-button" type="button" onClick={addCampaign}><Plus size={15} /> Kampanya Ekle</button>
-                    <button className="outline-button" type="button" onClick={() => setCampaignDraft(createDefaultCampaignDraft())}>Taslağı Temizle</button>
+                    <button className="outline-button" type="button" onClick={() => resetCampaignDraft(activeCampaignDraftModule)}>Taslağı Temizle</button>
                   </div>
                 </section>
                 ) : null}
 
-                {isCampaignBuilderView ? (
-                  <section className="campaign-suggestions-panel campaign-suggestions-panel--module campaign-section" aria-label={`${CAMPAIGN_SUGGESTION_MODULES[campaignTypeView]?.label || 'Modül'} önerileri`}>
-                    <div className="campaign-suggestions-panel-head campaign-suggestions-panel-head--module">
-                      <div className="campaign-suggestions-panel-head-main">
-                        <span className={`campaign-table-card-icon campaign-suggestions-panel-icon ${CAMPAIGN_MODULE_HEADER_ICON_CLASSES[campaignTypeView] || 'mod-icon-indigo'}`} aria-hidden="true">
-                          {(() => {
-                            const ModuleSuggestionIcon = CAMPAIGN_TYPE_TAB_ICONS[campaignTypeView] || Sparkles;
-                            return <ModuleSuggestionIcon size={16} />;
-                          })()}
-                        </span>
-                        <div className="campaign-suggestions-panel-title">
-                          <h4>{CAMPAIGN_SUGGESTION_MODULES[campaignTypeView]?.label || 'Modül'} Önerileri</h4>
-                          <p>{formatNumber(moduleCampaignSuggestions.length)} öneri bu modülün primary alanı olarak sınıflandırıldı.</p>
-                        </div>
-                      </div>
-                      <span className="campaign-suggestions-count-pill">{formatNumber(moduleCampaignSuggestions.length)} öneri</span>
-                    </div>
-                    <div className="campaign-suggestion-list">
-                      {pagedCampaignSuggestions.length ? pagedCampaignSuggestions.map((suggestion) => (
-                        <article key={suggestion.id} className="campaign-suggestion-row">
-                          <div className="campaign-suggestion-main">
-                            <strong>{normalizeCampaignInsightText(suggestion.title)}</strong>
-                            <p>{normalizeCampaignInsightText(suggestion.reason)}</p>
-                            <div className="campaign-suggestion-meta">
-                              <span>Tip: {normalizeCampaignInsightText(suggestion.recommendationType || suggestion.id || 'campaign_opportunity')}</span>
-                              <span>Scope: {normalizeCampaignInsightText(suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel')}</span>
-                              <span>Aksiyon: {normalizeCampaignInsightText(suggestion.suggestedAction || 'Kampanya oluştur')}</span>
-                            </div>
-                            <div className="campaign-suggestion-meta campaign-suggestion-meta--secondary">
-                              <span>{formatNumber(suggestion.affectedProductCount)} Ürün</span>
-                              <span>Önerilen indirim %{formatNumber(suggestion.recommendedDiscount)}</span>
-                              <span>{CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta'} Öncelik</span>
-                              {Array.isArray(suggestion.secondaryTags) && suggestion.secondaryTags.length ? <span>{suggestion.secondaryTags.join(' · ')}</span> : null}
-                            </div>
-                          </div>
-                          <div className="campaign-suggestion-actions">
-                            <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>
-                              Detay
-                            </button>
-                            <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>
-                              Kampanya Oluştur
-                            </button>
-                          </div>
-                        </article>
-                      )) : (
-                        <div className="campaign-module-empty-state">
-                          <strong>Bu modülde öneri yok</strong>
-                          <span>Analiz motoru bu modül için öne çıkan öneri üretmedi. Diğer modüllerdeki sayı rozetlerini kontrol edin.</span>
-                        </div>
-                      )}
-                    </div>
-                    {visibleCampaignSuggestions.length > CAMPAIGN_SUGGESTIONS_PAGE_SIZE ? (
-                      <div className="campaign-suggestions-pagination">
-                        <span>Sayfa {safeCampaignSuggestionPage} / {campaignSuggestionTotalPages}</span>
-                        <div className="campaign-suggestions-pagination-actions">
-                          <button type="button" className="ghost-button" disabled={safeCampaignSuggestionPage === 1} onClick={() => setCampaignSuggestionPage((current) => Math.max(1, current - 1))}>
-                            Önceki
-                          </button>
-                          <button type="button" className="primary-button" disabled={safeCampaignSuggestionPage === campaignSuggestionTotalPages} onClick={() => setCampaignSuggestionPage((current) => Math.min(campaignSuggestionTotalPages, current + 1))}>
-                            Sonraki
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </section>
-                ) : null}
+                {shouldShowCampaignSuggestionPanel ? renderCampaignActionCandidatesTable({
+                  title: 'Ürün Bazlı Öneriler',
+                  description: 'Aksiyon alınabilir ürün önerileri sade tablo görünümünde listelenir.',
+                  icon: Package,
+                  total: moduleCampaignSuggestions.length,
+                  rows: pagedProductSuggestions.pageRows,
+                  paginationKey: 'product-suggestions',
+                  tableClassName: 'campaign-insight-table--compact campaign-insight-table--product-actions',
+                  emptyTitle: 'Bu modülde öneri yok',
+                  emptyDescription: 'Uygun ve aksiyon alınabilir ürün önerileri oluştuğunda burada görünür.',
+                  columns: [
+                    { key: 'title', label: 'Öneri Başlığı', className: 'campaign-insight-title-cell campaign-insight-cell-title', render: (suggestion) => <strong title={normalizeCampaignInsightText(suggestion.title)}>{normalizeCampaignInsightText(suggestion.title)}</strong> },
+                    { key: 'recommendationType', label: 'Öneri Türü', className: 'campaign-insight-cell-type', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{formatCampaignRecommendationType(suggestion.recommendationType || suggestion.id || 'campaign_opportunity')}</span> },
+                    { key: 'scope', label: 'Kapsam', className: 'campaign-insight-cell-scope', render: (suggestion) => formatCampaignScopeLabel(suggestion.scopeLabel || CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Ürün Bazlı') },
+                    { key: 'product', label: 'Etkilenen Ürün', className: 'campaign-insight-cell-count', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} Ürün` },
+                    { key: 'discount', label: 'Önerilen İndirim', className: 'campaign-insight-metric-cell', render: (suggestion) => Number(suggestion.recommendedDiscount || 0) > 0 ? `%${formatNumber(suggestion.recommendedDiscount)}` : '—' },
+                    { key: 'priority', label: 'Öncelik', className: 'campaign-insight-cell-status', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>{getCampaignPriorityDisplayLabel(suggestion.priority)}</span> },
+                    { key: 'status', label: 'Uygunluk Durumu', className: 'campaign-insight-cell-status', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignSuggestionStatusToneClass(suggestion)}`}>{getCampaignSuggestionStatusDisplayLabel(suggestion)}</span> },
+                    { key: 'impact', label: 'Etki Özeti', className: 'campaign-insight-cell-impact', render: (suggestion) => <span title={getCampaignSuggestionImpactSummary(suggestion)}>{getCampaignSuggestionImpactSummary(suggestion)}</span> },
+                    {
+                      key: 'actions',
+                      label: 'İşlemler',
+                      className: 'table-cell-actions campaign-insight-cell-actions',
+                      render: (suggestion) => (
+                        renderCampaignSuggestionActions(suggestion, 'Kampanya Oluştur')
+                      ),
+                    },
+                  ],
+                }) : null}
 
                 {isCampaignBuilderView ? renderSingleCampaignModuleTable({
                   title: CAMPAIGN_MODULE_SINGLE_TABLE_TITLES[campaignTypeView] || 'Kampanya Listesi',
-                  description: 'Aktif ve pasif kampanyalar bu modül için tek tabloda birlikte listelenir.',
+                  description: 'Aktif kampanyalar, planlananlar ve arşiv kayıtları ayrı tablolarda izlenir.',
                   rows: moduleCampaignRows,
                   tableKeyPrefix: campaignTypeView,
+                  splitLifecycle: true,
                 }) : null}
 
                 {campaignTypeView === 'giftCards' ? (
@@ -7213,11 +7717,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   })}
                   <div className="s-giftcard-modal-grid campaign-giftcard-grid">
                     <section className="s-giftcard-form-box campaign-giftcard-left">
-                      <div className="campaign-giftcard-kpi-row" aria-label="Hediye kartı KPI Özet">
-                        <div><span>Atanan Kart</span><strong>{formatNumber(assignedGiftCardCount)}</strong></div>
-                        <div><span>Atamaya Uygun</span><strong>{formatNumber(assignableGiftCards.length)}</strong></div>
-                        <div><span>Aktif Kart Sayısı</span><strong>{formatNumber(activeGiftCardCount)}</strong></div>
-                      </div>
+                      <CampaignGiftCardKpiRow
+                        assignedGiftCardCount={assignedGiftCardCount}
+                        assignableGiftCardCount={assignableGiftCards.length}
+                        activeGiftCardCount={activeGiftCardCount}
+                        formatNumber={formatNumber}
+                      />
 
                       <div className="campaign-giftcard-pane">
                         <div className="campaign-giftcard-pane-head">
@@ -7259,13 +7764,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                             </select>
                           </label>
                           <label>
-                            <span>Değer</span>
+                            <span>Deger</span>
                             <input type="number" min="0" step="0.01" value={giftCardDraft.value} onChange={(event) => setGiftCardDraft((current) => ({ ...current, value: event.target.value }))} placeholder={giftCardDraft.valueType === 'percentage' ? '10' : '150'} />
                           </label>
                         </div>
                         <div className="s-giftcard-inline-fields s-giftcard-inline-fields--triple">
                           <label>
-                            <span>Kullanım Hakkı</span>
+                            <span>Kullanim Hakki</span>
                             <input
                               type="number"
                               min="1"
@@ -7280,7 +7785,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                             <input type="number" min="0" step="0.01" value={giftCardDraft.minSpendForReward} onChange={(event) => setGiftCardDraft((current) => ({ ...current, minSpendForReward: event.target.value }))} />
                           </label>
                           <label>
-                            <span>Geçerlilik Tarihi / Son Kullanım Tarihi</span>
+                            <span>Geçerlilik Tarihi / Son Kullanim Tarihi</span>
                             <input type="date" value={giftCardDraft.expiresAt} onChange={(event) => setGiftCardDraft((current) => ({ ...current, expiresAt: event.target.value }))} />
                           </label>
                         </div>
@@ -7364,33 +7869,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     </section>
 
                     <section className="s-giftcard-list-box campaign-giftcard-right">
-                      <div className="s-giftcard-list-filters">
-                        <input
-                          type="search"
-                          className="s-giftcard-search"
-                          placeholder="Kart adı ara..."
-                          value={giftCardSearch}
-                          onChange={(event) => setGiftCardSearch(event.target.value)}
-                        />
-                        <input
-                          type="number"
-                          className="s-giftcard-amount-filter"
-                          placeholder="Min. miktar"
-                          min="0"
-                          value={giftCardAmountFilter}
-                          onChange={(event) => setGiftCardAmountFilter(event.target.value)}
-                        />
-                      </div>
                       <h4>Mevcut Kartlar ({filteredGiftCards.length})</h4>
                       {giftCards.length === 0 ? (
                         <div className="s-giftcard-empty campaign-giftcard-empty">
                           <Gift size={20} />
                           <p>Henüz hediye kartı tanımlanmadı. Yeni bir kart oluşturarak müşteri bağlılığını artırabilirsiniz.</p>
-                        </div>
-                      ) : filteredGiftCards.length === 0 ? (
-                        <div className="s-giftcard-empty campaign-giftcard-empty">
-                          <Gift size={20} />
-                          <p>Arama veya miktar filtresiyle eşleşen kart bulunamadı.</p>
                         </div>
                       ) : (
                         <div className="s-giftcard-list s-giftcard-list--scrollable">
@@ -7409,7 +7892,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                                   <span>{card.expiresAt ? `Son kullanım: ${formatDate(card.expiresAt)}` : 'Süresiz'}</span>
                                 </div>
                                 <small>{assignedCustomer ? `Atandı: ${assignedCustomer.customerName}` : 'Henüz müşteriye atanmadı.'}</small>
-                                {isExpired ? <small className="campaign-giftcard-expired">Geçerliliği doldu</small> : null}
+                                {isExpired ? <small className="campaign-giftcard-expired">Geçerliligi doldu</small> : null}
                               </div>
                               <div className="campaign-giftcard-actions">
                                 {false && !isAssigned && !isExpired ? (
@@ -7430,7 +7913,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                                     loyaltyPointCost: String(card.loyaltyPointCost || ''),
                                     expiresAt: String(card.expiresAt || ''),
                                   });
-                                  setToast({ type: 'info', title: 'Hediye Kartı', message: 'Kart bilgisi forma aktarıldı.' });
+                                  setToast({ type: 'info', title: 'Hediye Kartı', message: 'Kart bilgisi forma aktarildi.' });
                                 }}>
                                   Düzenle
                                 </button>
@@ -7454,7 +7937,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       icon: CalendarDays,
                       iconClassName: 'mod-icon-amber',
                       title: 'SKT Fırsat Merkezi',
-                      description: 'SKT yaklaşan ürünleri hızlıca okuyun, riski sadeleştirin ve indirim aksiyonunu tek ekrandan başlatın.',
+                      description: 'SKT yaklaşan Ürünleri hızlıca okuyun, riski sadeleştirin ve indirim aksiyonunu tek ekrandan başlatın.',
                       className: 'expiry-campaign-header',
                     })}
 
@@ -7464,7 +7947,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         iconClassName: 'mod-icon-rose',
                         label: 'Bugün Kritik SKT',
                         value: formatNumber(filteredExpiryRows.filter((row) => Number(row?.daysToExpiry || 999) <= 0).length),
-                        description: 'Bugün aksiyon bekleyen ürünler',
+                        description: 'Bugün aksiyon bekleyen Ürünler',
                       },
                       {
                         icon: CalendarClock,
@@ -7474,7 +7957,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           const days = Number(row?.daysToExpiry || 999);
                           return days > 0 && days <= 3;
                         }).length),
-                        description: 'Hızlı indirim adayı ürünler',
+                        description: 'Hızlı indirim adayı Ürünler',
                       },
                       {
                         icon: CalendarDays,
@@ -7484,72 +7967,50 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           const days = Number(row?.daysToExpiry || 999);
                           return days > 0 && days <= 7;
                         }).length),
-                        description: 'Planlı kampanya adayı ürünler',
+                        description: 'Planli kampanya adayı Ürünler',
                       },
                       {
                         icon: Coins,
                         iconClassName: 'mod-icon-violet',
-                        label: 'Olası Fire Riski',
+                        label: 'Olasi Fire Riski',
                         value: formatCurrency(filteredExpiryRows.reduce((sum, row) => sum + (Number(row?.stockLevel || 0) * Number(row?.currentPrice || 0)), 0), form.currency),
-                        description: 'Stok değeri üzerinden tahmini risk',
+                        description: 'Stok değeri Üzerinden tahmini risk',
                       },
                     ], {
                       title: 'Kampanya Bilgileri',
-                      description: 'SKT riski ve hızlı indirim kapsamını özetleyen temel göstergeler.',
+                      description: 'SKT riski ve hızlı indirim kapsamını Özetleyen temel göstergeler.',
                       className: 'expiry-campaign-metrics',
                       gridClassName: 'expiry-campaign-metrics-grid',
                       itemClassName: 'expiry-campaign-metric-card',
                     })}
 
-                    {renderCampaignFilterPanel({
-                      filters: [
-                        { label: 'SKT’ye kalan gün', value: expiryDayBandFilter, onChange: setExpiryDayBandFilter, options: CAMPAIGN_EXPIRY_DAY_BANDS },
-                        { label: 'Risk', value: expiryRiskFilter, onChange: setExpiryRiskFilter, options: CAMPAIGN_PRIORITY_OPTIONS },
-                        {
-                          label: 'Kategori',
-                          value: expiryCategoryFilter,
-                          onChange: setExpiryCategoryFilter,
-                          options: [{ value: '', label: 'Tüm kategoriler' }, ...availableCategories.map((category) => ({ value: category.name, label: category.name }))],
-                        },
-                      ],
-                      search: expirySearch,
-                      onSearchChange: setExpirySearch,
-                      searchFirst: true,
-                      description: '',
-                      showRefreshAction: false,
-                      onReset: resetExpiryInsightFilters,
-                      className: 'expiry-campaign-filters',
-                      groupClassName: 'expiry-campaign-filter-grid',
-                    })}
                   </section>
 
                   <div className="campaign-content-sections campaign-insight-layout campaign-insight-layout--insight">
                     {renderCampaignActionCandidatesTable({
                       title: 'Hızlı İndirim Adayları',
-                      description: 'SKT odaklı indirim önerilerini takip edin.',
+                      description: 'SKT odaklı indirim Önerilerini takip edin.',
                       icon: Megaphone,
                       total: filteredExpirySuggestions.length,
                       rows: pagedExpirySuggestions.pageRows,
                       paginationKey: 'expiry-suggestions',
-                      emptyTitle: 'Filtrelere uygun aksiyon adayı bulunamadı.',
-                      emptyDescription: 'Risk veya kategori filtresini genişleterek yeni indirim önerileri görebilirsiniz.',
+                      tableClassName: 'campaign-insight-table--compact campaign-insight-table--expiry-actions',
+                      emptyTitle: 'Aksiyon adayı bulunamadı.',
+                      emptyDescription: 'Yeni indirim Önerileri veri geldikçe burada görünür.',
                       columns: [
-                        { key: 'action', label: 'Aksiyon', className: 'campaign-insight-title-cell', render: (suggestion) => <strong>{normalizeCampaignInsightText(suggestion.title)}</strong> },
-                        { key: 'reason', label: 'Gerekçe', className: 'campaign-insight-note-cell', render: (suggestion) => <span className="campaign-insight-note-text">{normalizeCampaignInsightText(suggestion.reason)}</span> },
-                        { key: 'type', label: 'Tip', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(suggestion.recommendationType || 'near_expiry')}</span> },
-                        { key: 'scope', label: 'Scope', render: (suggestion) => normalizeCampaignInsightText(suggestion.scopeLabel || 'SKT / fire riski') },
-                        { key: 'product', label: 'Ürün', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} ürün` },
+                        { key: 'action', label: 'Aksiyon Başlığı', className: 'campaign-insight-title-cell campaign-insight-cell-title', render: (suggestion) => <strong title={normalizeCampaignInsightText(suggestion.title)}>{normalizeCampaignInsightText(suggestion.title)}</strong> },
+                        { key: 'type', label: 'Öneri Türü', className: 'campaign-insight-cell-type', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{formatCampaignRecommendationType(suggestion.recommendationType || 'near_expiry')}</span> },
+                        { key: 'scope', label: 'Kapsam', className: 'campaign-insight-cell-scope', render: (suggestion) => formatCampaignScopeLabel(suggestion.scopeLabel || 'SKT / fire riski') },
+                        { key: 'product', label: 'Etkilenen Ürün', className: 'campaign-insight-cell-count', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} Ürün` },
                         { key: 'discount', label: 'Önerilen İndirim', className: 'campaign-insight-metric-cell', render: (suggestion) => `%${formatNumber(suggestion.recommendedDiscount)}` },
-                        { key: 'risk', label: 'Risk Seviyesi', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>{normalizeCampaignInsightText(CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta')}</span> },
+                        { key: 'risk', label: 'Risk / Öncelik', className: 'campaign-insight-cell-risk', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>{getCampaignPriorityDisplayLabel(suggestion.priority)}</span> },
+                        { key: 'status', label: 'Durum', className: 'campaign-insight-cell-status', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignSuggestionStatusToneClass(suggestion)}`}>{getCampaignSuggestionStatusDisplayLabel(suggestion)}</span> },
                         {
                           key: 'actions',
-                          label: 'İşlem',
-                          className: 'table-cell-actions',
+                          label: 'İşlemler',
+                          className: 'table-cell-actions campaign-insight-cell-actions',
                           render: (suggestion) => (
-                            <div className="table-actions campaign-insight-row-actions">
-                              <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>Detay analizi</button>
-                              <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>Hızlı indirim oluştur</button>
-                            </div>
+                            renderCampaignSuggestionActions(suggestion, 'Oluştur')
                           ),
                         },
                       ],
@@ -7557,248 +8018,29 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
                     {renderCampaignProductCandidatesTable({
                       title: 'Ürün Listesi',
-                      description: 'SKT’si yaklaşan ürünleri takip edin.',
+                      description: 'SKT’si yaklaşan Ürünleri takip edin.',
                       icon: CalendarDays,
                       total: expiryInsightCards.length,
                       rows: pagedExpirySignals.pageRows,
                       mode: 'expiry',
                       paginationKey: 'expiry-signals',
                       emptyTitle: 'Kayıt bulunamadı',
-                      emptyDescription: 'Bu filtrelere uygun aksiyon adayı yok.',
+                      emptyDescription: 'Aksiyon adayı yok.',
                     })}
                   </div>
 
                   {renderSingleCampaignModuleTable({
                     title: 'SKT Bazlı Kampanya Listesi',
-                    description: 'Aktif ve pasif SKT odaklı kampanyalar tek tabloda birlikte listelenir.',
+                    description: 'Aktif, planlanan ve arşiv SKT kampanyaları ayrı alanlarda izlenir.',
                     rows: moduleCampaignRows,
                     tableKeyPrefix: 'expiry',
                     sectionClassName: 'campaign-section campaign-module-single-table--insight',
                     emptyTitle: 'Kayıt bulunamadı',
                     emptyDescription: 'Henüz SKT bazlı kampanya oluşturulmadı.',
+                    splitLifecycle: true,
                   })}
                 </section>
                 ) : null}
-
-                {false && campaignTypeView === 'expiry' ? (
-                <section className="campaign-dashboard-shell campaign-dashboard-shell--expiry campaign-module-insight-card campaign-module-insight-card--expiry campaign-section">
-                  <div className="campaign-dashboard-header">
-                    <div className="mod-card-icon mod-icon-amber"><CalendarDays size={18} /></div>
-                    <div>
-                      <h3>SKT Fırsat Merkezi</h3>
-                      <p>SKT’si yaklaşan ürünleri analiz edin, hızlı indirim veya stok eritme aksiyonu başlatın.</p>
-                    </div>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-dashboard-summary-grid campaign-module-summary-grid">
-                    <article className="campaign-module-summary-card">
-                      <span>Bugün kritik SKT adayı</span>
-                      <strong>{formatNumber(filteredExpiryRows.filter((row) => Number(row?.daysToExpiry || 999) <= 0).length)}</strong>
-                      <small>Bugün veya geçmiş SKT</small>
-                    </article>
-                    <article className="campaign-module-summary-card">
-                      <span>3 gün içinde SKT dolacak</span>
-                      <strong>{formatNumber(filteredExpiryRows.filter((row) => Number(row?.daysToExpiry || 999) <= 3).length)}</strong>
-                      <small>Hızlı aksiyon adayı</small>
-                    </article>
-                    <article className="campaign-module-summary-card">
-                      <span>Olası fire riski</span>
-                      <strong>{formatNumber(filteredExpiryRows.reduce((sum, row) => sum + (Number(row?.stockLevel || 0) * Number(row?.currentPrice || 0)), 0))} {form.currency}</strong>
-                      <small>Stok değeri üzerinden tahmin</small>
-                    </article>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-dashboard-insight-grid campaign-metric-explainer-grid campaign-metric-explainer-grid--insight">
-                    {CAMPAIGN_METRIC_EXPLANATIONS.map((item, index) => {
-                      const InsightIcon = [CalendarDays, TrendingUp, Sparkles, Info][index % 4];
-                      return (
-                        <article key={item.title} className="campaign-metric-explainer-card">
-                          <span className="campaign-metric-explainer-icon"><InsightIcon size={15} /></span>
-                          <div>
-                            <strong>{item.title}</strong>
-                            <p>{item.description}</p>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-
-                  <div className="campaign-dashboard-card campaign-filter-toolbar campaign-module-filterbar campaign-module-filterbar--wide campaign-module-filterbar--insight">
-                    <div className="campaign-module-filter-group">
-                      <label className="field-group campaign-control-field">
-                        <span>SKT’ye kalan gün</span>
-                        <select value={expiryDayBandFilter} onChange={(event) => setExpiryDayBandFilter(event.target.value)}>
-                          {CAMPAIGN_EXPIRY_DAY_BANDS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Risk</span>
-                        <select value={expiryRiskFilter} onChange={(event) => setExpiryRiskFilter(event.target.value)}>
-                          {CAMPAIGN_PRIORITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Kategori</span>
-                        <select value={expiryCategoryFilter} onChange={(event) => setExpiryCategoryFilter(event.target.value)}>
-                          <option value="">Tüm kategoriler</option>
-                          {availableCategories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="campaign-module-filter-actions">
-                      <button type="button" className="ghost-button" onClick={handleCampaignSuggestionsRefresh} disabled={campaignSuggestionRefreshing}>Önerileri Yenile</button>
-                      <button type="button" className="outline-button" onClick={resetExpiryInsightFilters}>Filtreleri Temizle</button>
-                    </div>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-scenario-grid campaign-scenario-strip campaign-scenario-strip--insight">
-                    {['discount-10', 'discount-20', 'discount-30'].map((scenarioKey) => (
-                      <button
-                        key={scenarioKey}
-                        type="button"
-                        className={`campaign-scenario-chip ${expiryScenario === scenarioKey ? 'is-active' : ''}`}
-                        onClick={() => setExpiryScenario(scenarioKey)}
-                      >
-                        <span className="campaign-scenario-chip-icon"><Sparkles size={15} /></span>
-                        <strong>{campaignScenarioOptions[scenarioKey].label}</strong>
-                        <span>{campaignScenarioOptions[scenarioKey].description}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {renderCampaignSimulationSection(renderedExpiryCampaignSimulation, {
-                    title: 'Hızlı İndirim Simülasyonu',
-                    description: 'Seçilen aksiyonun satış, ciro, marj ve stok devir etkisi.',
-                  })}
-
-                  <div className="campaign-content-sections campaign-insight-layout campaign-insight-layout--insight">
-                    <section className="campaign-dashboard-card campaign-data-section campaign-action-table campaign-insight-panel">
-                      <div className="campaign-insight-panel-head">
-                        <h4 className="campaign-insight-title-accent">
-                          <span className="campaign-inline-kicker campaign-inline-kicker--blue">
-                            <Megaphone size={13} />
-                            Aksiyon listesi
-                          </span>
-                          <span>Hızlı indirim adayları</span>
-                        </h4>
-                        <span>{formatNumber(filteredExpirySuggestions.length)} Öneri</span>
-                      </div>
-                      {filteredExpirySuggestions.length ? (
-                        <div className="table-wrapper campaign-insight-table-wrap">
-                          <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-suggestion-table">
-                            <thead>
-                              <tr>
-                                <th>Aksiyon</th>
-                                <th>Gerekçe</th>
-                                <th>Ürün</th>
-                                <th>Önerilen indirim</th>
-                                <th>Risk seviyesi</th>
-                                <th>İşlem</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pagedExpirySuggestions.pageRows.map((suggestion) => (
-                                <tr key={suggestion.id}>
-                                  <td className="campaign-insight-title-cell"><strong>{suggestion.title}</strong></td>
-                                  <td className="campaign-insight-note-cell">{suggestion.reason}</td>
-                                  <td>{formatNumber(suggestion.affectedProductCount)} ürün</td>
-                                  <td className="campaign-insight-metric-cell">%{formatNumber(suggestion.recommendedDiscount)}</td>
-                                  <td>
-                                    <span className={`campaign-signal-pill ${getCampaignToneClass(suggestion.priority)}`}>
-                                      {CAMPAIGN_SUGGESTION_PRIORITY_LABELS[suggestion.priority] || 'Orta'}
-                                    </span>
-                                  </td>
-                                  <td className="table-cell-actions">
-                                    <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>Hızlı indirim oluştur</button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="analytics-empty-state campaign-module-empty-state" role="status">
-                          <span className="campaign-inline-kicker campaign-inline-kicker--slate">
-                            <Info size={13} />
-                            Veri durumu
-                          </span>
-                          <strong>Filtrelere uygun SKT verisi bulunamadı.</strong>
-                          <span>Gün bandı veya kategori filtresini gevşeterek listeyi tekrar oluşturun.</span>
-                        </div>
-                      )}
-                      {renderCampaignInsightPagination('expiry-suggestions', pagedExpirySuggestions.total)}
-                    </section>
-
-                    <section className="campaign-dashboard-card campaign-data-section campaign-signals-table campaign-insight-panel campaign-insight-signal-panel">
-                      <div className="campaign-insight-panel-head">
-                        <h4>Ürün sinyalleri</h4>
-                        <span>{formatNumber(expiryInsightCards.length)} kayıt</span>
-                      </div>
-                      {expiryInsightCards.length ? (
-                        <div className="table-wrapper campaign-insight-table-wrap">
-                          <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-signal-table">
-                            <thead>
-                              <tr>
-                                <th>Ürün</th>
-                                <th>Sinyal</th>
-                                <th>SKT</th>
-                                <th>Stok</th>
-                                <th>Günlük satış</th>
-                                <th>Tahmini stok bitişi</th>
-                                <th>Brüt marj</th>
-                                <th>Sistem önerisi</th>
-                                <th>İşlem</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pagedExpirySignals.pageRows.map((row) => (
-                                <tr key={row.id}>
-                                  <td className="campaign-insight-product-cell">
-                                    <strong>{row.productName}</strong>
-                                    <small>{formatCampaignMetaLine(row.category || 'Kategori yok', row.brand || row.supplierName || 'Marka yok', row.sectionName && row.sectionName !== '-' ? row.sectionName : '')}</small>
-                                    <span>{row.summary}</span>
-                                  </td>
-                                  <td><span className={`campaign-signal-pill ${getCampaignToneClass(row.riskLevel)}`}>{row.signalType}</span></td>
-                                  <td>
-                                    {(() => {
-                                      const expiryBadge = getExpiryStatusBadgeMeta(row.daysToExpiry);
-                                      return <span className={`campaign-signal-pill ${expiryBadge.toneClass}`}>{expiryBadge.label}</span>;
-                                    })()}
-                                  </td>
-                                  <td className="campaign-insight-metric-cell">{formatNumber(row.stockLevel)} adet</td>
-                                  <td className="campaign-insight-metric-cell">{formatCampaignDailySales(row.salesVelocity)}</td>
-                                  <td className="campaign-insight-metric-cell">{row.stockCoverageDays}</td>
-                                  <td className="campaign-insight-metric-cell">%{formatNumber(row.currentMarginPercent || 0)}</td>
-                                  <td><span className={`campaign-action-pill ${getCampaignActionTone(row.recommendation)}`}>{row.recommendation}</span></td>
-                                  <td className="table-cell-actions">
-                                    <button type="button" className="text-button" onClick={() => createCampaignFromSuggestion({
-                                      id: `expiry-inline-${row.id}`,
-                                      title: `${row.productName} için hızlı indirim`,
-                                      reason: row.summary,
-                                      affectedProductCount: 1,
-                                      recommendedDiscount: Math.max(10, Number(row?.suggestedDiscount || 20)),
-                                      type: 'product',
-                                      productIds: [row.productId || row.id],
-                                      priority: row.riskLevel || 'medium',
-                                    })}>Hızlı indirim oluştur</button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="campaign-empty-state-box">
-                          <p>Filtrelere uyan Ürün sinyali yok.</p>
-                          <span>Daha geniş bir gün bandı seçerek listeyi genişletebilirsiniz.</span>
-                        </div>
-                      )}
-                      {renderCampaignInsightPagination('expiry-signals', pagedExpirySignals.total)}
-                    </section>
-                  </div>
-                </section>
-                ) : null}
-
                 {campaignTypeView === 'sales' ? (
                 <section className="sales-campaign-page campaign-dashboard-shell campaign-dashboard-shell--sales campaign-module-insight-card campaign-module-insight-card--sales campaign-section">
                   <section className="sales-campaign-control campaign-sales-control-section campaign-creation-card campaign-section">
@@ -7806,7 +8048,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       icon: TrendingUp,
                       iconClassName: 'mod-icon-indigo',
                       title: 'Satış Bazlı Kampanya Merkezi',
-                      description: 'Satış, marj ve stok baskısını aynı akışta okuyun; kampanya aksiyonunu hızlıca seçin.',
+                      description: 'Satış, marj ve stok baskısıni aynı akışta okuyun; kampanya aksiyonunu hızlıca seçin.',
                       className: 'sales-campaign-header',
                     })}
 
@@ -7816,7 +8058,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         iconClassName: 'mod-icon-rose',
                         label: 'Yavaş Satan Ürün',
                         value: formatNumber(filteredSalesRows.filter((row) => Number(row?.salesVelocity || 0) <= 1.2).length),
-                        description: 'Günlük satış ortalaması düşük ürünler',
+                        description: 'Günlük satış ortalaması düşük Ürünler',
                       },
                       {
                         icon: PackageSearch,
@@ -7827,21 +8069,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           const stockTurn = velocity > 0 ? Number(row?.stockLevel || 0) / velocity : Number(row?.stockLevel || 0);
                           return stockTurn >= 25;
                         }).length),
-                        description: 'Satış hızına göre fazla stok taşıyan ürünler',
+                        description: 'Satış hızına göre fazla stok taşıyan Ürünler',
                       },
                       {
                         icon: Percent,
                         iconClassName: 'mod-icon-green',
                         label: 'Ortalama Marj',
                         value: `%${formatNumber(filteredSalesRows.length ? filteredSalesRows.reduce((sum, row) => sum + Number(row?.currentMarginPercent || 0), 0) / filteredSalesRows.length : 0)}`,
-                        description: 'Seçili filtre bağlamındaki ortalama brüt marj',
+                        description: 'Listedeki ortalama brüt marj',
                       },
                       {
                         icon: Megaphone,
                         iconClassName: 'mod-icon-indigo',
-                        label: 'Kampanya Adayı',
+                        label: 'Kampanya Adayi',
                         value: formatNumber(salesInsightCards.length),
-                        description: 'Sistem tarafından aksiyon önerilen ürünler',
+                        description: 'Sistem tarafindan aksiyon Önerilen Ürünler',
                       },
                     ], {
                       title: 'Kampanya Bilgileri',
@@ -7851,87 +8093,37 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       itemClassName: 'sales-campaign-metric-card',
                     })}
 
-                    {renderCampaignFilterPanel({
-                      filters: [
-                        { label: 'Satış hızı', value: salesVelocityFilter, onChange: setSalesVelocityFilter, options: CAMPAIGN_SALES_VELOCITY_OPTIONS },
-                        { label: 'Stok devri', value: salesStockTurnFilter, onChange: setSalesStockTurnFilter, options: CAMPAIGN_STOCK_TURN_OPTIONS },
-                        {
-                          label: 'Kategori',
-                          value: salesCategoryFilter,
-                          onChange: setSalesCategoryFilter,
-                          options: [{ value: '', label: 'Tüm kategoriler' }, ...availableCategories.map((category) => ({ value: category.name, label: category.name }))],
-                        },
-                        { label: 'Marj', value: salesMarginFilter, onChange: setSalesMarginFilter, options: CAMPAIGN_MARGIN_OPTIONS },
-                        {
-                          label: 'Ürün tipi',
-                          value: salesProductTypeFilter,
-                          onChange: setSalesProductTypeFilter,
-                          options: [
-                            { value: 'all', label: 'Tüm tipler' },
-                            { value: 'fast', label: 'Çok satan' },
-                            { value: 'slow', label: 'Yavaş satan' },
-                            { value: 'pressure', label: 'Stok baskısı' },
-                            { value: 'margin', label: 'Marj fırsatı' },
-                          ],
-                        },
-                        {
-                          label: 'Öneri tipi',
-                          value: salesRecommendationFilter,
-                          onChange: setSalesRecommendationFilter,
-                          options: [
-                            { value: 'all', label: 'Tüm öneriler' },
-                            { value: 'discount', label: 'İndirim' },
-                            { value: 'bundle', label: 'Çoklu alım' },
-                            { value: 'price-up', label: 'Fiyat artışı' },
-                            { value: 'hold', label: 'Kampanya gerekmez' },
-                          ],
-                        },
-                      ],
-                      search: salesSearch,
-                      onSearchChange: setSalesSearch,
-                      searchFirst: true,
-                      className: 'sales-campaign-filters',
-                      groupClassName: 'sales-campaign-filter-grid',
-                      description: '',
-                      showRefreshAction: false,
-                      onReset: resetSalesInsightFilters,
-                    })}
                   </section>
 
                   <div className="sales-campaign-tables campaign-content-sections campaign-insight-layout campaign-insight-layout--insight">
                     {renderCampaignActionCandidatesTable({
                       title: 'Satış Odaklı Kampanya Listesi',
-                      description: 'Satış hızı ve stok baskısına göre önerilen kampanya aksiyonlarını takip edin.',
+                      description: 'Satış hızı ve stok baskısına göre Önerilen kampanya aksiyonlarını takip edin.',
                       icon: Megaphone,
                       total: filteredSalesSuggestions.length,
                       rows: pagedSalesSuggestions.pageRows,
                       paginationKey: 'sales-suggestions',
-                      emptyTitle: 'Filtrelere uygun kampanya adayı bulunamadı.',
-                      emptyDescription: 'Satış hızı veya stok devri filtresini genişleterek yeni öneriler görebilirsiniz.',
+                      tableClassName: 'campaign-insight-table--compact campaign-insight-table--sales-actions',
+                      rowClassName: (suggestion) => Number(suggestion?.affectedProductCount || 0) <= 0 ? 'campaign-insight-row--muted' : '',
+                      emptyTitle: 'Kampanya adayı bulunamadı.',
+                      emptyDescription: 'Yeni Öneriler veri geldikçe burada görünür.',
                       columns: [
-                        { key: 'campaign', label: 'Kampanya', className: 'campaign-insight-title-cell', render: (suggestion) => <strong>{normalizeCampaignInsightText(suggestion.title)}</strong> },
-                        {
-                          key: 'reason',
-                          label: 'Gerekçe',
-                          className: 'campaign-insight-note-cell campaign-sales-reason-cell',
-                          render: (suggestion) => (
-                            <span className="campaign-sales-reason-text">{normalizeCampaignInsightText(suggestion.reason)}</span>
-                          ),
-                        },
-                        { key: 'product', label: 'Ürün', render: (suggestion) => `${formatNumber(suggestion.affectedProductCount)} ürün` },
-                        { key: 'recommendationType', label: 'Tip', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(suggestion.recommendationType || 'sales_opportunity')}</span> },
-                        { key: 'scope', label: 'Scope', render: (suggestion) => normalizeCampaignInsightText(suggestion.scopeLabel || 'Satış performansı') },
-                        { key: 'margin', label: 'Ortalama Marj', className: 'campaign-insight-metric-cell', render: (suggestion) => `%${formatNumber(averageCampaignMetric(getCampaignSuggestionRows(suggestion), (row) => Number(row?.currentMarginPercent || 0)))}` },
-                        { key: 'type', label: 'Tür', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{normalizeCampaignInsightText(CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel')} kampanya</span> },
+                        { key: 'campaign', label: 'Kampanya', className: 'campaign-insight-title-cell campaign-insight-cell-title', render: (suggestion) => <strong title={formatCampaignTableValue(suggestion.title)}>{formatCampaignTableValue(suggestion.title)}</strong> },
+                        { key: 'recommendationType', label: 'Öneri Türü', className: 'campaign-insight-cell-type', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{formatCampaignRecommendationType(suggestion.recommendationType || 'sales_opportunity')}</span> },
+                        { key: 'scope', label: 'Kapsam', className: 'campaign-insight-cell-scope', render: (suggestion) => formatCampaignTableValue(formatCampaignScopeLabel(suggestion.scopeLabel || 'Satış performansı')) },
+                        { key: 'product', label: 'Etkilenen Ürün', className: 'campaign-insight-cell-count', render: (suggestion) => Number(suggestion.affectedProductCount || 0) > 0 ? `${formatNumber(suggestion.affectedProductCount)} Ürün` : '—' },
+                        { key: 'margin', label: 'Ortalama Marj', className: 'campaign-insight-metric-cell', render: (suggestion) => {
+                          const margin = averageCampaignMetric(getCampaignSuggestionRows(suggestion), (row) => Number(row?.currentMarginPercent || 0));
+                          return Number.isFinite(Number(margin)) && Number(margin) > 0 ? `%${formatNumber(margin)}` : '—';
+                        } },
+                        { key: 'type', label: 'Tür', className: 'campaign-insight-cell-kind', render: (suggestion) => <span className="campaign-signal-pill is-neutral">{formatCampaignScopeLabel(CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Çapraz')} kampanya</span> },
+                        { key: 'status', label: 'Durum', className: 'campaign-insight-cell-status', render: (suggestion) => <span className={`campaign-signal-pill ${getCampaignSuggestionStatusToneClass(suggestion)}`}>{getCampaignSuggestionStatusDisplayLabel(suggestion)}</span> },
                         {
                           key: 'actions',
-                          label: 'İşlem',
-                          className: 'table-cell-actions',
+                          label: 'İşlemler',
+                          className: 'table-cell-actions campaign-insight-cell-actions',
                           render: (suggestion) => (
-                            <div className="table-actions campaign-insight-row-actions">
-                              <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>Detay</button>
-                              <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>Kampanya Oluştur</button>
-                            </div>
+                            renderCampaignSuggestionActions(suggestion, 'Oluştur')
                           ),
                         },
                       ],
@@ -7946,296 +8138,22 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       mode: 'sales',
                       paginationKey: 'sales-signals',
                       emptyTitle: 'Kayıt bulunamadı',
-                      emptyDescription: 'Bu filtrelere uygun aksiyon adayı yok.',
+                      emptyDescription: 'Aksiyon adayı yok.',
                     })}
                   </div>
 
                   {renderSingleCampaignModuleTable({
                     title: 'Satış Bazlı Kampanya Listesi',
-                    description: 'Aktif ve pasif satış performansı odaklı kampanyalar tek tabloda birlikte listelenir.',
+                    description: 'Aktif, planlanan ve arşiv satış kampanyaları ayrı alanlarda izlenir.',
                     rows: moduleCampaignRows,
                     tableKeyPrefix: 'sales',
                     sectionClassName: 'campaign-section campaign-module-single-table--insight',
                     emptyTitle: 'Kayıt bulunamadı',
                     emptyDescription: 'Satış bazlı kampanya kaydı henüz bulunmuyor.',
+                    splitLifecycle: true,
                   })}
                 </section>
                 ) : null}
-
-                {false && campaignTypeView === 'sales' ? (
-                <section className="campaign-dashboard-shell campaign-dashboard-shell--sales campaign-module-insight-card campaign-module-insight-card--sales campaign-section">
-                  <div className="campaign-dashboard-header">
-                    <div className="campaign-sales-header-main">
-                      <div className="mod-card-icon mod-icon-indigo"><TrendingUp size={18} /></div>
-                      <div>
-                        <h3>Satış Bazlı Kampanya Merkezi</h3>
-                        <p>Satış hızı, stok baskısı ve marj verisiyle kampanya veya fiyat aksiyonunu seçin.</p>
-                      </div>
-                    </div>
-                    <div className="campaign-sales-header-actions" aria-label="Satış bazlı aksiyon alanı">
-                      <button type="button" className="ghost-button" onClick={handleCampaignSuggestionsRefresh} disabled={campaignSuggestionRefreshing}>
-                        <RefreshCw size={14} />
-                        <span>Yenile</span>
-                      </button>
-                      <button type="button" className="outline-button" disabled>
-                        <BarChart3 size={14} />
-                        <span>Analiz</span>
-                      </button>
-                      <button type="button" className="outline-button" disabled>
-                        <FileSpreadsheet size={14} />
-                        <span>Export</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-dashboard-summary-grid campaign-module-summary-grid">
-                    <article className="campaign-module-summary-card">
-                      <span>Yavaş satan ürün</span>
-                      <strong>{formatNumber(filteredSalesRows.filter((row) => Number(row?.salesVelocity || 0) <= 1.2).length)}</strong>
-                      <small>Günlük satış ortalaması zayıf</small>
-                    </article>
-                    <article className="campaign-module-summary-card">
-                      <span>Stok baskısı</span>
-                      <strong>{formatNumber(filteredSalesRows.filter((row) => {
-                        const velocity = Number(row?.salesVelocity || 0);
-                        const stockTurn = velocity > 0 ? Number(row?.stockLevel || 0) / velocity : Number(row?.stockLevel || 0);
-                        return stockTurn >= 25;
-                      }).length)}</strong>
-                      <small>Satış hızına göre fazla stok</small>
-                    </article>
-                    <article className="campaign-module-summary-card">
-                      <span>Ortalama marj</span>
-                      <strong>%{formatNumber(filteredSalesRows.length ? filteredSalesRows.reduce((sum, row) => sum + Number(row?.currentMarginPercent || 0), 0) / filteredSalesRows.length : 0)}</strong>
-                      <small>Filtreye uyan ortalama</small>
-                    </article>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-dashboard-insight-grid campaign-metric-explainer-grid campaign-metric-explainer-grid--insight">
-                    {CAMPAIGN_METRIC_EXPLANATIONS.map((item, index) => {
-                      const InsightIcon = [TrendingUp, BarChart3, Sparkles, Info][index % 4];
-                      return (
-                        <article key={item.title} className="campaign-metric-explainer-card">
-                          <span className="campaign-metric-explainer-icon"><InsightIcon size={15} /></span>
-                          <div>
-                            <strong>{item.title}</strong>
-                            <p>{item.description}</p>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
-
-                  <div className="campaign-dashboard-card campaign-filter-toolbar campaign-module-filterbar campaign-module-filterbar--wide campaign-module-filterbar--insight">
-                    <div className="campaign-module-filter-group campaign-module-filter-group--sales">
-                      <label className="field-group campaign-control-field">
-                        <span>Satış hızı</span>
-                        <select value={salesVelocityFilter} onChange={(event) => setSalesVelocityFilter(event.target.value)}>
-                          {CAMPAIGN_SALES_VELOCITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Stok devri</span>
-                        <select value={salesStockTurnFilter} onChange={(event) => setSalesStockTurnFilter(event.target.value)}>
-                          {CAMPAIGN_STOCK_TURN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Kategori</span>
-                        <select value={salesCategoryFilter} onChange={(event) => setSalesCategoryFilter(event.target.value)}>
-                          <option value="">Tüm kategoriler</option>
-                          {availableCategories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Marj</span>
-                        <select value={salesMarginFilter} onChange={(event) => setSalesMarginFilter(event.target.value)}>
-                          {CAMPAIGN_MARGIN_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Ürün tipi</span>
-                        <select value={salesProductTypeFilter} onChange={(event) => setSalesProductTypeFilter(event.target.value)}>
-                          <option value="all">Tüm tipler</option>
-                          <option value="fast">Çok satan</option>
-                          <option value="slow">Yavaş satan</option>
-                          <option value="pressure">Stok baskılı</option>
-                          <option value="margin">Marj fırsatı</option>
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Öneri tipi</span>
-                        <select value={salesRecommendationFilter} onChange={(event) => setSalesRecommendationFilter(event.target.value)}>
-                          <option value="all">Tüm öneriler</option>
-                          <option value="discount">İndirim</option>
-                          <option value="price-up">Fiyat artışı</option>
-                          <option value="hold">Sabit tut</option>
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Tedarikçi</span>
-                        <select value={salesSupplierFilter} onChange={(event) => setSalesSupplierFilter(event.target.value)}>
-                          <option value="">Tüm tedarikçiler</option>
-                          {campaignSupplierOptions.map((supplier) => <option key={supplier} value={supplier}>{supplier}</option>)}
-                        </select>
-                      </label>
-                      <label className="field-group campaign-control-field">
-                        <span>Reyon</span>
-                        <select value={salesSectionFilter} onChange={(event) => setSalesSectionFilter(event.target.value)}>
-                          <option value="">Tüm reyonlar</option>
-                          {campaignSectionOptions.map((section) => <option key={section} value={section}>{section}</option>)}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="campaign-module-filter-actions">
-                      <button type="button" className="ghost-button" onClick={handleCampaignSuggestionsRefresh} disabled={campaignSuggestionRefreshing}>Önerileri Yenile</button>
-                      <button type="button" className="outline-button" onClick={resetSalesInsightFilters}>Filtreleri Temizle</button>
-                    </div>
-                  </div>
-
-                  <div className="campaign-dashboard-grid campaign-scenario-grid campaign-scenario-strip campaign-scenario-strip--insight">
-                    {['discount-10', 'discount-20', 'bundle', 'price-up'].map((scenarioKey) => (
-                      <button
-                        key={scenarioKey}
-                        type="button"
-                        className={`campaign-scenario-chip ${salesScenario === scenarioKey ? 'is-active' : ''}`}
-                        onClick={() => setSalesScenario(scenarioKey)}
-                      >
-                        <span className="campaign-scenario-chip-icon">
-                          {scenarioKey === 'bundle' ? <Gift size={15} /> : scenarioKey === 'price-up' ? <TrendingUp size={15} /> : <Sparkles size={15} />}
-                        </span>
-                        <strong>{campaignScenarioOptions[scenarioKey].label}</strong>
-                        <span>{campaignScenarioOptions[scenarioKey].description}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {renderCampaignSimulationSection(renderedSalesCampaignSimulation, {
-                    title: 'Etki Simülasyonu',
-                    description: 'Seçilen senaryonun satış, ciro, marj ve stok devir etkisi.',
-                  })}
-
-                  <div className="campaign-content-sections campaign-insight-layout campaign-insight-layout--insight">
-                    <section className="campaign-dashboard-card campaign-data-section campaign-action-table campaign-insight-panel">
-                      <div className="campaign-insight-panel-head">
-                        <h4>Satış odaklı kampanya listesi</h4>
-                        <span>{formatNumber(filteredSalesSuggestions.length)} Öneri</span>
-                      </div>
-                      {filteredSalesSuggestions.length ? (
-                        <div className="table-wrapper campaign-insight-table-wrap">
-                          <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-suggestion-table">
-                            <thead>
-                              <tr>
-                                <th>Kampanya</th>
-                                <th>Gerekçe</th>
-                                <th>Ürün</th>
-                                <th>Ortalama marj</th>
-                                <th>Tür</th>
-                                <th>İşlem</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pagedSalesSuggestions.pageRows.map((suggestion) => (
-                                <tr key={suggestion.id}>
-                                  <td className="campaign-insight-title-cell"><strong>{suggestion.title}</strong></td>
-                                  <td className="campaign-insight-note-cell">{suggestion.reason}</td>
-                                  <td>{formatNumber(suggestion.affectedProductCount)} ürün</td>
-                                  <td className="campaign-insight-metric-cell">%{formatNumber(averageCampaignMetric(getCampaignSuggestionRows(suggestion), (row) => Number(row?.currentMarginPercent || 0)))}</td>
-                                  <td><span className="campaign-signal-pill is-neutral">{CAMPAIGN_TYPE_LABELS[suggestion.type] || 'Genel'} kampanya</span></td>
-                                  <td className="table-cell-actions">
-                                    <div className="table-actions campaign-insight-row-actions">
-                                      <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion(suggestion)}>Detay</button>
-                                      <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(suggestion)}>Kampanya Oluştur</button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="analytics-empty-state campaign-module-empty-state" role="status">
-                          <TrendingUp size={18} />
-                          <strong>Filtrelere uygun satış kampanyası bulunamadı</strong>
-                          <span>Satış hızı veya stok devri filtresini gevşeterek havuzu genişletin.</span>
-                        </div>
-                      )}
-                      {renderCampaignInsightPagination('sales-suggestions', pagedSalesSuggestions.total)}
-                    </section>
-
-                    <section className="campaign-dashboard-card campaign-data-section campaign-signals-table campaign-insight-panel campaign-insight-signal-panel">
-                      <div className="campaign-insight-panel-head">
-                        <h4>Satış ve marj sinyalleri</h4>
-                        <span>{formatNumber(salesInsightCards.length)} kayıt</span>
-                      </div>
-                      {salesInsightCards.length ? (
-                        <div className="table-wrapper campaign-insight-table-wrap">
-                          <table className="data-table campaign-active-table campaign-standard-table campaign-insight-table campaign-insight-signal-table">
-                            <thead>
-                              <tr>
-                                <th>Ürün</th>
-                                <th>Sinyal</th>
-                                <th>Günlük satış</th>
-                                <th>Stok</th>
-                                <th>Tahmini stok tükenme</th>
-                                <th>Brüt marj</th>
-                                <th>Öneri</th>
-                                <th>İşlem</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pagedSalesSignals.pageRows.map((row) => (
-                                <tr key={row.id}>
-                                  <td className="campaign-insight-product-cell">
-                                    <strong>{row.productName}</strong>
-                                    <small>{formatCampaignMetaLine(row.category || 'Kategori yok', row.brand || row.supplierName || 'Marka yok', row.sectionName && row.sectionName !== '-' ? row.sectionName : '')}</small>
-                                    <span>{row.summary}</span>
-                                  </td>
-                                  <td><span className={`campaign-signal-pill ${getCampaignToneClass(row.riskLevel)}`}>{row.signalType}</span></td>
-                                  <td className="campaign-insight-metric-cell">{formatCampaignDailySales(row.salesVelocity)}</td>
-                                  <td className="campaign-insight-metric-cell">{formatNumber(row.stockLevel)} adet</td>
-                                  <td className="campaign-insight-metric-cell">{row.stockCoverageDays}</td>
-                                  <td className="campaign-insight-metric-cell">%{formatNumber(row.currentMarginPercent || 0)}</td>
-                                  <td><span className={`campaign-action-pill ${getCampaignActionTone(row.recommendation)}`}>{row.recommendation}</span></td>
-                                  <td className="table-cell-actions">
-                                    <button type="button" className="ghost-button" onClick={() => setSelectedCampaignSuggestion({
-                                      id: `sales-inline-${row.id}`,
-                                      title: `${row.productName} için aksiyon önerisi`,
-                                      reason: row.summary,
-                                      affectedProductCount: 1,
-                                      recommendedDiscount: Math.max(8, Number(row?.suggestedDiscount || 12)),
-                                      type: 'product',
-                                      productIds: [row.productId || row.id],
-                                      priority: row.riskLevel || 'medium',
-                                      impactSummary: row.recommendation,
-                                      riskSummary: 'Aksiyon öncesi marj ve stok yeterliliği tekrar kontrol edilmelidir.',
-                                    })}>Detay analizi</button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="campaign-empty-state-box">
-                          <p>Filtrelere uyan satış sinyali yok.</p>
-                          <span>Kategori veya marj filtresini gevşeterek listeyi yeniden oluşturun.</span>
-                        </div>
-                      )}
-                      {renderCampaignInsightPagination('sales-signals', pagedSalesSignals.total)}
-                    </section>
-                  </div>
-                </section>
-                ) : null}
-
-                {false && (campaignTypeView === 'expiry' || campaignTypeView === 'sales') ? renderSingleCampaignModuleTable({
-                  icon: campaignTypeView === 'expiry' ? CalendarDays : TrendingUp,
-                  iconClassName: campaignTypeView === 'expiry' ? 'mod-icon-amber' : 'mod-icon-indigo',
-                  title: CAMPAIGN_MODULE_SINGLE_TABLE_TITLES[campaignTypeView] || 'Kampanya Listesi',
-                  description: 'Aktif ve pasif kampanyalar bu modül için tek tabloda birlikte listelenir.',
-                  rows: moduleCampaignRows,
-                  tableKeyPrefix: campaignTypeView,
-                  sectionClassName: 'campaign-section',
-                }) : null}
               </div>
             </div>
 
@@ -8249,32 +8167,55 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                 </div>
                 <div className="campaign-table-stack">
-                  {renderCampaignTable({
-                    title: CAMPAIGN_TABLE_SECTION_META.all.active.title,
-                    description: CAMPAIGN_TABLE_SECTION_META.all.active.description,
-                    rows: activeCampaignRows,
+                  <div className="campaign-home-table-tabs" role="tablist" aria-label="Kampanya liste görünümü">
+                    {[
+                      { key: 'active', label: 'Aktif', count: campaignSummary.active },
+                      { key: 'planned', label: 'Planlanan', count: campaignSummary.planned },
+                      { key: 'archive', label: 'Arşiv', count: campaignSummary.archive },
+                    ].map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        role="tab"
+                        className={homeCampaignTableView === tab.key ? 'is-active' : ''}
+                        aria-selected={homeCampaignTableView === tab.key}
+                        onClick={() => setHomeCampaignTableView(tab.key)}
+                      >
+                        <span>{tab.label}</span>
+                        <strong>{formatNumber(tab.count)}</strong>
+                      </button>
+                    ))}
+                  </div>
+                  {homeCampaignTableView === 'active' ? renderCampaignTable({
+                    title: 'Aktif Kampanyalar',
+                    description: 'Şu an yayında olan gerçek kampanya kayıtları burada izlenir.',
+                    rows: homeCampaignTableView === 'active' ? homeCampaignTableConfig.rows : [],
                     tableKey: 'home-active',
                     mode: 'active',
                     sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.active,
-                  })}
-                  {renderCampaignTable({
+                    emptyTitle: 'Aktif kampanya bulunmuyor',
+                    emptyDescription: 'Şu an yayında olan kampanya kaydı yok.',
+                  }) : null}
+                  {homeCampaignTableView === 'planned' ? renderCampaignTable({
                     title: 'Planlanan Kampanyalar',
-                    description: 'İleri başlangıç tarihli kampanyalar burada görünür; başlangıç tarihine kadar fiyatlara yansımaz.',
-                    rows: plannedCampaignRows,
+                    description: 'Henüz başlamamış, başlangıç tarihini bekleyen kampanyalar burada izlenir.',
+                    rows: homeCampaignTableConfig.rows,
                     tableKey: 'home-planned',
                     mode: 'planned',
                     sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.active,
-                    emptyTitle: 'Planlanan kampanya yok',
-                    emptyDescription: 'İleri tarihli kampanya kaydı bulunmuyor.',
-                  })}
-                  {renderCampaignTable({
+                    emptyTitle: 'Planlanan kampanya bulunmuyor',
+                    emptyDescription: 'Başlangıç tarihini bekleyen kampanya kaydı yok.',
+                  }) : null}
+                  {homeCampaignTableView === 'archive' ? renderCampaignTable({
                     title: CAMPAIGN_TABLE_SECTION_META.all.archive.title,
-                    description: CAMPAIGN_TABLE_SECTION_META.all.archive.description,
-                    rows: archiveCampaignRows,
+                    description: 'Geçmiş, pasif veya arşivlenmiş kampanyaların tek ana kayıt alanıdır.',
+                    rows: homeCampaignTableConfig.rows,
                     tableKey: 'home-archive',
                     mode: 'archive',
                     sectionMeta: CAMPAIGN_TABLE_SECTION_META.all.archive,
-                  })}
+                    emptyTitle: 'Arşiv kaydı bulunmuyor',
+                    emptyDescription: 'Geçmiş kampanya kaydı oluştuğunda burada listelenir.',
+                  }) : null}
                 </div>
               </div>
             ) : null}
@@ -8289,7 +8230,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div className="s-card-icon s-icon-blue"><Building size={18} /></div>
                 <div className="s-card-header-copy">
                   <h3 className="s-card-title">Mağaza</h3>
-                  <p className="s-card-desc">Mağaza kimliği, iletişim bilgileri ve Çalışma düzeni</p>
+                  <p className="s-card-desc">Mağaza kimliği, iletişim bilgileri ve Çalisma düzeni</p>
                 </div>
               </div>
 
@@ -8300,7 +8241,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <input type="text" value={form.storeName} placeholder="Shelfio Market" readOnly className="s-field-readonly" />
                 </label>
                 <label className="s-field">
-                  <span className="s-field-label"><Hash size={14} /> Şube Kodu</span>
+                  <span className="s-field-label"><Hash size={14} /> Sube Kodu</span>
                   <input type="text" value={form.branchCode} placeholder="SHF-001" readOnly className="s-field-readonly" />
                 </label>
                 <label className="s-field">
@@ -8317,11 +8258,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 </label>
                 <label className="s-field s-store-address-field">
                   <span className="s-field-label"><MapPin size={14} /> Adres</span>
-                  <input type="text" value={form.storeAddress} placeholder="İstanbul / Türkiye" readOnly className="s-field-readonly" />
+                  <input type="text" value={form.storeAddress} placeholder="Istanbul / Türkiye" readOnly className="s-field-readonly" />
                 </label>
               </div>
 
-              <h4 className="s-category-subtitle s-hours-subtitle">Çalışma Saatleri</h4>
+              <h4 className="s-category-subtitle s-hours-subtitle">Çalisma Saatleri</h4>
               <div className="s-work-hours-compact s-work-hours-minimal">
                 <div className="s-day-summary-strip" role="tablist" aria-label="Gün seçimi">
                   {weeklyScheduleRows.map((row) => {
@@ -8353,7 +8294,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     {selectedScheduleRow ? (
                       <div className="s-selected-day-fields s-selected-day-fields-compact s-selected-day-fields-row" style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: 0, padding: 0 }}>
                         <label className="s-field s-field-inline s-field-inline-compact" style={{ margin: 0, display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: '6px' }}>
-                          <span className="s-field-label">Açılış</span>
+                          <span className="s-field-label">Açilis</span>
                           <input
                             type="time"
                             value={selectedScheduleRow.opensAt}
@@ -8365,7 +8306,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         </label>
 
                         <label className="s-field s-field-inline s-field-inline-compact" style={{ margin: 0, display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: '6px' }}>
-                          <span className="s-field-label">Kapanış</span>
+                          <span className="s-field-label">Kapanis</span>
                           <input
                             type="time"
                             value={selectedScheduleRow.closesAt}
@@ -8387,7 +8328,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         </label>
                       </div>
                     ) : (
-                      <div className="s-hours-ops-empty" style={{ padding: '8px 0', fontSize: '0.82rem', color: '#64748b' }}>Saat ayarı için bir gün seçin.</div>
+                      <div className="s-hours-ops-empty" style={{ padding: '8px 0', fontSize: '0.82rem', color: '#64748b' }}>Saat ayari için bir gün seçin.</div>
                     )}
 
                     <div className="s-config-item s-holiday-mode-item s-holiday-mode-item-compact s-holiday-mode-item-inline" style={{ display: 'flex', alignItems: 'center', height: '36px', gap: '10px', margin: 0, padding: '0 0 0 16px', background: 'transparent', border: 'none', borderLeft: '1px solid #cbd5e1', borderRadius: 0 }}>
@@ -8431,13 +8372,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div className="s-config-item">
                   <span className="s-config-label">Para Birimi</span>
                   <select name="currency" value="TRY" disabled className="s-config-select">
-                    <option value="TRY">₺ TRY</option>
+                    <option value="TRY">TRY</option>
                   </select>
                 </div>
 
                 <div className="s-config-item s-config-item-updated">
                   <span className="s-config-label">Son Güncelleme</span>
-                  <span className="s-config-value">{updatedAt ? formatDate(updatedAt) : '—'}</span>
+                  <span className="s-config-value">{updatedAt ? formatDate(updatedAt) : '-'}</span>
                 </div>
               </div>
             </section>
@@ -8457,7 +8398,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div className="s-config-item s-sound-settings-item">
                   <div className="s-automation-content">
                     <span className="s-config-label s-automation-title">Bildirimler</span>
-                    <span className="s-automation-desc">Sistem bildirimlerinin size gösterilmesini açıp kapatın</span>
+                    <span className="s-automation-desc">Sistem bildirimlerinin size gösterilmesini açip kapatin</span>
                   </div>
                   <div className="s-sound-toggle-actions">
                     <button
@@ -8697,8 +8638,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div className="s-card-header">
                   <div className="s-card-icon s-icon-slate"><BarChart3 size={18} /></div>
                   <div className="s-card-header-copy">
-                    <h3 className="s-card-title">İzleme ve Log Kayıtları</h3>
-                    <p className="s-card-desc">Giriş aktiviteleri, audit kayıtları ve teknik log detayları</p>
+                    <h3 className="s-card-title">Izleme ve Log Kayıtlari</h3>
+                    <p className="s-card-desc">Giriş aktiviteleri, audit kayıtları ve teknik log detaylari</p>
                   </div>
                 </div>
 
@@ -8792,7 +8733,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                             })}
                           </div>
                         ) : (
-                          <div className="s-empty-state">Henüz kayıtlı giriş aktivitesi bulunmuyor.</div>
+                          <div className="s-empty-state">Henüz kayıtli giriş aktivitesi bulunmuyor.</div>
                         )}
                       </section>
                     )}
@@ -8803,7 +8744,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           <div className="s-card-icon s-icon-slate"><Shield size={18} /></div>
                           <div className="s-card-header-copy">
                             <h3 className="s-card-title">Audit Log</h3>
-                            <p className="s-card-desc">Yapılan kritik ayar değişikliklerini izleyin</p>
+                            <p className="s-card-desc">Yapilan kritik ayar değişikliklerini izleyin</p>
                           </div>
                           <div className="s-login-activity-actions">
                             <button type="button" className="s-audit-btn" onClick={openAuditLogManagerModal}>
@@ -8847,7 +8788,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           <div className="s-card-icon s-icon-slate"><FileText size={18} /></div>
                           <div className="s-card-header-copy">
                             <h3 className="s-card-title">Geliştirici Logları</h3>
-                            <p className="s-card-desc">Sistem hatalarını ve teknik logları buradan izleyin.</p>
+                            <p className="s-card-desc">Sistem hatalarini ve teknik loglari buradan izleyin.</p>
                           </div>
                           <div className="s-login-activity-actions">
                             <button
@@ -8912,7 +8853,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={Boolean(selectedCampaignSuggestion)}
         title={normalizeCampaignInsightText(selectedCampaignSuggestion?.title || 'Kampanya Öneri Detayı')}
-        description="Önerinin veri sinyallerini, beklenen etkiyi ve karar senaryolarını inceleyin."
+        description="Önerinin veri sinyallerini, beklenen etkiyi ve karar senaryolarini inceleyin."
         headerIcon={<Megaphone size={16} />}
         onClose={() => setSelectedCampaignSuggestion(null)}
         modalClassName="product-form-fit-modal campaign-suggestion-detail-modal"
@@ -8922,14 +8863,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
           <>
           <div className="campaign-detail-modal-body">
             <section className="campaign-detail-section">
-              <h4>Neden bu öneri çıktı?</h4>
+              <h4>Neden bu Öneri çıktı?</h4>
               <p>{normalizeCampaignInsightText(selectedCampaignSuggestion.reason)}</p>
             </section>
-            <section className="campaign-detail-section campaign-detail-section--metric-cards" aria-label="Kampanya önerisi metrikleri">
+            <section className="campaign-detail-section campaign-detail-section--metric-cards" aria-label="Kampanya Önerisi metrikleri">
               <div className="campaign-suggestion-metric-grid">
                 <div className="campaign-suggestion-metric-card is-products">
                   <span className="campaign-suggestion-metric-icon" aria-hidden="true"><PackageSearch size={16} /></span>
-                  <span>Etkilenen ürün</span>
+                  <span>Etkilenen Ürün</span>
                   <strong>{formatNumber(selectedCampaignSuggestion.affectedProductCount)}</strong>
                 </div>
                 <div className="campaign-suggestion-metric-card is-discount">
@@ -8953,9 +8894,9 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               <h4>Ürünler neden seçildi?</h4>
               <ul>
                 {(Array.isArray(selectedCampaignSuggestion.signalBullets) && selectedCampaignSuggestion.signalBullets.length ? selectedCampaignSuggestion.signalBullets : [
-                  'Satış hızı düşük ve stok bekleme riski yüksek ürünler seçildi.',
-                  'Mevcut aktif kampanyalarla isim çakışması kontrol edildi.',
-                  'Önerilen indirim oranı kampanya simülasyonuna başlangıç değeri olarak aktarılır.',
+                  'Satış hızı düşük ve stok bekleme riski yüksek Ürünler seçildi.',
+                  'Mevcut aktif kampanyalarla isim Çakışmasi kontrol edildi.',
+                  'Önerilen indirim oranı kampanya simülasyonuna başlangıç değeri olarak aktarilir.',
                 ]).map((item) => <li key={item}>{normalizeCampaignInsightText(item)}</li>)}
               </ul>
             </section>
@@ -8964,7 +8905,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               <div className="campaign-detail-grid">
                 <div><span>Ortalama günlük satış</span><strong>{formatNumber(averageCampaignMetric(selectedSuggestionRows, (row) => Number(row?.salesVelocity || 0)))} adet</strong></div>
                 <div><span>Ortalama stok</span><strong>{formatNumber(averageCampaignMetric(selectedSuggestionRows, (row) => Number(row?.stockLevel || 0)))} adet</strong></div>
-                <div><span>Stok baskısı</span><strong>{formatNumber(selectedSuggestionRows.filter((row) => Number(row?.stockLevel || 0) > Math.max(20, Number(row?.salesVelocity || 0) * 21)).length)} ürün</strong></div>
+                <div><span>Stok baskısı</span><strong>{formatNumber(selectedSuggestionRows.filter((row) => Number(row?.stockLevel || 0) > Math.max(20, Number(row?.salesVelocity || 0) * 21)).length)} Ürün</strong></div>
                 <div><span>Ortalama brüt marj</span><strong>%{formatNumber(averageCampaignMetric(selectedSuggestionRows, (row) => Number(row?.currentMarginPercent || 0)))}</strong></div>
               </div>
             </section>
@@ -8995,8 +8936,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
             </section>
           </div>
           <div className="modal-actions campaign-form-actions campaign-detail-modal-footer">
-            <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(selectedCampaignSuggestion)}>
-              Kampanya Oluştur
+            <button type="button" className="primary-button" onClick={() => createCampaignFromSuggestion(selectedCampaignSuggestion)} disabled={!isCampaignSuggestionDiscountActionable(selectedCampaignSuggestion)}>
+              {isCampaignSuggestionDiscountActionable(selectedCampaignSuggestion) ? 'Kampanya Oluştur' : 'Indirim Onerisi Degil'}
             </button>
             <button type="button" className="outline-button" onClick={() => setSelectedCampaignSuggestion(null)}>
               Kapat
@@ -9054,7 +8995,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <div className="campaign-product-search-row">
                       <label className="field-group">
                         <span>Ürün ara</span>
-                        <input type="search" value={productCampaignSearch} onChange={(event) => setProductCampaignSearch(event.target.value)} placeholder="Ürün adı, barkod veya SKU" />
+                        <input
+                          type="search"
+                          value={productCampaignSearch}
+                          onFocus={() => { void loadCampaignProducts(); }}
+                          onChange={(event) => {
+                            setProductCampaignSearch(event.target.value);
+                            if (!availableProductsLoaded) void loadCampaignProducts();
+                          }}
+                          placeholder="Ürün adı, barkod veya SKU"
+                        />
                       </label>
                     </div>
                     <div className="campaign-product-results" aria-label="Ürün arama sonuçları">
@@ -9069,14 +9019,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           </button>
                         );
                       }) : (
-                        productCampaignSearch ? (
+                        productCampaignSearch && availableProductsLoading ? (
+                          <div className="campaign-product-search-empty">Ürünler yükleniyor...</div>
+                        ) : productCampaignSearch ? (
                           <div className="campaign-product-search-empty">Eşleşen Ürün bulunamadı.</div>
                         ) : null
                       )}
                     </div>
-                    <div className="campaign-selected-products" aria-label="Seçilen ürünler">
+                    <div className="campaign-selected-products" aria-label="Seçilen Ürünler">
                       <div className="campaign-selected-products-head">
-                        <strong>Seçilen ürünler</strong>
+                        <strong>Seçilen Ürünler</strong>
                         <span>{formatNumber(selectedCampaignProducts.length)} Ürün</span>
                       </div>
                       {selectedCampaignProducts.length ? (
@@ -9084,7 +9036,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           {selectedCampaignProducts.map((product) => (
                             <span key={product.id} className="campaign-selected-product-chip">
                               {product.label}
-                              <button type="button" onClick={() => toggleCampaignProduct(product.id)} aria-label={`${product.label} Ürününü kaldır`}>
+                              <button type="button" onClick={() => toggleCampaignProduct(product.id)} aria-label={`${product.label} Ürünönü kaldır`}>
                                 <X size={12} />
                               </button>
                             </span>
@@ -9097,18 +9049,55 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               ) : null}
 
               {campaignEditScope === 'category' ? (
-                <section className="campaign-edit-grid">
-                  <div className="s-giftcard-category-grid">
-                    {availableCategories.map((category) => {
-                      const categoryId = String(category.id || '');
-                      return (
-                        <label key={categoryId} className={`s-giftcard-category-item ${campaignDraft.targetCategoryIds.includes(categoryId) ? 'is-selected' : ''}`}>
-                          <input type="checkbox" checked={campaignDraft.targetCategoryIds.includes(categoryId)} onChange={() => toggleCampaignCategory(categoryId)} />
-                          <span>{String(category.name || categoryId)}</span>
+                <section className="campaign-edit-grid campaign-category-scope-layout">
+                  <section className="campaign-category-scope-pane">
+                    <div className="campaign-category-scope-pane-head">
+                      <h5>Kategori Seçimi</h5>
+                      <span>{formatNumber(campaignDraft.targetCategoryIds.length)} seçili</span>
+                    </div>
+                    <div className="s-giftcard-category-grid campaign-category-grid-list">
+                      {availableCategories.map((category) => {
+                        const categoryId = String(category.id || '');
+                        return (
+                          <label key={categoryId} className={`s-giftcard-category-item ${campaignDraft.targetCategoryIds.includes(categoryId) ? 'is-selected' : ''}`}>
+                            <input type="checkbox" checked={campaignDraft.targetCategoryIds.includes(categoryId)} onChange={() => toggleCampaignCategory(categoryId)} />
+                            <span>{String(category.name || categoryId)}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <section className="campaign-category-scope-pane">
+                    <div className="campaign-category-label-scope">
+                      <div className="campaign-category-label-toolbar">
+                        <label className="field-group">
+                          <span>Etiket Ara <small>(Opsiyonel)</small></span>
+                          <input type="search" value={categoryLabelSearch} onChange={(event) => setCategoryLabelSearch(event.target.value)} placeholder="Etiket adı veya kategori" />
                         </label>
-                      );
-                    })}
-                  </div>
+                        {selectedCategoryLabelOptions.length ? <span className="campaign-category-label-count">{formatNumber(selectedCategoryLabelOptions.length)} etiket seçildi</span> : null}
+                      </div>
+                      {selectedCategoryLabelOptions.length ? (
+                        <div className="campaign-category-label-selected" aria-label="Seçilen etiketler">
+                          {selectedCategoryLabelOptions.map((option) => (
+                            <span key={option.id} className="campaign-selected-product-chip">
+                              {option.label}
+                              <button type="button" onClick={() => toggleCampaignCategoryLabel(option.id)} aria-label={`${option.label} etiketini kaldır`}>
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="campaign-category-label-grid">
+                        {selectedCategoryIdSet.size && visibleCategoryLabelOptions.length ? visibleCategoryLabelOptions.map((option) => (
+                          <button key={option.id} type="button" className={`campaign-category-label-chip ${selectedCategoryLabelIdSet.has(option.id) ? 'is-selected' : ''}`} onClick={() => toggleCampaignCategoryLabel(option.id)}>
+                            <span>{option.label}</span>
+                            {option.categoryName ? <small>{option.categoryName}</small> : null}
+                          </button>
+                        )) : null}
+                      </div>
+                    </div>
+                  </section>
                 </section>
               ) : null}
 
@@ -9118,7 +9107,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <div className="campaign-brand-toolbar">
                       <label className="field-group campaign-brand-search-field">
                         <span>Marka ara</span>
-                        <input type="search" value={brandCampaignSearch} onChange={(event) => setBrandCampaignSearch(event.target.value)} placeholder="En az 2 karakter ile arayın" />
+                        <input
+                          type="search"
+                          value={brandCampaignSearch}
+                          onFocus={() => { void loadCampaignProducts(); }}
+                          onChange={(event) => {
+                            setBrandCampaignSearch(event.target.value);
+                            if (!availableProductsLoaded) void loadCampaignProducts();
+                          }}
+                          placeholder="En az 2 karakter ile arayin"
+                        />
                       </label>
                       <div className="campaign-form-tip campaign-brand-toolbar-info">
                         {brandCampaignSearchNormalized.length >= 2
@@ -9190,7 +9188,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <div><span>Bitiş</span><strong>{selectedCampaignDetail.isIndefinite ? 'Süresiz' : (selectedCampaignDetail.endsAt || '-')}</strong></div>
                 <div><span>Durum</span><strong>{CAMPAIGN_STATUS_LABELS[selectedCampaignDetail.status] || (selectedCampaignDetail.isActive ? 'Aktif' : 'Pasif')}</strong></div>
                 <div>
-                  <span>Uygulama önceliği</span>
+                  <span>Uygulama Önceliği</span>
                   <strong>{getCampaignPriorityDisplayLabel(selectedCampaignDetail.priority)}</strong>
                   <small className="muted-text">{getCampaignPriorityValueLabel(selectedCampaignDetail.priority)}</small>
                 </div>
@@ -9198,13 +9196,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               <section className="campaign-detail-section campaign-detail-section--products">
                 <div className="campaign-detail-products-head">
                   <div>
-                    <h4>Kampanyaya dahil ürünler</h4>
-                    <p>Eski fiyat ve kampanya sonrası yeni fiyat ürün bazında gösterilir.</p>
+                    <h4>Kampanyaya dahil Ürünler</h4>
+                    <p>Eski fiyat ve kampanya sonrasi yeni fiyat Ürün bazinda gösterilir.</p>
                     {selectedCampaignDetailScopeCount > selectedCampaignDetailPreviewCount ? (
-                      <small className="muted-text">Tablo, analiz önizlemesindeki {formatNumber(selectedCampaignDetailPreviewCount)} aday ürünü gösterir.</small>
+                      <small className="muted-text">Tablo, analiz Önizlemesindeki {formatNumber(selectedCampaignDetailPreviewCount)} aday ürünü gösterir.</small>
                     ) : null}
                   </div>
-                  <span>{formatNumber(selectedCampaignDetailScopeCount || selectedCampaignDetailPreviewCount)} ürün</span>
+                  <span>{formatNumber(selectedCampaignDetailScopeCount || selectedCampaignDetailPreviewCount)} Ürün</span>
                 </div>
                 {selectedCampaignDetailProductRows.length ? (
                   <div className="campaign-detail-product-table-wrap">
@@ -9235,7 +9233,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </div>
                 ) : (
                   <div className="campaign-empty-state-box campaign-empty-state-box--compact" role="status">
-                    <strong>Bu kampanyaya bağlı ürün bulunamadı.</strong>
+                    <strong>Bu kampanyaya bagli Ürün bulunamadı.</strong>
                   </div>
                 )}
               </section>
@@ -9309,11 +9307,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     </select>
                   </label>
                   <label>
-                    <span>Değer</span>
+                    <span>Deger</span>
                     <input type="number" min="0" step="0.01" value={giftCardDraft.value} onChange={(event) => setGiftCardDraft((current) => ({ ...current, value: event.target.value }))} placeholder={giftCardDraft.valueType === 'percentage' ? '10' : '150'} />
                   </label>
                   <label>
-                    <span>Kullanım Hakkı</span>
+                    <span>Kullanim Hakki</span>
                     <input
                       type="number"
                       min="1"
@@ -9327,13 +9325,13 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
                 <div className="s-giftcard-category-box">
                   <div className="s-giftcard-category-head">
-                    <span>Kategori Geçerliliği</span>
+                    <span>Kategori Geçerliligi</span>
                     <button
                       type="button"
                       className={`s-giftcard-all-toggle ${giftCardDraft.isAllCategoriesSelected ? 'is-active' : ''}`}
                       onClick={toggleAllCategoriesForGiftCard}
                     >
-                      Hepsi 
+                      Hepsi
                     </button>
                   </div>
 
@@ -9369,7 +9367,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               </section>
 
               <section className="s-giftcard-list-box">
-                <h4>Mevcut Hediye Kartları</h4>
+                <h4>Mevcut Hediye Kartlari</h4>
                 {giftCards.length === 0 ? (
                   <div className="s-giftcard-empty">Henüz hediye kartı tanımlanmadı.</div>
                 ) : (
@@ -9467,7 +9465,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={specialDayModalOpen}
         title="Özel Gün Ekle"
-        description="Mağaza için Özel Çalışma saati tanımlayın. Tek gün veya tarih aralığı seçebilirsiniz."
+        description="Mağaza için Özel Çalisma saati tanımlayın. Tek gün veya tarih araligi seçebilirsiniz."
         headerIcon={<CalendarDays size={16} />}
         modalClassName="product-form-fit-modal special-day-modal"
         onClose={closeSpecialDayModal}
@@ -9500,7 +9498,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               </div>
             </section>
 
-            {/* Tarih alanları */}
+            {/* Tarih alanlari */}
             <section className="modal-form-section special-day-section">
               <div className="modal-form-section-head">
                 <h4 className="modal-form-section-title">
@@ -9530,14 +9528,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               </div>
             </section>
 
-            {/* Saat alanları */}
+            {/* Saat alanlari */}
             <section className="modal-form-section special-day-section">
               <div className="modal-form-section-head">
-                <h4 className="modal-form-section-title">Çalışma Saatleri</h4>
+                <h4 className="modal-form-section-title">Çalisma Saatleri</h4>
               </div>
               <div className="special-day-time-grid">
                 <label className="field-group">
-                  <span>Açılış Saati</span>
+                  <span>Açilis Saati</span>
                   <input
                     type="time"
                     value={specialDayDraft.startTime}
@@ -9545,7 +9543,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   />
                 </label>
                 <label className="field-group">
-                  <span>Kapanış Saati</span>
+                  <span>Kapanis Saati</span>
                   <input
                     type="time"
                     value={specialDayDraft.endTime}
@@ -9567,7 +9565,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   rows={3}
                   value={specialDayDraft.note}
                   onChange={(event) => setSpecialDayDraft((current) => ({ ...current, note: event.target.value }))}
-                  placeholder="Örn: Yılbaşı Özel Çalışma saati, bayram tatili vb."
+                  placeholder="Örn: Yılbaşı Özel Çalisma saati, bayram tatili vb."
                 />
               </label>
             </section>
@@ -9583,7 +9581,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={auditModalOpen}
         title="Audit Log Detayı"
-        description="Seçilen ayar değişikliği kaydını read-only olarak inceleyin."
+        description="Seçilen ayar değişikliği kaydıni read-only olarak inceleyin."
         headerIcon={<FileText size={16} />}
         modalClassName="product-form-fit-modal s-audit-detail-modal"
         onClose={() => {
@@ -9657,7 +9655,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={developerLogModalOpen}
         title="Geliştirici Log Detayı"
-        description="Teknik hata kaydını read-only olarak inceleyin."
+        description="Teknik hata kaydıni read-only olarak inceleyin."
         headerIcon={<FileText size={16} />}
         modalClassName="product-form-fit-modal s-devlog-detail-modal"
         onClose={() => {
@@ -9694,7 +9692,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <input type="text" value={selectedDeveloperLog?.statusCode || '-'} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
-                  <span>Hata Sınıfı</span>
+                  <span>Hata Sinifi</span>
                   <input type="text" value={selectedDeveloperLog?.errorType || '-'} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
@@ -9792,7 +9790,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={loginActivityDetailModalOpen}
         title="Giriş Aktivitesi Detayı"
-        description="Seçilen giriş kaydını read-only olarak inceleyin."
+        description="Seçilen giriş kaydıni read-only olarak inceleyin."
         headerIcon={<ShieldCheck size={16} />}
         modalClassName="product-form-fit-modal s-audit-detail-modal"
         onClose={() => {
@@ -9817,7 +9815,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <input type="text" value={selectedLoginActivity?.ipAddress || selectedLoginActivity?.ip || '-'} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
-                  <span>Giriş Zamanı</span>
+                  <span>Giriş Zamani</span>
                   <input type="text" value={formatDateTime(resolveLoginActivityDate(selectedLoginActivity))} readOnly />
                 </label>
                 <label className="field-group col-6 s-log-detail-readonly-field">
@@ -10093,19 +10091,19 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     name="action"
                     value={developerLogDraft.action}
                     onChange={handleDeveloperLogDraftChange}
-                    placeholder="Örn. kullanıcı kaydı, sipariş onayı"
+                    placeholder="Örn. kullanıcı kaydı, siparis onayi"
                     disabled={creatingDeveloperLog}
                   />
                 </label>
 
                 <label className="field-group col-6">
-                  <span>İlgili sayfa / servis adresi</span>
+                  <span>Ilgili sayfa / servis adresi</span>
                   <input
                     type="text"
                     name="endpoint"
                     value={developerLogDraft.endpoint}
                     onChange={handleDeveloperLogDraftChange}
-                    placeholder="Örn. /api/orders veya ürünler sayfası"
+                    placeholder="Örn. /api/orders veya Ürünler sayfası"
                     disabled={creatingDeveloperLog}
                   />
                 </label>
@@ -10125,7 +10123,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 </label>
 
                 <label className="field-group col-6">
-                  <span>Hata sınıfı / tipi</span>
+                  <span>Hata sinifi / tipi</span>
                   <input
                     type="text"
                     name="errorType"
@@ -10343,4 +10341,3 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     </div>
   );
 }
-

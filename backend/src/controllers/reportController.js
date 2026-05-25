@@ -83,6 +83,51 @@ export const reportController = {
     }
   },
 
+  async listRecentPriceActions(req, res, next) {
+    try {
+      const data = await reportService.listRecentPriceActions(req.query || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async applyBulkPriceUpdate(req, res, next) {
+    try {
+      const data = await reportService.applyBulkPriceUpdate(req.body || {}, req.user || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async applyTemporaryPriceAction(req, res, next) {
+    try {
+      const data = await reportService.applyTemporaryPriceAction(req.body || {}, req.user || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async skipPricingDecision(req, res, next) {
+    try {
+      const data = await reportService.skipPricingDecision(req.body || {}, req.user || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async rollbackPriceAction(req, res, next) {
+    try {
+      const data = await reportService.rollbackPriceAction(req.params.actionId, req.user || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async dashboard(req, res, next) {
     try {
       const data = await reportService.getDashboardSummary();
@@ -104,7 +149,10 @@ export const reportController = {
   async dayEnd(req, res, next) {
     try {
       const days = Number(req.query.days || 7);
-      const data = await dailyClosingService.listRecentClosings(days);
+      const data = await dailyClosingService.listRecentClosings(days, {
+        includeToday: String(req.query.includeToday ?? 'true').toLowerCase() !== 'false',
+        closingType: req.query.closingType || null,
+      });
       res.json({ success: true, data });
     } catch (error) {
       next(error);
@@ -114,9 +162,12 @@ export const reportController = {
   async runDayEnd(req, res, next) {
     try {
       const businessDate = req.body?.businessDate || req.query.businessDate;
-      const data = businessDate
-        ? await dailyClosingService.closeBusinessDate(businessDate, { source: 'manual-api' })
-        : await dailyClosingService.closePreviousBusinessDate({ source: 'manual-api' });
+      const closingType = req.body?.closingType || req.query.closingType;
+      const data = closingType === 'manual_snapshot'
+        ? await dailyClosingService.closeCurrentManualSnapshot({ source: 'manual-api' })
+        : businessDate
+          ? await dailyClosingService.closeBusinessDate(businessDate, { source: 'manual-api' })
+          : await dailyClosingService.closePreviousBusinessDate({ source: 'manual-api' });
       res.json({ success: true, data });
     } catch (error) {
       next(error);
@@ -164,7 +215,7 @@ export const reportController = {
       if (!exportData) {
         return res.status(400).json({
           success: false,
-          message: 'Gecersiz rapor bolumu. Desteklenen bolumler: inventory, critical, category, supplier, movement, returns, aging, expiry, margin, supplier_performance',
+          message: 'Geçersiz rapor bölümü. Desteklenen bölümler: inventory, critical, category, supplier, movement, returns, aging, expiry, margin, supplier_performance',
         });
       }
 

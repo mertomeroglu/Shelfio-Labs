@@ -19,6 +19,7 @@ router.put('/supplier-products/:id', requirePermission(PERMISSIONS.PROCUREMENT_U
 router.delete('/supplier-products/:id', requirePermission(PERMISSIONS.PROCUREMENT_UPDATE), procurementController.removeSupplierProduct);
 
 router.post('/suggestions/generate', requirePermission(PERMISSIONS.PROCUREMENT_CREATE), procurementController.generateSuggestions);
+router.get('/suggestions/summary', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.getSuggestionSummary);
 router.get('/suggestions', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.listSuggestions);
 router.patch('/suggestions/:id', requirePermission(PERMISSIONS.PROCUREMENT_UPDATE), procurementController.updateSuggestion);
 router.post('/suggestions/:id/approve', requirePermission(PERMISSIONS.PROCUREMENT_APPROVE), procurementController.approveSuggestion);

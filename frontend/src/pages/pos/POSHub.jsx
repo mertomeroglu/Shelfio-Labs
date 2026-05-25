@@ -7,9 +7,6 @@ import {
   QrCode, Building2, Gift, BarChart3, History, FileText, X,
   Printer, FileDown, FileSpreadsheet,
 } from 'lucide-react';
-import pdfMake from 'pdfmake/build/pdfmake';
-import pdfFonts from 'pdfmake/build/vfs_fonts';
-import * as XLSX from 'xlsx';
 import { useDialog } from '../../components/ConfirmModal.jsx';
 import PageHeader from '../../components/PageHeader.jsx';
 import { useAuth } from '../../hooks/useAuth.js';
@@ -30,12 +27,11 @@ const DESK_CONFIG = [
   { code: 'B8', label: 'Yönetim Kasası', isManagement: true },
 ];
 const ACTIVE_DESK_SESSIONS_KEY = 'pos_active_desk_sessions';
-const DAY_END_ARCHIVE_KEY = 'pos_day_end_archives';
-const LAST_DAY_END_AT_KEY = 'pos_last_day_end_at';
-const DAY_END_ARCHIVE_SEED_VERSION_KEY = 'pos_day_end_seed_version';
-const DAY_END_ARCHIVE_SEED_VERSION = '2026-04-15-v2';
-const DAY_END_AUTO_MARK_KEY = 'pos_last_auto_day_end_date';
 const DAY_END_PAYMENT_METHODS = ['cash', 'card', 'qr', 'eft', 'giftcard'];
+const CLOSING_TYPE_LABELS = {
+  official_daily_close: 'Resmi Günlük Kapanış',
+  manual_snapshot: 'Manuel Kapanış',
+};
 const PAYMENT_METHOD_ALIASES = {
   cash: ['nakit'],
   card: ['kart', 'creditcard', 'credit_card', 'debitcard', 'debit_card', 'pos'],
@@ -71,7 +67,7 @@ const sanitizePdfText = (value) => {
   return text || '-';
 };
 
-const resolveEmbeddedPdfVfs = () => {
+const resolveEmbeddedPdfVfs = (pdfFonts) => {
   const nestedVfs = pdfFonts?.pdfMake?.vfs || pdfFonts?.vfs || pdfFonts?.default?.pdfMake?.vfs || pdfFonts?.default?.vfs;
   if (nestedVfs && Object.keys(nestedVfs).length > 0) {
     return nestedVfs;
@@ -82,78 +78,22 @@ const resolveEmbeddedPdfVfs = () => {
   return directFontEntries.length ? Object.fromEntries(directFontEntries) : {};
 };
 
-if (!pdfMake.vfs || Object.keys(pdfMake.vfs).length === 0) {
-  const embeddedVfs = resolveEmbeddedPdfVfs();
-  pdfMake.vfs = embeddedVfs;
-}
-
-const createDefaultDayEndArchives = () => {
-  const baseDate = new Date('2026-04-05T00:00:00.000Z');
-  const cashierPools = [
-    ['Hakan Yıldız', 'Seda Acar', 'Mert Ömeroğlu'],
-    ['Ebru Şahin', 'Murat Çelik', 'Seda Acar'],
-    ['Tolga Demir', 'Hakan Yıldız', 'Ebru Şahin'],
-    ['Mert Ömeroğlu', 'Seda Acar', 'Murat Çelik'],
-  ];
-  const deskPools = [
-    ['B1', 'B2', 'B3'],
-    ['B2', 'B4', 'B6'],
-    ['B1', 'B5', 'B7', 'B8'],
-    ['B3', 'B4', 'B6', 'B8'],
-  ];
-
-  return Array.from({ length: 10 }, (_, index) => {
-    const day = new Date(baseDate);
-    day.setUTCDate(baseDate.getUTCDate() + index);
-    const dayText = day.toISOString().slice(0, 10);
-    const archivedAt = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 22, (index * 7) % 60, 0)).toISOString();
-    const rangeStart = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 0, 0, 0)).toISOString();
-    const rangeEnd = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), 21, 59, 59)).toISOString();
-
-    const totalSales = Number((1120 + (index * 91.4) + ((index % 3) * 37.2)).toFixed(2));
-    const totalReturns = Number((58 + ((index % 4) * 16.35)).toFixed(2));
-    const netRevenue = Number((totalSales - totalReturns).toFixed(2));
-    const salesCount = 19 + (index * 2);
-    const returnsCount = 1 + (index % 3);
-    const totalItems = 52 + (index * 5);
-
-    const cash = Number((netRevenue * 0.31).toFixed(2));
-    const card = Number((netRevenue * 0.42).toFixed(2));
-    const qr = Number((netRevenue * 0.14).toFixed(2));
-    const eft = Number((netRevenue * 0.08).toFixed(2));
-    const giftcard = Number((netRevenue - cash - card - qr - eft).toFixed(2));
-
-    return {
-      id: `seed-day-end-${dayText}`,
-      date: dayText,
-      totalSales,
-      totalReturns,
-      netRevenue,
-      salesCount,
-      returnsCount,
-      totalItems,
-      avgSale: Number((totalSales / Math.max(1, salesCount)).toFixed(2)),
-      paymentBreakdown: {
-        cash,
-        card,
-        qr,
-        eft,
-        giftcard,
-      },
-      status: 'Arşivde',
-      archivedAt,
-      rangeStart,
-      rangeEnd,
-      deskCodes: deskPools[index % deskPools.length],
-      cashiers: cashierPools[index % cashierPools.length],
-      recordTypes: ['sale', 'return'],
-      paymentMethods: ['cash', 'card', 'qr', 'eft', 'giftcard'],
-      records: [],
-    };
-  }).reverse();
+const loadPdfMake = async () => {
+  const [pdfMakeModule, pdfFontsModule] = await Promise.all([
+    import('pdfmake/build/pdfmake'),
+    import('pdfmake/build/vfs_fonts'),
+  ]);
+  const pdfMake = pdfMakeModule.default || pdfMakeModule.pdfMake || pdfMakeModule;
+  if (!pdfMake.vfs || Object.keys(pdfMake.vfs).length === 0) {
+    pdfMake.vfs = resolveEmbeddedPdfVfs(pdfFontsModule.default || pdfFontsModule);
+  }
+  return pdfMake;
 };
 
-const DEFAULT_DAY_END_ARCHIVES = createDefaultDayEndArchives();
+const loadXlsx = async () => {
+  const module = await import('xlsx');
+  return module.default || module;
+};
 
 const normalizePaymentToken = (value) => String(value || '')
   .trim()
@@ -314,7 +254,10 @@ const resolvePaymentAmountFromSources = (method, paymentNetSource, paymentSource
 };
 
 const normalizeDayEndReport = (report = {}) => {
-  const paymentSource = report.paymentBreakdown && typeof report.paymentBreakdown === 'object' ? report.paymentBreakdown : {};
+  const payload = report.payload && typeof report.payload === 'object' ? report.payload : {};
+  const paymentSource = report.paymentBreakdown && typeof report.paymentBreakdown === 'object'
+    ? report.paymentBreakdown
+    : (payload.paymentBreakdown && typeof payload.paymentBreakdown === 'object' ? payload.paymentBreakdown : {});
   const paymentNetSource = report.paymentBreakdownNet && typeof report.paymentBreakdownNet === 'object' ? report.paymentBreakdownNet : {};
   const paymentBreakdown = DAY_END_PAYMENT_METHODS.reduce((acc, method) => {
     acc[method] = toSafeNumber(resolvePaymentAmountFromSources(method, paymentNetSource, paymentSource));
@@ -351,79 +294,31 @@ const normalizeDayEndReport = (report = {}) => {
     .filter(Boolean))];
 
   return {
-    id: String(report.id || report.date || Date.now()),
-    date: String(report.date || new Date().toISOString().slice(0, 10)),
-    totalSales: toSafeNumber(report.totalSales),
-    totalReturns: toSafeNumber(report.totalReturns),
+    id: String(report.id || report.businessDate || report.date || Date.now()),
+    date: String(report.date || report.businessDate || new Date().toISOString().slice(0, 10)),
+    businessDate: String(report.businessDate || report.date || new Date().toISOString().slice(0, 10)),
+    closingType: String(report.closingType || 'manual_snapshot'),
+    closingTypeLabel: CLOSING_TYPE_LABELS[report.closingType] || CLOSING_TYPE_LABELS.manual_snapshot,
+    totalSales: toSafeNumber(report.totalSales ?? report.grossSalesAmount),
+    totalReturns: toSafeNumber(report.totalReturns ?? report.returnAmount),
     netRevenue: toSafeNumber(report.netRevenue),
     salesCount: Math.max(0, Math.round(toSafeNumber(report.salesCount))),
-    returnsCount: Math.max(0, Math.round(toSafeNumber(report.returnsCount))),
-    totalItems: Math.max(0, Math.round(toSafeNumber(report.totalItems))),
+    returnsCount: Math.max(0, Math.round(toSafeNumber(report.returnsCount ?? report.returnCount))),
+    totalItems: Math.max(0, Math.round(toSafeNumber(report.totalItems ?? report.itemCount))),
     avgSale: toSafeNumber(report.avgSale),
     paymentBreakdown: fallbackBreakdown,
     status: String(report.status || 'Arşivde'),
-    archivedAt: report.archivedAt || null,
-    rangeStart: report.rangeStart || null,
-    rangeEnd: report.rangeEnd || report.archivedAt || null,
-    isArchived: report.isArchived === true || String(report.status || '').toLowerCase('tr-TR') === 'arşivde',
+    archivedAt: report.archivedAt || report.closedAt || null,
+    closedAt: report.closedAt || report.archivedAt || null,
+    rangeStart: report.rangeStart || payload.rangeStartUtc || null,
+    rangeEnd: report.rangeEnd || payload.rangeEndUtc || report.closedAt || report.archivedAt || null,
+    isArchived: report.isArchived !== false,
     deskCodes,
     cashiers,
     recordTypes,
     paymentMethods: normalizedPaymentMethods,
     records: normalizedRecords,
   };
-};
-
-const readDayEndArchives = () => {
-  try {
-    const seedVersion = localStorage.getItem(DAY_END_ARCHIVE_SEED_VERSION_KEY);
-    if (seedVersion !== DAY_END_ARCHIVE_SEED_VERSION) {
-      const seeded = DEFAULT_DAY_END_ARCHIVES.map((item) => normalizeDayEndReport(item));
-      localStorage.setItem(DAY_END_ARCHIVE_KEY, JSON.stringify(seeded));
-      localStorage.setItem(DAY_END_ARCHIVE_SEED_VERSION_KEY, DAY_END_ARCHIVE_SEED_VERSION);
-      const latest = seeded[0] || null;
-      if (latest?.rangeEnd) {
-        localStorage.setItem(LAST_DAY_END_AT_KEY, String(latest.rangeEnd));
-      }
-      return seeded;
-    }
-
-    const raw = localStorage.getItem(DAY_END_ARCHIVE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    const normalized = parsed.map((item) => normalizeDayEndReport(item));
-    if (normalized.length) {
-      return normalized;
-    }
-    return DEFAULT_DAY_END_ARCHIVES.map((item) => normalizeDayEndReport(item));
-  } catch {
-    return DEFAULT_DAY_END_ARCHIVES.map((item) => normalizeDayEndReport(item));
-  }
-};
-
-const writeDayEndArchives = (archives) => {
-  localStorage.setItem(DAY_END_ARCHIVE_KEY, JSON.stringify(Array.isArray(archives) ? archives : []));
-};
-
-const readLastDayEndAt = () => {
-  try {
-    const raw = localStorage.getItem(LAST_DAY_END_AT_KEY);
-    if (raw) return raw;
-    const archives = readDayEndArchives();
-    if (!archives.length) return null;
-    const latest = [...archives].sort((a, b) => new Date(b.rangeEnd || b.archivedAt || b.date) - new Date(a.rangeEnd || a.archivedAt || a.date))[0];
-    return latest?.rangeEnd || latest?.archivedAt || null;
-  } catch {
-    return null;
-  }
-};
-
-const writeLastDayEndAt = (value) => {
-  if (!value) {
-    localStorage.removeItem(LAST_DAY_END_AT_KEY);
-    return;
-  }
-  localStorage.setItem(LAST_DAY_END_AT_KEY, String(value));
 };
 
 const readActiveDeskSessions = () => {
@@ -520,8 +415,8 @@ export default function POSHub() {
   const [activationBusyDesk, setActivationBusyDesk] = useState('');
   const [dayEndBusy, setDayEndBusy] = useState(false);
   const [documentBusy, setDocumentBusy] = useState(false);
-  const [dayEndArchives, setDayEndArchives] = useState(() => readDayEndArchives());
-  const [lastDayEndAt, setLastDayEndAt] = useState(() => readLastDayEndAt());
+  const [dayEndArchives, setDayEndArchives] = useState([]);
+  const [lastDayEndAt, setLastDayEndAt] = useState(null);
   const [quickReturnTarget, setQuickReturnTarget] = useState(null);
 
   const assignedDeskCode = (user?.assignedDeskCode || '').toUpperCase();
@@ -571,8 +466,19 @@ export default function POSHub() {
     }
   };
 
+  const syncDayEndClosings = async () => {
+    const rows = await posService.getDayEndClosings({ days: 31, includeToday: true });
+    const normalized = (Array.isArray(rows) ? rows : []).map((item) => normalizeDayEndReport(item));
+    const sorted = normalized.sort((a, b) => new Date(b.closedAt || b.rangeEnd || b.date || 0) - new Date(a.closedAt || a.rangeEnd || a.date || 0));
+    setDayEndArchives(sorted);
+    const latest = sorted[0];
+    setLastDayEndAt(latest?.closedAt || latest?.rangeEnd || null);
+    return sorted;
+  };
+
   useEffect(() => {
     loadDashboard();
+    syncDayEndClosings().catch(() => setDayEndArchives([]));
   }, []);
 
   /* Shortcut handlers */
@@ -618,7 +524,7 @@ export default function POSHub() {
     finally { setHistoryLoading(false); }
   };
 
-  const openDayEndArchive = () => {
+  const openDayEndArchive = async () => {
     setHistoryType('day-end');
     setHistoryError('');
     setHistoryDetail(null);
@@ -626,6 +532,14 @@ export default function POSHub() {
     setDayEndArchiveDetail(null);
     setDayEndArchiveFilters(DEFAULT_DAY_END_ARCHIVE_FILTERS);
     setDayEndArchiveAppliedFilters(DEFAULT_DAY_END_ARCHIVE_FILTERS);
+    setHistoryLoading(true);
+    try {
+      await syncDayEndClosings();
+    } catch {
+      setHistoryError('Gün sonu kayıtları yüklenemedi. Lütfen tekrar deneyin.');
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   const closeHistory = () => {
@@ -666,74 +580,6 @@ export default function POSHub() {
     setDailyReport(normalizeDayEndReport(report));
     setShowReport(true);
   };
-
-  const appendDayEndArchive = (report, archivedAt = null) => {
-    const normalized = normalizeDayEndReport(report);
-    const stamp = archivedAt || normalized.archivedAt || new Date().toISOString();
-    const entry = {
-      ...normalized,
-      id: `day-end-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      archivedAt: stamp,
-      rangeEnd: normalized.rangeEnd || stamp,
-      status: 'Arşivde',
-      isArchived: true,
-    };
-
-    const current = Array.isArray(dayEndArchives) ? dayEndArchives : [];
-    const next = [entry, ...current].sort((a, b) => new Date(b.archivedAt || b.rangeEnd || b.date) - new Date(a.archivedAt || a.rangeEnd || a.date));
-    setDayEndArchives(next);
-    writeDayEndArchives(next);
-
-    if (entry.rangeEnd) {
-      setLastDayEndAt(entry.rangeEnd);
-      writeLastDayEndAt(entry.rangeEnd);
-    }
-
-    return entry;
-  };
-
-  useEffect(() => {
-    let mounted = true;
-
-    const runAutomaticDayEndCheck = async () => {
-      const now = new Date();
-      const today = now.toISOString().slice(0, 10);
-      if (localStorage.getItem(DAY_END_AUTO_MARK_KEY) === today) return;
-
-      const midnight = new Date(now);
-      midnight.setHours(0, 0, 0, 0);
-      const midnightIso = midnight.toISOString();
-
-      try {
-        const allSales = await posService.getAllSales({ startDate: lastDayEndAt, endDate: midnightIso, full: true });
-        const intervalRecords = (Array.isArray(allSales) ? allSales : []).filter((row) => {
-          const createdAt = row?.createdAt || row?.timestamp || null;
-          if (!createdAt) return false;
-          return isAfterTimestamp(createdAt, lastDayEndAt) && new Date(createdAt).getTime() <= midnight.getTime();
-        });
-
-        if (intervalRecords.length && mounted) {
-          const intervalReport = createDayEndReportFromSales({ records: intervalRecords, rangeStart: lastDayEndAt, rangeEnd: midnightIso });
-          const archivedReport = appendDayEndArchive(intervalReport, midnightIso);
-          setDailyReport(archivedReport);
-        }
-
-        localStorage.setItem(DAY_END_AUTO_MARK_KEY, today);
-      } catch {
-        // ignore auto day-end errors silently to avoid breaking POS dashboard flow
-      }
-    };
-
-    void runAutomaticDayEndCheck();
-    const timer = window.setInterval(() => {
-      void runAutomaticDayEndCheck();
-    }, 60 * 1000);
-
-    return () => {
-      mounted = false;
-      window.clearInterval(timer);
-    };
-  }, [lastDayEndAt]);
 
   const getPaymentSummary = (record) => {
     const list = (record?.payments || [])
@@ -904,9 +750,11 @@ export default function POSHub() {
         return;
       }
 
-      const dayReport = await posService.getDailyReport(reportRow.date);
+      const records = reportRow.rangeStart && reportRow.rangeEnd
+        ? await posService.getAllSales({ startDate: reportRow.rangeStart, endDate: reportRow.rangeEnd, full: true })
+        : [];
       const normalized = normalizeDayEndReport({
-        ...dayReport,
+        ...reportRow,
         id: reportRow.id,
         status: reportRow.status,
         archivedAt: reportRow.archivedAt,
@@ -915,12 +763,7 @@ export default function POSHub() {
         isArchived: true,
       });
 
-      const records = [
-        ...(Array.isArray(dayReport?.sales) ? dayReport.sales : []),
-        ...(Array.isArray(dayReport?.returns) ? dayReport.returns : []),
-      ].sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0));
-
-      setDayEndArchiveDetail({ ...normalized, records });
+      setDayEndArchiveDetail({ ...normalized, records: (Array.isArray(records) ? records : []).sort((a, b) => new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0)) });
     } catch {
       setDayEndArchiveDetail({
         ...normalizeDayEndReport(reportRow),
@@ -1057,6 +900,7 @@ export default function POSHub() {
       },
     };
 
+    const pdfMake = await loadPdfMake();
     pdfMake.createPdf(docDefinition).download(`${filePrefix}-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
@@ -1073,15 +917,16 @@ export default function POSHub() {
     const exportRows = rows.map((record) => ({
       Tarih: new Date(record.createdAt).toLocaleString('tr-TR'),
       Referans: toDisplayReferenceNo(record.referenceNo || '-'),
-      Tur: record.type === 'return' ? 'İade' : 'Satış',
-      Urun: `${record.items?.length || 0} ürün`,
-      Odeme: getPaymentSummary(record),
+      Tür: record.type === 'return' ? 'İade' : 'Satış',
+      Ürün: `${record.items?.length || 0} ürün`,
+      Ödeme: getPaymentSummary(record),
       Tutar: toSafeNumber(record.totalAmount),
     }));
 
+    const XLSX = await loadXlsx();
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Islem Arsivi');
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'İşlem Arşivi');
     XLSX.writeFile(workbook, `pos-islem-arsivi-${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -1135,6 +980,7 @@ export default function POSHub() {
       ],
     };
 
+    const pdfMake = await loadPdfMake();
     pdfMake.createPdf(docDefinition).download(`pos-gun-sonu-arsivi-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
@@ -1159,21 +1005,11 @@ export default function POSHub() {
       Kullanicilar: normalizeStringList(item.cashiers).join(', ') || '-',
     }));
 
+    const XLSX = await loadXlsx();
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Gun Sonu Arsivi');
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Gün Sonu Arşivi');
     XLSX.writeFile(workbook, `pos-gun-sonu-arsivi-${new Date().toISOString().slice(0, 10)}.xlsx`);
-  };
-
-  const handleArchiveDailyReport = async () => {
-    if (!dailyReport) return;
-    const entry = appendDayEndArchive(dailyReport);
-    setDailyReport(entry);
-
-    await dialog.success({
-      title: 'Günlük Rapor',
-      description: 'Gün sonu kaydı arşive eklendi.',
-    });
   };
 
   const downloadTransactionDocument = async (record, kind) => {
@@ -1218,43 +1054,19 @@ export default function POSHub() {
     if (dayEndBusy) return;
     const approved = await dialog.confirm({
       title: 'Gün Sonu Al',
-      description: 'Gün sonu raporu alınacak ve açık kasalar kapatılacak. Devam edilsin mi?',
+      description: 'Manuel gün sonu kapanışı alınacak. Resmi 00:00 kapanışı ayrıca oluşmaya devam eder. Devam edilsin mi?',
       confirmText: 'Devam Et',
-      cancelText: 'İptal',
+      cancelText: 'Iptal',
       closeOnBackdrop: true,
     });
     if (!approved) return;
 
     try {
       setDayEndBusy(true);
-      const rangeEnd = new Date().toISOString();
-      const allSales = await posService.getAllSales({ startDate: lastDayEndAt, endDate: rangeEnd, full: true });
-      const intervalRecords = (allSales || []).filter((row) => {
-        const createdAt = row?.createdAt || row?.timestamp || null;
-        if (!createdAt) return false;
-        return isAfterTimestamp(createdAt, lastDayEndAt) && new Date(createdAt).getTime() <= new Date(rangeEnd).getTime();
-      });
-
-      if (!intervalRecords.length) {
-        await dialog.warning({
-          title: 'Gün Sonu Al',
-          description: 'Arşivlenecek yeni işlem bulunamadı. Aynı veriler için tekrar gün sonu alınamaz.',
-        });
-        return;
-      }
-
-      const intervalReport = createDayEndReportFromSales({ records: intervalRecords, rangeStart: lastDayEndAt, rangeEnd });
-      const archivedReport = appendDayEndArchive(intervalReport, rangeEnd);
+      const archivedReport = normalizeDayEndReport(await posService.closeDayEnd({ closingType: 'manual_snapshot' }));
       setDailyReport(archivedReport);
       setShowReport(true);
-
-      const openDeskCodes = Object.entries(deskActivationStatus || {})
-        .filter(([, isOpen]) => isOpen === true)
-        .map(([deskCode]) => deskCode);
-
-      await Promise.all(openDeskCodes.map((deskCode) => posService.setDeskActivation(deskCode, false)));
-      clearAllDeskSessions();
-      setActiveDeskSessions({});
+      await syncDayEndClosings();
       await Promise.all([
         loadDeskActivationStatus(),
         loadDashboard(),
@@ -1384,7 +1196,7 @@ export default function POSHub() {
         </div>
       </section>
 
-      {/* Gunluk Rapor Modal */}
+      {/* Günlük Rapor Modal */}
       {showReport && dailyReport && (
         <div className="pos-hub-overlay" onClick={() => setShowReport(false)}>
           <div className="pos-hub-modal" onClick={(e) => e.stopPropagation()}>
@@ -1398,6 +1210,7 @@ export default function POSHub() {
                 <div className="pos-hub-report-item"><span>Toplam İade</span><strong className="text-red">{formatPrice(dailyReport.totalReturns)}</strong></div>
                 <div className="pos-hub-report-item"><span>Net Ciro</span><strong className="text-green">{formatPrice(dailyReport.netRevenue)}</strong></div>
                 <div className="pos-hub-report-item"><span>İşlem Sayısı</span><strong>{toSafeNumber(dailyReport.salesCount) + toSafeNumber(dailyReport.returnsCount)}</strong></div>
+                <div className="pos-hub-report-item"><span>Kapanış Tipi</span><strong>{dailyReport.closingTypeLabel}</strong></div>
               </div>
               <>
                 <h4 className="pos-hub-report-subtitle">Ödeme Dağılımı</h4>
@@ -1419,13 +1232,6 @@ export default function POSHub() {
                   })}
                 </div>
               </>
-              {!dailyReport.isArchived && (
-                <div className="pos-hub-report-actions">
-                  <button type="button" className="secondary-button pos-hub-action-btn" onClick={handleArchiveDailyReport}>
-                    Arşive Ekle
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1469,6 +1275,7 @@ export default function POSHub() {
                     <div className="pos-hub-report-item"><span>Toplam İade</span><strong className="text-red">{formatPrice(dayEndArchiveDetail.totalReturns)}</strong></div>
                     <div className="pos-hub-report-item"><span>Net Ciro</span><strong className="text-green">{formatPrice(dayEndArchiveDetail.netRevenue)}</strong></div>
                     <div className="pos-hub-report-item"><span>İşlem Sayısı</span><strong>{toSafeNumber(dayEndArchiveDetail.salesCount) + toSafeNumber(dayEndArchiveDetail.returnsCount)}</strong></div>
+                    <div className="pos-hub-report-item"><span>Kapanış Tipi</span><strong>{dayEndArchiveDetail.closingTypeLabel}</strong></div>
                   </div>
 
                   {dayEndArchiveDetail.records?.length ? (
@@ -1741,6 +1548,7 @@ export default function POSHub() {
                           <th className="text-right">Toplam İade</th>
                           <th className="text-right">Net Ciro</th>
                           <th className="text-right">İşlem Sayısı</th>
+                          <th>Tip</th>
                           <th>Durum</th>
                           <th className="text-right">Aksiyon</th>
                         </tr>
@@ -1753,6 +1561,7 @@ export default function POSHub() {
                             <td className="text-right">{formatPrice(item.totalReturns)}</td>
                             <td className="text-right"><strong>{formatPrice(item.netRevenue)}</strong></td>
                             <td className="text-right">{toSafeNumber(item.salesCount) + toSafeNumber(item.returnsCount)}</td>
+                            <td>{item.closingTypeLabel}</td>
                             <td>{item.status || 'Arşivde'}</td>
                             <td className="text-right">
                               <button type="button" className="secondary-button pos-hub-action-btn" onClick={() => openDayEndArchiveDetail(item)}>Detay</button>
@@ -1982,6 +1791,7 @@ export default function POSHub() {
                   <th className="text-right">Toplam İade</th>
                   <th className="text-right">Net Ciro</th>
                   <th className="text-right">İşlem Sayısı</th>
+                  <th>Tip</th>
                   <th>Durum</th>
                   <th className="text-right">Aksiyon</th>
                 </tr>
@@ -1994,6 +1804,7 @@ export default function POSHub() {
                     <td className="text-right">{formatPrice(item.totalReturns)}</td>
                     <td className="text-right"><strong>{formatPrice(item.netRevenue)}</strong></td>
                     <td className="text-right">{toSafeNumber(item.salesCount) + toSafeNumber(item.returnsCount)}</td>
+                    <td>{item.closingTypeLabel}</td>
                     <td>{item.status || 'Arşivde'}</td>
                     <td className="text-right">
                       <button type="button" className="secondary-button pos-hub-action-btn" onClick={() => openDayEndDetail(item)}>Detay</button>

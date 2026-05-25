@@ -28,8 +28,10 @@ import { useAuth } from '../../hooks/useAuth.js';
 import {
   NOTIFICATION_PREFS_KEY,
   NOTIFICATION_TYPE_OPTIONS,
+  isNotificationEnabled,
   notificationService,
   readNotificationSettings,
+  resolveNotificationSourceLabel,
 } from '../../services/notificationService.js';
 import { userService } from '../../services/userService.js';
 
@@ -170,6 +172,9 @@ const NOTIFICATION_MODULE_LABELS = {
   stock: 'Stok İşlemleri',
   campaign: 'Kampanya Yönetimi',
   pricing_analysis: 'Fiyat & Talep Analizi',
+  price_recommendations: 'Fiyat & Talep Analizi',
+  pricing_demand_analysis: 'Fiyat & Talep Analizi',
+  price_demand_analysis: 'Fiyat & Talep Analizi',
   gift_card: 'Hediye Kartı',
   customer: 'Müşteri Yönetimi',
   system: 'Sistem',
@@ -191,10 +196,10 @@ function formatAbsoluteDateTime(value) {
 
 function getNotificationModuleLabel(item) {
   const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
-  const explicitPage = String(payload.pageName || payload.module || '').trim();
+  const explicitPage = resolveNotificationSourceLabel(payload.pageName || payload.module || '', '');
   if (explicitPage) return explicitPage;
   const sourceKey = String(item?.source || item?.actionType || item?.category || item?.type || '').trim().toLowerCase();
-  return NOTIFICATION_MODULE_LABELS[sourceKey] || String(item?.sourceLabel || item?.categoryLabel || item?.category || item?.type || '-');
+  return NOTIFICATION_MODULE_LABELS[sourceKey] || resolveNotificationSourceLabel(item?.sourceLabel || item?.categoryLabel || item?.category || item?.type || '-', '-');
 }
 
 function getNotificationReferenceValue(item) {
@@ -210,6 +215,28 @@ function getNotificationReferenceValue(item) {
     || item?.payload?.orderId
     || '-'
   );
+}
+
+function getNotificationGroupPayload(item) {
+  const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+  return payload.isNotificationGroup ? payload : null;
+}
+
+function getNotificationGroupItems(item) {
+  const payload = getNotificationGroupPayload(item);
+  return Array.isArray(payload?.items) ? payload.items : [];
+}
+
+function getNotificationGroupSummary(item) {
+  const payload = getNotificationGroupPayload(item);
+  if (!payload) return null;
+  const items = getNotificationGroupItems(item);
+  return {
+    label: payload.groupLabel || item.title || 'Grup bildirim',
+    itemCount: Number(payload.itemCount || items.length || 0),
+    affectedProductCount: Number(payload.affectedProductCount || items.length || 0),
+    reason: payload.groupReasonLabel || payload.groupReason || '',
+  };
 }
 
 function parseOrderDraftDetails(item) {
@@ -315,7 +342,7 @@ export default function Notifications() {
   }, [loadData]);
 
   const visibleBySettings = useMemo(
-    () => notifications.filter((item) => notificationSettings[String(item.type || '')] !== false),
+    () => notifications.filter((item) => isNotificationEnabled(item.type, notificationSettings)),
     [notificationSettings, notifications]
   );
 
@@ -913,10 +940,58 @@ export default function Notifications() {
                 <h4>Açıklama</h4>
                 <p>{detailModalItem.description || detailModalItem.message || 'Detay açıklaması bulunmuyor.'}</p>
               </article>
-              <article className="access-request-detail-note">
-                <h4>Ek Bilgiler</h4>
-                <textarea readOnly rows={8} className="s-log-detail-textarea" value={JSON.stringify(detailModalItem.payload || {}, null, 2)} />
-              </article>
+              {getNotificationGroupPayload(detailModalItem) ? (
+                <>
+                  <div className="notification-order-draft-summary">
+                    <div className="notification-order-draft-summary-cell">
+                      <span>Etkilenen ürün</span>
+                      <strong>{getNotificationGroupSummary(detailModalItem)?.affectedProductCount || 0}</strong>
+                    </div>
+                    <div className="notification-order-draft-summary-divider" />
+                    <div className="notification-order-draft-summary-cell">
+                      <span>Bildirim satırı</span>
+                      <strong>{getNotificationGroupSummary(detailModalItem)?.itemCount || 0}</strong>
+                    </div>
+                  </div>
+                  {getNotificationGroupSummary(detailModalItem)?.reason ? (
+                    <article className="access-request-detail-note">
+                      <h4>Neden</h4>
+                      <p>{getNotificationGroupSummary(detailModalItem).reason}</p>
+                    </article>
+                  ) : null}
+                  <article className="access-request-detail-note">
+                    <h4>Ürün Listesi</h4>
+                    <div className="notification-order-draft-list">
+                      {getNotificationGroupItems(detailModalItem).map((row, index) => (
+                        <div key={`${row.sourceKey || row.productId || row.sku || index}`} className="notification-order-draft-line">
+                          <div className="notification-order-draft-line-main">
+                            <div className="notification-order-draft-line-head">
+                              <strong>{row.productName || row.name || '-'}</strong>
+                              {row.quantity !== null && row.quantity !== undefined ? <span>Miktar: {row.quantity}</span> : null}
+                            </div>
+                            <div className="notification-order-draft-line-meta">
+                              {row.sku ? <span>SKU: {row.sku}</span> : null}
+                              {row.barcode ? <span>Barkod: {row.barcode}</span> : null}
+                              {row.batchNo ? <span>Parti: {row.batchNo}</span> : null}
+                              {row.expiryDate ? <span>SKT: {row.expiryDate}</span> : null}
+                              {row.reasonLabel ? <span>{row.reasonLabel}</span> : null}
+                              {row.createdAt ? <span>{formatAbsoluteDateTime(row.createdAt)}</span> : null}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {getNotificationGroupItems(detailModalItem).length === 0 ? (
+                        <div className="notification-empty">Grup detayında ürün listesi bulunamadı.</div>
+                      ) : null}
+                    </div>
+                  </article>
+                </>
+              ) : (
+                <article className="access-request-detail-note">
+                  <h4>Ek Bilgiler</h4>
+                  <textarea readOnly rows={8} className="s-log-detail-textarea" value={JSON.stringify(detailModalItem.payload || {}, null, 2)} />
+                </article>
+              )}
             </div>
             <div className="modal-actions notification-order-draft-footer">
               {detailModalItem.actionType === 'mobile_order_draft' ? (

@@ -3,18 +3,24 @@ import {
   Archive,
   AlertTriangle,
   ArrowRightLeft,
+  Ban,
   Boxes,
   ChevronLeft,
+  CheckCheck,
   ClipboardList,
   Clock3,
   Expand,
   GripVertical,
+  Info,
   KanbanSquare,
   List,
   LogIn,
   Minimize2,
   Package,
+  Play,
   Power,
+  Square,
+  CheckSquare,
   Timer,
   Truck,
   UserCircle2,
@@ -43,7 +49,7 @@ const STATUS_META = {
 };
 const STATUS_OPTIONS = ['pending', 'approved', 'in_progress', 'completed', 'failed', 'rejected', 'cancelled', 'archived'];
 const WORKFLOW_STATUSES = ['pending', 'approved', 'in_progress', 'completed'];
-const ARCHIVE_ELIGIBLE_STATUSES = ['completed', 'archived'];
+const ARCHIVE_ELIGIBLE_STATUSES = ['completed', 'failed', 'rejected', 'cancelled', 'archived'];
 const SLA_HOURS = 2;
 const LIST_PAGE_SIZE = 5;
 const ARCHIVE_HOLD_MS = 12 * 60 * 60 * 1000;
@@ -108,10 +114,14 @@ const renderStatusIcon = (statusKey) => {
 
 const normalizeTransferRow = (item = {}) => {
   const statusKey = normalizeStatusKey(item.statusKey || item.status || item.state);
+  const origin = item.origin || item.source || 'manual';
   return {
     ...item,
     statusKey,
     statusLabel: toStatusLabel(statusKey),
+    origin,
+    source: item.source || origin,
+    isAutomation: origin === 'automation',
   };
 };
 
@@ -164,6 +174,35 @@ const resolveTransferItems = (item) => {
 };
 
 const getTotalQuantity = (item) => resolveTransferItems(item).reduce((sum, entry) => sum + Number(entry.quantity || 0), 0);
+
+const formatHistoryEvent = (entry = {}) => {
+  const status = entry.toStatus ? `${entry.fromStatus || 'Başlangıç'} -> ${entry.toStatus}` : (entry.event || 'İşlem');
+  const actor = entry.actorName || (entry.origin === 'automation' ? 'Otomasyon' : 'Kullanıcı');
+  return `${status} / ${actor}`;
+};
+
+const TECHNICAL_MESSAGE_PATTERN = /(prisma|invocation|unknown argument|database|sql|constraint|foreign key|relation|stack|clientvalidationerror|repository|delegate)/i;
+
+const isTechnicalMessage = (value) => TECHNICAL_MESSAGE_PATTERN.test(String(value || ''));
+
+const transferErrorMessage = (error, fallback) => {
+  const message = String(error?.payload?.message || error?.message || '').trim();
+  if (!message || isTechnicalMessage(message)) return fallback;
+  if (error?.status >= 500) return fallback;
+  return message;
+};
+
+const compactBulkUserMessages = (results = []) => {
+  const messages = (Array.isArray(results) ? results : [])
+    .filter((item) => !item.ok)
+    .map((item) => {
+      const productName = item.productName || item.item?.productName || '';
+      const message = item.userMessage || 'Talep işlenemedi.';
+      return productName ? `${productName}: ${message}` : message;
+    })
+    .filter(Boolean);
+  return [...new Set(messages)].slice(0, 3).join(' ');
+};
 
 const resolveArchiveTimestamp = (item = {}) => {
   const candidates = [item.completedAt, item.finishedAt];
@@ -252,6 +291,10 @@ export default function WarehouseTransferRequests() {
   const [toast, setToast] = useState(null);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [rejectConfirm, setRejectConfirm] = useState({ open: false, requestId: '', productName: '', nextStatus: '', confirmText: 'Onayla', description: '' });
+  const [bulkConfirm, setBulkConfirm] = useState({ open: false, action: '', ids: [] });
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState('');
   const [listPage, setListPage] = useState(1);
   const [archivePage, setArchivePage] = useState(1);
   const lastUnfilteredTotalRef = useRef(null);
@@ -270,16 +313,19 @@ export default function WarehouseTransferRequests() {
       search: overrides.search ?? searchFilter,
       startDate: overrides.startDate ?? startDate,
       endDate: overrides.endDate ?? endDate,
+      includeHistory: overrides.includeHistory ?? true,
+      limit: overrides.limit ?? 100,
     };
 
     try {
-      setIsLoading(true);
+      if (!overrides.silent) setIsLoading(true);
       const [data, sectionList] = await Promise.all([
         sectionService.listTransferRequests(query),
         sectionService.list(),
       ]);
       const nextRows = (Array.isArray(data) ? data : []).map(normalizeTransferRow);
       setRows(nextRows);
+      setSelectedIds((current) => new Set([...current].filter((id) => nextRows.some((row) => row.id === id))));
       setSections(Array.isArray(sectionList) ? sectionList : []);
 
       const hasActiveFilters = Boolean(
@@ -298,9 +344,9 @@ export default function WarehouseTransferRequests() {
         }
       }
     } catch (error) {
-      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: error.message || 'Talepler yüklenemedi.' });
+      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: transferErrorMessage(error, 'Transfer talepleri yüklenemedi.') });
     } finally {
-      setIsLoading(false);
+      if (!overrides.silent) setIsLoading(false);
     }
   };
 
@@ -310,10 +356,11 @@ export default function WarehouseTransferRequests() {
 
   useEffect(() => {
     const timer = setInterval(() => {
+      if (bulkUpdating) return;
       loadRows();
     }, 20000);
     return () => clearInterval(timer);
-  }, [statusFilter, priorityFilter, sectionFilter, searchFilter, startDate, endDate]);
+  }, [statusFilter, priorityFilter, sectionFilter, searchFilter, startDate, endDate, bulkUpdating]);
 
   useEffect(() => {
     if (!fullscreenMode) {
@@ -478,6 +525,7 @@ export default function WarehouseTransferRequests() {
   const hasActiveTransfers = activeTransferCount > 0;
   const archiveRows = useMemo(() => rows.filter((item) => {
     if (!ARCHIVE_ELIGIBLE_STATUSES.includes(item.statusKey)) return false;
+    if (['failed', 'rejected', 'cancelled', 'archived'].includes(item.statusKey)) return true;
     const archiveTimestamp = resolveArchiveTimestamp(item);
     if (!archiveTimestamp) return false;
     return archiveTimestamp <= (Date.now() - ARCHIVE_HOLD_MS);
@@ -554,7 +602,7 @@ export default function WarehouseTransferRequests() {
       await applyStatusUpdate(requestId, status);
       setToast({ type: 'success', title: 'Depo Transfer Talepleri', message: `Talep durumu "${toStatusLabel(normalizeStatusKey(status))}" olarak güncellendi.` });
     } catch (error) {
-      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: error.message || 'Durum güncellenemedi.' });
+      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: transferErrorMessage(error, 'Talep durumu güncellenemedi.') });
     }
   };
 
@@ -588,7 +636,7 @@ export default function WarehouseTransferRequests() {
       await applyStatusUpdate(requestId, nextStatus, 'Operasyon ekranından iptal edildi');
       setToast({ type: 'success', title: 'Depo Transfer Talepleri', message: 'Talep iptal edildi.' });
     } catch (error) {
-      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: error.message || 'Talep iptal edilemedi.' });
+      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: transferErrorMessage(error, 'Talep iptal edilemedi.') });
     }
   };
 
@@ -611,7 +659,7 @@ export default function WarehouseTransferRequests() {
       await applyStatusUpdate(requestId, targetStatus, `Sürükle-bırak ile ${toStatusLabel(normalizeStatusKey(targetStatus))}`);
       setToast({ type: 'success', title: 'Depo Transfer Talepleri', message: `Talep ${toStatusLabel(normalizeStatusKey(targetStatus))} kolonuna taşındı.` });
     } catch (error) {
-      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: error.message || 'Kolona taşıma başarısız.' });
+      setToast({ type: 'error', title: 'Depo Transfer Talepleri', message: transferErrorMessage(error, 'Talep seçilen kolona taşınamadı.') });
     } finally {
       setDraggingId('');
     }
@@ -652,6 +700,22 @@ export default function WarehouseTransferRequests() {
   };
 
   const columns = [
+    {
+      key: 'select',
+      label: '',
+      sortable: false,
+      render: (row) => (
+        <button
+          type="button"
+          className="warehouse-select-icon"
+          disabled={!canSelectRow(row)}
+          onClick={() => toggleSelected(row)}
+          aria-label={selectedIds.has(row.id) ? 'Seçimi kaldır' : 'Talebi seç'}
+        >
+          {selectedIds.has(row.id) ? <CheckSquare size={16} /> : <Square size={16} />}
+        </button>
+      ),
+    },
     { key: 'sku', label: 'SKU' },
     { key: 'barcode', label: 'Barkod', render: (row) => row.barcode || '-' },
     {
@@ -661,6 +725,7 @@ export default function WarehouseTransferRequests() {
         <div className="transfer-product-cell">
           <strong>{row.productName}</strong>
           <span>Reyon {row.sectionNumber} / {row.sectionName}</span>
+          {row.isAutomation ? <span className="warehouse-origin-badge">Otomasyon</span> : null}
         </div>
       ),
     },
@@ -688,6 +753,17 @@ export default function WarehouseTransferRequests() {
       key: 'status',
       label: 'Durum',
       render: (row) => <StatusBadge tone={toStatusTone(row.statusKey)}>{row.statusLabel || toStatusLabel('unknown')}</StatusBadge>,
+      sortable: false,
+    },
+    {
+      key: 'history',
+      label: 'Geçmiş',
+      render: (row) => {
+        const last = Array.isArray(row.history) ? row.history[row.history.length - 1] : null;
+        return last ? (
+          <span className="warehouse-history-mini">{formatHistoryEvent(last)}</span>
+        ) : '-';
+      },
       sortable: false,
     },
     { key: 'createdAt', label: 'Talep Zamanı', render: (row) => formatDate(row.createdAt), sortValue: (row) => new Date(row.createdAt).getTime() },
@@ -769,6 +845,172 @@ export default function WarehouseTransferRequests() {
     return archiveListRows.slice(startIndex, startIndex + LIST_PAGE_SIZE);
   }, [archiveListRows, normalizedArchivePage]);
 
+  const visibleSelectionRows = useMemo(() => {
+    if (viewMode === 'archive') return archiveListRows;
+    return activeFlowRows;
+  }, [activeFlowRows, archiveListRows, viewMode]);
+
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedIds.has(row.id)),
+    [rows, selectedIds],
+  );
+
+  const selectedColumnKey = useMemo(() => {
+    const statuses = [...new Set(selectedRows.map((row) => normalizeStatusKey(row.statusKey || row.status)).filter((status) => WORKFLOW_STATUSES.includes(status)))];
+    return statuses.length === 1 ? statuses[0] : '';
+  }, [selectedRows]);
+  const selectedColumnLabel = selectedColumnKey ? toStatusLabel(selectedColumnKey) : '';
+  const statusFilterKey = normalizeStatusKey(statusFilter);
+  const filteredColumnKey = WORKFLOW_STATUSES.includes(statusFilterKey) ? statusFilterKey : '';
+  const selectionScopeKey = selectedColumnKey || filteredColumnKey;
+
+  const canSelectRow = (row) => {
+    const status = normalizeStatusKey(row?.statusKey || row?.status);
+    return !selectedColumnKey || selectedIds.has(row?.id) || status === selectedColumnKey;
+  };
+
+  const toggleSelected = (row) => {
+    if (!row?.id) return;
+    if (!canSelectRow(row)) return;
+    const rowStatus = normalizeStatusKey(row.statusKey || row.status);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(row.id)) {
+        next.delete(row.id);
+      } else {
+        const currentRows = rows.filter((item) => next.has(item.id));
+        const currentStatuses = [...new Set(currentRows.map((item) => normalizeStatusKey(item.statusKey || item.status)).filter(Boolean))];
+        if (currentStatuses.length && !currentStatuses.includes(rowStatus)) return next;
+        next.add(row.id);
+      }
+      return next;
+    });
+  };
+
+  const selectRows = (items = [], forcedStatus = '') => {
+    const validItems = (items || []).filter((item) => WORKFLOW_STATUSES.includes(normalizeStatusKey(item?.statusKey || item?.status)));
+    const targetStatus = normalizeStatusKey(forcedStatus) !== 'unknown'
+      ? normalizeStatusKey(forcedStatus)
+      : selectionScopeKey;
+    const uniqueStatuses = [...new Set(validItems.map((item) => normalizeStatusKey(item.statusKey || item.status)))];
+    const firstVisibleStatus = WORKFLOW_STATUSES.find((status) => uniqueStatuses.includes(status)) || '';
+    const resolvedStatus = WORKFLOW_STATUSES.includes(targetStatus)
+      ? targetStatus
+      : (uniqueStatuses.length === 1 ? uniqueStatuses[0] : firstVisibleStatus);
+
+    if (!resolvedStatus) {
+      setToast({ type: 'info', title: 'Toplu İşlem', message: 'Toplu seçim için önce bir kolon seçin.' });
+      return;
+    }
+
+    if (!WORKFLOW_STATUSES.includes(targetStatus) && uniqueStatuses.length > 1) {
+      setToast({ type: 'info', title: 'Toplu İşlem', message: `${toStatusLabel(resolvedStatus)} kolonu seçildi.` });
+    }
+
+    setSelectedIds((current) => {
+      const next = selectedColumnKey && selectedColumnKey === resolvedStatus ? new Set(current) : new Set();
+      validItems.filter((item) => normalizeStatusKey(item.statusKey || item.status) === resolvedStatus).forEach((item) => {
+        if (item?.id) next.add(item.id);
+      });
+      return next;
+    });
+  };
+
+  const toggleColumnSelection = (status, items = []) => {
+    if (selectedColumnKey === status) {
+      clearSelection();
+      return;
+    }
+    selectRows(items, status);
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const getBulkEligibleRows = (action, sourceRows = selectedRows) => {
+    const actionKey = String(action || '').toLowerCase();
+    if (actionKey === 'approve') return sourceRows.filter((row) => row.statusKey === 'pending');
+    if (actionKey === 'start') return sourceRows.filter((row) => row.statusKey === 'approved');
+    if (actionKey === 'complete') return sourceRows.filter((row) => row.statusKey === 'in_progress');
+    if (actionKey === 'back_to_pending') return sourceRows.filter((row) => row.statusKey === 'approved');
+    if (actionKey === 'back_to_approved') return sourceRows.filter((row) => row.statusKey === 'in_progress');
+    if (actionKey === 'reject') return sourceRows.filter((row) => row.statusKey === 'pending');
+    if (actionKey === 'cancel') return sourceRows.filter((row) => ['approved', 'in_progress'].includes(row.statusKey));
+    if (actionKey === 'archive') return sourceRows.filter((row) => row.statusKey === 'completed');
+    return [];
+  };
+
+  const bulkAdvanceAction = selectedColumnKey === 'pending'
+    ? 'approve'
+    : selectedColumnKey === 'approved'
+      ? 'start'
+      : selectedColumnKey === 'in_progress'
+        ? 'complete'
+        : '';
+  const bulkPreviousAction = selectedColumnKey === 'approved'
+    ? 'back_to_pending'
+    : selectedColumnKey === 'in_progress'
+      ? 'back_to_approved'
+      : '';
+  const bulkDangerAction = selectedColumnKey === 'pending'
+    ? 'reject'
+    : ['approved', 'in_progress'].includes(selectedColumnKey)
+      ? 'cancel'
+      : '';
+  const bulkArchiveAction = selectedColumnKey === 'completed' ? 'archive' : '';
+  const bulkDangerLabel = bulkDangerAction === 'reject' ? 'Toplu Reddet' : 'Toplu İptal';
+
+  const runBulkAction = async (action, ids) => {
+    const targetIds = ids || getBulkEligibleRows(action).map((row) => row.id);
+    if (!targetIds.length) {
+      setToast({ type: 'warning', title: 'Toplu İşlem', message: 'Bu işlem için uygun seçili talep yok.' });
+      return;
+    }
+
+    try {
+      setBulkUpdating(true);
+      setBulkProgress(`${formatNumber(targetIds.length)} talep işleniyor...`);
+      const result = await sectionService.bulkUpdateTransferRequests({ ids: targetIds, action });
+      const rowById = new Map(rows.map((row) => [row.id, row]));
+      const enrichedResults = (result.results || []).map((item) => ({
+        ...item,
+        productName: item.productName || rowById.get(item.id)?.productName || '',
+      }));
+      const updatedById = new Map(enrichedResults.filter((item) => item.ok && item.item).map((item) => [item.id, normalizeTransferRow(item.item)]));
+      setRows((current) => current.map((row) => updatedById.get(row.id) || row));
+      setSelectedIds(new Set());
+      setBulkProgress(`${formatNumber(result.successCount || 0)}/${formatNumber(targetIds.length)} işlendi`);
+      const failedMessage = compactBulkUserMessages(enrichedResults);
+      setToast({
+        type: result.failedCount > 0 ? 'warning' : 'success',
+        title: 'Toplu İşlem',
+        message: `${formatNumber(result.successCount || 0)} talep işlendi, ${formatNumber(result.failedCount || 0)} talep tamamlanamadı.${failedMessage ? ` ${failedMessage}` : ''}`,
+      });
+      loadRows({ includeHistory: false, silent: true }).catch((error) => {
+        setToast({ type: 'warning', title: 'Toplu İşlem', message: transferErrorMessage(error, 'Liste arka planda güncellenemedi.') });
+      });
+    } catch (error) {
+      setToast({ type: 'error', title: 'Toplu İşlem', message: transferErrorMessage(error, 'Toplu işlem tamamlanamadı.') });
+    } finally {
+      setBulkUpdating(false);
+      setBulkProgress('');
+    }
+  };
+
+  const requestBulkAction = (action) => {
+    const ids = getBulkEligibleRows(action).map((row) => row.id);
+    if (action === 'complete') {
+      setBulkConfirm({ open: true, action, ids });
+      return;
+    }
+    runBulkAction(action, ids);
+  };
+
+  const confirmBulkComplete = () => {
+    const ids = bulkConfirm.ids || [];
+    setBulkConfirm({ open: false, action: '', ids: [] });
+    runBulkAction('complete', ids);
+  };
+
   useEffect(() => {
     setArchivePage(1);
   }, [statusFilter, priorityFilter, sectionFilter, searchFilter, startDate, endDate]);
@@ -779,6 +1021,8 @@ export default function WarehouseTransferRequests() {
     const sla = getSlaInfo(item);
     const isExpanded = Boolean(expandedCards[item.id]);
     const dismissAction = getDismissActionMeta(item);
+    const isSelected = selectedIds.has(item.id);
+    const isSelectionLocked = !canSelectRow(item);
 
     return (
       <article
@@ -789,7 +1033,18 @@ export default function WarehouseTransferRequests() {
         onDragEnd={() => setDraggingId('')}
       >
         <div className="warehouse-task-head">
-          <h4>{item.productName || 'Transfer Talebi'}</h4>
+          <div className="warehouse-task-title-row">
+            <button
+              type="button"
+              className="warehouse-select-icon"
+              disabled={isSelectionLocked}
+              onClick={() => toggleSelected(item)}
+              aria-label={isSelected ? 'Seçimi kaldır' : 'Talebi seç'}
+            >
+              {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+            </button>
+            <h4>{item.productName || 'Transfer Talebi'}</h4>
+          </div>
           <div className="warehouse-task-head-actions">
             {isTransferManager ? (
               <button
@@ -815,6 +1070,7 @@ export default function WarehouseTransferRequests() {
             {sla.isOverdue ? <AlertTriangle size={13} /> : <Clock3 size={13} />} {sla.text}
           </span>
           <span className="warehouse-item-count">{transferItems.length} ürün</span>
+          {item.isAutomation ? <span className="warehouse-origin-badge">Otomasyon</span> : null}
         </div>
 
         <div className="warehouse-task-meta">
@@ -830,14 +1086,30 @@ export default function WarehouseTransferRequests() {
         </button>
 
         {isExpanded ? (
-          <div className="warehouse-item-list">
-            {transferItems.map((entry) => (
-              <div className="warehouse-item-row" key={entry.id}>
-                <span>{entry.productName}</span>
-                <small>{entry.sku} • {formatNumber(entry.quantity)}</small>
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="warehouse-item-list">
+              {transferItems.map((entry) => (
+                <div className="warehouse-item-row" key={entry.id}>
+                  <span>{entry.productName}</span>
+                  <small>{entry.sku} • {formatNumber(entry.quantity)}</small>
+                </div>
+              ))}
+            </div>
+            <div className="warehouse-history-list">
+              {(Array.isArray(item.history) && item.history.length ? item.history : []).map((entry) => (
+                <div className="warehouse-history-row" key={entry.id || `${entry.createdAt}:${entry.toStatus}`}>
+                  <span>{formatHistoryEvent(entry)}</span>
+                  <small>{formatDate(entry.createdAt)}{entry.event === 'stock_transfer_completed' ? ' / stok transferi yazıldı' : ''}</small>
+                </div>
+              ))}
+              {(!Array.isArray(item.history) || item.history.length === 0) ? (
+                <div className="warehouse-history-row">
+                  <span>{item.isAutomation ? 'Otomasyon oluşturdu' : 'Manuel oluşturuldu'}</span>
+                  <small>{formatDate(item.createdAt)}</small>
+                </div>
+              ) : null}
+            </div>
+          </>
         ) : null}
 
         {isTransferManager ? (
@@ -998,6 +1270,46 @@ export default function WarehouseTransferRequests() {
           <label className="field-group"><span>Bitiş</span><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
         </FilterBar>
 
+        {isTransferManager ? (
+          <div className="warehouse-bulk-toolbar">
+            <div className="warehouse-bulk-context">
+              {selectedColumnLabel ? (
+                <span className="warehouse-bulk-scope"><Info size={13} /> {selectedColumnLabel} kolonu üzerinde çalışılıyor</span>
+              ) : (
+                <span className="warehouse-bulk-scope is-muted"><Info size={13} /> İşlem için bir kolon seçin</span>
+              )}
+              <span>{formatNumber(selectedIds.size)} seçili</span>
+            </div>
+            <div className="warehouse-bulk-actions">
+              {bulkProgress ? <span className="warehouse-bulk-progress">{bulkProgress}</span> : null}
+              {bulkPreviousAction ? (
+                <button type="button" className="warning-button compact-action" disabled={bulkUpdating || getBulkEligibleRows(bulkPreviousAction).length === 0} onClick={() => requestBulkAction(bulkPreviousAction)}>
+                  <ChevronLeft size={14} />
+                  Bir Önceki Aşamaya Taşı
+                </button>
+              ) : null}
+              {bulkAdvanceAction ? (
+                <button type="button" className="primary-button compact-action" disabled={bulkUpdating || getBulkEligibleRows(bulkAdvanceAction).length === 0} onClick={() => requestBulkAction(bulkAdvanceAction)}>
+                  {bulkAdvanceAction === 'complete' ? <Package size={14} /> : bulkAdvanceAction === 'start' ? <Play size={14} /> : <CheckCheck size={14} />}
+                  Bir Sonraki Aşamaya Taşı
+                </button>
+              ) : null}
+              {bulkArchiveAction ? (
+                <button type="button" className="outline-button compact-action" disabled={bulkUpdating || getBulkEligibleRows(bulkArchiveAction).length === 0} onClick={() => requestBulkAction(bulkArchiveAction)}>
+                  <Archive size={14} />
+                  Arşive Al
+                </button>
+              ) : null}
+              {bulkDangerAction ? (
+                <button type="button" className="danger-button compact-action" disabled={bulkUpdating || getBulkEligibleRows(bulkDangerAction).length === 0} onClick={() => requestBulkAction(bulkDangerAction)}>
+                  {bulkDangerAction === 'reject' ? <Ban size={14} /> : <X size={14} />}
+                  {bulkDangerLabel}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {viewMode === 'list' ? (
           <>
             <div className="warehouse-table-shell warehouse-table-shell-compact">
@@ -1046,7 +1358,17 @@ export default function WarehouseTransferRequests() {
               <section key={status} className={`warehouse-board-column ${toStatusClass(status) || ''}`}>
                 <header className="warehouse-board-column-header">
                   <strong>{renderStatusIcon(status)}{toStatusLabel(status)}</strong>
-                  <span className="warehouse-column-count-badge">{formatNumber((groupedRows[status] || []).length)}</span>
+                  <div className="warehouse-column-tools">
+                    <button
+                      type="button"
+                      className={`warehouse-column-select ${selectedColumnKey === status ? 'is-active' : ''}`}
+                      disabled={Boolean(selectedColumnKey && selectedColumnKey !== status)}
+                      onClick={() => toggleColumnSelection(status, groupedRows[status] || [])}
+                    >
+                      {selectedColumnKey === status ? 'Seçimi Kaldır' : 'Kolonu Seç'}
+                    </button>
+                    <span className="warehouse-column-count-badge">{formatNumber((groupedRows[status] || []).length)}</span>
+                  </div>
                 </header>
                 <div
                   className={`warehouse-board-column-body ${draggingId ? 'is-dragging' : ''}`}
@@ -1084,6 +1406,17 @@ export default function WarehouseTransferRequests() {
         tone="danger"
         onConfirm={confirmRejectRequest}
         onCancel={closeRejectConfirm}
+      />
+
+      <ConfirmModal
+        isOpen={bulkConfirm.open}
+        title="Toplu Tamamlama Onayı"
+        description={`Bu işlem depodan reyona gerçek stok transfer hareketi oluşturur. ${formatNumber((bulkConfirm.ids || []).length)} uygun talep tamamlanacak.`}
+        confirmText="Evet, Stok Transferi Oluştur"
+        cancelText="Vazgeç"
+        tone="warning"
+        onConfirm={confirmBulkComplete}
+        onCancel={() => setBulkConfirm({ open: false, action: '', ids: [] })}
       />
     </div>
   );

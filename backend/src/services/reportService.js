@@ -3518,6 +3518,26 @@ export const reportService = {
     return pricingAnalysisService.approveSellPrice(payload, userId);
   },
 
+  async listRecentPriceActions(query = {}) {
+    return pricingAnalysisService.listRecentPriceActions({ limit: Number(query.limit || 3) });
+  },
+
+  async applyBulkPriceUpdate(payload = {}, user = {}) {
+    return pricingAnalysisService.applyBulkPriceUpdate(payload, user);
+  },
+
+  async applyTemporaryPriceAction(payload = {}, user = {}) {
+    return pricingAnalysisService.applyTemporaryPriceAction(payload, user);
+  },
+
+  async skipPricingDecision(payload = {}, user = {}) {
+    return pricingAnalysisService.skipPricingDecision(payload, user);
+  },
+
+  async rollbackPriceAction(actionId, user = {}) {
+    return pricingAnalysisService.rollbackPriceAction(actionId, user);
+  },
+
   async getDashboardSummary() {
     if (config.dataStore === 'postgres') {
       const now = Date.now();

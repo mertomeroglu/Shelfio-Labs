@@ -427,7 +427,9 @@ export const posService = {
   getProductsByCategory: (categoryId) => api.get(`/pos/categories/${categoryId}/products`),
   searchProducts: (query) => api.get(`/pos/products/search?q=${encodeURIComponent(query)}`),
   findByBarcode: (barcode) => api.get(`/pos/products/by-barcode/${encodeURIComponent(barcode)}`),
+  getAutomaticSaleAvailability: () => api.get('/pos/sales/automatic/availability'),
   createAutomaticSale: (payload) => api.post('/pos/sales/automatic', payload),
+  getAutomaticPanelTransactions: (limit = 5) => api.get(`/pos/sales/automatic/recent?limit=${encodeURIComponent(limit)}`),
   completeSale: (payload) => api.post('/pos/sales', payload),
   processReturn: (payload) => api.post('/pos/returns', payload),
   getTodaySales: () => api.get('/pos/sales/today'),
@@ -438,6 +440,11 @@ export const posService = {
   getSaleById: (id) => api.get(`/pos/sales/${id}`),
   getSaleByReference: (ref) => api.get(`/pos/sales/reference/${encodeURIComponent(ref)}`),
   getDailyReport: (date) => api.get(`/pos/report/daily${date ? '?date=' + date : ''}`),
+  getDayEndClosings: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/pos/day-end${qs ? '?' + qs : ''}`);
+  },
+  closeDayEnd: (payload = {}) => api.post('/pos/day-end/close', payload),
   downloadReceiptPdf: (record, options) => downloadPosReceiptPdf(record, options),
   downloadInvoicePdf: (record, options) => downloadPosInvoicePdf(record, options),
 };

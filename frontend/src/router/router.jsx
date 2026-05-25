@@ -18,6 +18,7 @@ const Products = lazy(() => import('../pages/product-management/Products.jsx'));
 const Categories = lazy(() => import('../pages/category-management/Categories.jsx'));
 const Suppliers = lazy(() => import('../pages/supplier-management/Suppliers.jsx'));
 const StockMovements = lazy(() => import('../pages/stock-operations/StockMovements.jsx'));
+const StockExpiryTracking = lazy(() => import('../pages/stock-expiry-tracking/StockExpiryTracking.jsx'));
 const Tasks = lazy(() => import('../pages/task-planning/Tasks.jsx'));
 const Reports = lazy(() => import('../pages/reporting/Reports.jsx'));
 const Users = lazy(() => import('../pages/user-management/Users.jsx'));
@@ -280,6 +281,10 @@ export const router = createBrowserRouter([
           {
             path: 'stok-islemleri',
             element: withRouteSuspense(<StockMovements />),
+          },
+          {
+            path: 'skt-takibi',
+            element: withRouteSuspense(<StockExpiryTracking />),
           },
           {
             path: 'stok-hareketleri',

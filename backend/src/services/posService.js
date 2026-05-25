@@ -16,6 +16,7 @@ import { formatReturnReasonLabel } from '../utils/displayLabels.js';
 import { getBarcodeCandidates } from '../utils/barcode.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
 import { settingsService } from './settingsService.js';
+import { dailyClosingService, MANUAL_SNAPSHOT } from './dailyClosingService.js';
 
 const buildReferenceNo = (type) => {
   const normalized = String(type || '').toLowerCase();
@@ -380,7 +381,7 @@ const findProductByBarcodeFromPostgres = async (barcode) => {
   }
 
   if (product.isListed === false) {
-    throw new AppError(400, 'Urun katalog modunda, satisa acik degil');
+    throw new AppError(400, 'Ürün katalog modunda, satışa açık değil');
   }
 
   return mapPosProductRow(product, activeCampaigns);
@@ -472,7 +473,14 @@ const buildAutomaticSaleItems = async ({ minAmount, maxAmount, minProductCount =
   const safeMinAmount = roundMoney(minAmount);
   const safeMaxAmount = roundMoney(maxAmount);
   if (!Number.isFinite(safeMinAmount) || !Number.isFinite(safeMaxAmount) || safeMinAmount <= 0 || safeMaxAmount < safeMinAmount) {
-    throw new AppError(400, 'Otomatik satış tutar aralığı geçersiz.', { details: { minAmount, maxAmount } });
+    throw new AppError(400, 'Minimum tutar, maksimum tutardan büyük olamaz.', {
+      errorCode: 'INVALID_AMOUNT_RANGE',
+      fieldErrors: {
+        minAmount: 'Minimum tutar, maksimum tutardan büyük olamaz.',
+        maxAmount: 'Maksimum tutar minimum tutardan küçük olamaz.',
+      },
+      details: { minAmount, maxAmount },
+    });
   }
 
   const priceMap = new Map(pool.map((item) => [item.productId, item.unitPrice]));
@@ -610,6 +618,15 @@ export const posService = {
     return getDeskActivationState();
   },
 
+  async getAutomaticSaleAvailability() {
+    const pool = await listAutomaticSaleProductPool();
+    return {
+      eligibleProductCount: pool.length,
+      poolCount: pool.length,
+      hasEligibleProducts: pool.length > 0,
+    };
+  },
+
   async setDeskActivation(payload, userContext) {
     if (userContext?.role !== 'admin') {
       throw new AppError(403, 'Bu işlem için yetkiniz yok');
@@ -745,7 +762,7 @@ export const posService = {
     }
 
     if (product.isListed === false) {
-      throw new AppError(400, 'Urun katalog modunda, satisa acik degil');
+      throw new AppError(400, 'Ürün katalog modunda, satışa açık değil');
     }
 
     const stock = await stockRepo.findByProductId(product.id);
@@ -780,8 +797,9 @@ export const posService = {
       throw new AppError(400, 'Ödeme yöntemi belirtilmelidir');
     }
 
-    const userId = userContext?.id;
-    const user = await userRepo.findById(userId);
+    const requestedUserId = userContext?.id || null;
+    const user = requestedUserId ? await userRepo.findById(requestedUserId) : null;
+    const userId = user?.id || null;
     const deskCode = String(payload.deskCode || userContext?.assignedDeskCode || '').trim().toUpperCase();
 
     ensureAssignedDeskForCashier(deskCode, userContext);
@@ -935,7 +953,7 @@ export const posService = {
         note: `POS Satış - ${referenceNo}`,
         referenceNo,
         userId,
-        userName: user?.name || 'Kasiyer',
+        userName: user?.name || userContext?.name || 'Kasiyer',
         createdAt: now,
       });
     }
@@ -946,7 +964,7 @@ export const posService = {
       type: 'sale',
       deskCode: deskCode || userContext?.assignedDeskCode || null,
       cashierId: userId,
-      cashierName: user?.name || 'Kasiyer',
+      cashierName: user?.name || userContext?.name || 'Kasiyer',
       items: saleItems,
       subtotal: totalAmount,
       discount,
@@ -1025,7 +1043,14 @@ export const posService = {
       assertDeskCode(deskCode);
 
       if (!Number.isFinite(minAmount) || !Number.isFinite(maxAmount) || minAmount <= 0 || maxAmount <= 0 || minAmount > maxAmount) {
-        throw new AppError(400, 'Otomatik satış tutar aralığı geçersiz.', { details: { minAmount, maxAmount } });
+        throw new AppError(400, 'Minimum tutar, maksimum tutardan büyük olamaz.', {
+          errorCode: 'INVALID_AMOUNT_RANGE',
+          fieldErrors: {
+            minAmount: 'Minimum tutar, maksimum tutardan büyük olamaz.',
+            maxAmount: 'Maksimum tutar minimum tutardan küçük olamaz.',
+          },
+          details: { minAmount, maxAmount },
+        });
       }
 
       if (
@@ -1035,7 +1060,14 @@ export const posService = {
         || requestedMaxProductCount < 1
         || requestedMinProductCount > requestedMaxProductCount
       ) {
-        throw new AppError(400, 'Ürün sayısı aralığı geçersiz.', { details: { minProductCount: payload?.minProductCount, maxProductCount: payload?.maxProductCount } });
+        throw new AppError(400, 'Minimum ürün çeşidi maksimumdan büyük olamaz.', {
+          errorCode: 'INVALID_PRODUCT_COUNT_RANGE',
+          fieldErrors: {
+            minProductCount: 'Minimum ürün çeşidi maksimumdan büyük olamaz.',
+            maxProductCount: 'Maksimum ürün çeşidi minimumdan küçük olamaz.',
+          },
+          details: { minProductCount: payload?.minProductCount, maxProductCount: payload?.maxProductCount },
+        });
       }
 
       const minProductCount = clampPositiveInt(payload?.minProductCount, 1, { min: 1, max: 20 });
@@ -1045,6 +1077,7 @@ export const posService = {
       const now = new Date().toISOString();
       const userId = userContext?.id || null;
       const user = userId ? await userRepo.findById(userId) : null;
+      const saleUserContext = user ? userContext : { ...(userContext || {}), id: null };
       const sale = await this.completeSale({
         deskCode,
         items,
@@ -1066,7 +1099,7 @@ export const posService = {
           maxProductCount,
           poolCount: diagnostics.poolCount,
         },
-      }, userContext);
+      }, saleUserContext);
 
       const markedSale = {
         ...sale,
@@ -1115,10 +1148,19 @@ export const posService = {
               refundMethod: markedSale.paymentMethod || paymentMethod,
               returnReason: 'automatic_random_return',
               returnReasonDetail: 'Otomatik satış paneli rastgele iade simülasyonu',
+              source: AUTO_SALE_SOURCE,
+              automationSource: AUTO_SALE_SOURCE,
+              payload: {
+                source: AUTO_SALE_SOURCE,
+                automationSource: AUTO_SALE_SOURCE,
+                generatedByPanel: true,
+                originalAutomaticSaleRef: markedSale.referenceNo,
+              },
               items: returnItems,
-            }, userContext);
+            }, saleUserContext);
             automaticReturnCreated = true;
             automaticReturnReferenceNo = returnRecord?.referenceNo || null;
+            markedSale.automaticReturnRecord = returnRecord || null;
           }
         } catch (error) {
           await recordAutoSaleDeveloperLog({
@@ -1136,6 +1178,7 @@ export const posService = {
         ...markedSale,
         automaticReturnCreated,
         automaticReturnReferenceNo,
+        automaticReturnRecord: markedSale.automaticReturnRecord || null,
       };
     } catch (error) {
       await recordAutoSaleDeveloperLog({
@@ -1202,8 +1245,9 @@ export const posService = {
       }
     }
 
-    const userId = userContext?.id;
-    const user = await userRepo.findById(userId);
+    const requestedUserId = userContext?.id || null;
+    const user = requestedUserId ? await userRepo.findById(requestedUserId) : null;
+    const userId = user?.id || null;
     const deskCode = String(payload.deskCode || userContext?.assignedDeskCode || '').trim().toUpperCase();
 
     ensureAssignedDeskForCashier(deskCode, userContext);
@@ -1303,7 +1347,7 @@ export const posService = {
         note: `POS İade - ${referenceNo}`,
         referenceNo,
         userId,
-        userName: user?.name || 'Kasiyer',
+        userName: user?.name || userContext?.name || 'Kasiyer',
         createdAt: now,
       });
     }
@@ -1314,7 +1358,7 @@ export const posService = {
       type: 'return',
       deskCode: deskCode || userContext?.assignedDeskCode || null,
       cashierId: userId,
-      cashierName: user?.name || 'Kasiyer',
+      cashierName: user?.name || userContext?.name || 'Kasiyer',
       items: returnItems,
       subtotal: totalAmount,
       discount: 0,
@@ -1328,6 +1372,9 @@ export const posService = {
       returnCoverage,
       isFullReturn,
       customer: payload.customer || null,
+      source: payload.source || null,
+      automationSource: payload.automationSource || null,
+      payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : null,
       receivedAmount: 0,
       changeAmount: 0,
       status: 'completed',
@@ -1351,6 +1398,23 @@ export const posService = {
     }
 
     return returnRecord;
+  },
+
+  async getAutomaticPanelTransactions(limit = 5) {
+    const safeLimit = Math.max(1, Math.min(20, Number.parseInt(String(limit || 5), 10) || 5));
+    const all = await salesRepo.getAll();
+    return all
+      .filter((sale) => {
+        const payload = sale?.payload && typeof sale.payload === 'object' ? sale.payload : {};
+        return sale?.source === AUTO_SALE_SOURCE
+          || sale?.automationSource === AUTO_SALE_SOURCE
+          || payload.source === AUTO_SALE_SOURCE
+          || payload.automationSource === AUTO_SALE_SOURCE
+          || payload.generatedByPanel === true;
+      })
+      .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0))
+      .slice(0, safeLimit)
+      .map(normalizeSaleRecordForRead);
   },
 
   async getTodaySales() {
@@ -1482,5 +1546,25 @@ export const posService = {
       returns,
     };
   },
-};
 
+  async listDayEndClosings(filters = {}) {
+    const days = Number(filters.days || 31);
+    return dailyClosingService.listRecentClosings(days, {
+      includeToday: String(filters.includeToday ?? 'true').toLowerCase() !== 'false',
+      closingType: filters.closingType || null,
+    });
+  },
+
+  async closeDayEnd(payload = {}, userContext = {}) {
+    if (userContext?.role !== 'admin') {
+      throw new AppError(403, 'Bu işlem için yetkiniz yok');
+    }
+
+    const closingType = String(payload.closingType || MANUAL_SNAPSHOT).trim().toLowerCase();
+    if (closingType !== MANUAL_SNAPSHOT) {
+      throw new AppError(400, 'POS ekranından yalnızca manuel gün sonu kapanışı alınabilir');
+    }
+
+    return dailyClosingService.closeCurrentManualSnapshot({ source: 'pos-manual-snapshot' });
+  },
+};

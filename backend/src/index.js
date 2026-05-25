@@ -8,7 +8,9 @@ import { startGrantExpiryJob } from './jobs/grantExpiryJob.js';
 import { startDailyClosingJob } from './jobs/dailyClosingJob.js';
 import { startExpiredBatchNotificationJob } from './jobs/expiredBatchNotificationJob.js';
 import { startPurchaseOrderLifecycleJob } from './jobs/purchaseOrderLifecycleJob.js';
+import { startTemporaryPriceActionJob } from './jobs/temporaryPriceActionJob.js';
 import routes from './routes/routes.js';
+import { startTransferRequestAutomationJob } from './jobs/transferRequestAutomationJob.js';
 import { securityMigrationService } from './services/securityMigrationService.js';
 import { categoryLabelService } from './services/categoryLabelService.js';
 import { getPostgresConnectionStatus, verifyPostgresConnection } from './providers/postgresProvider.js';
@@ -157,12 +159,14 @@ const start = async () => {
     const shouldRunStartupMaintenance = config.runStartupMaintenance === true;
     if (shouldRunStartupMaintenance) {
       startGrantExpiryJob();
-      startDailyClosingJob();
     } else {
       console.info('Startup maintenance skipped by RUN_STARTUP_MAINTENANCE=false');
     }
+    startDailyClosingJob();
     startPurchaseOrderLifecycleJob();
+    startTemporaryPriceActionJob();
     startExpiredBatchNotificationJob();
+    startTransferRequestAutomationJob();
     app.listen(config.port, () => {
       console.log(`Server running on port ${config.port}`);
     });

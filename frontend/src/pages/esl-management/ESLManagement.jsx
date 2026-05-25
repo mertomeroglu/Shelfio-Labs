@@ -382,9 +382,9 @@ export default function ESLManagement() {
   const historyStart = history.length ? ((historyPage - 1) * HISTORY_PAGE_SIZE) + 1 : 0;
   const historyEnd = history.length ? Math.min(historyPage * HISTORY_PAGE_SIZE, history.length) : 0;
   const pagedHistory = history.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
-  const previewProduct = selectedProduct || lastPreview?.product || null;
-  const previewPricing = selectedProduct ? selectedProductPricing : lastPreview?.pricing;
-  const previewTemplate = selectedProduct ? effectiveSelectedTemplate : (lastPreview?.template || effectiveSelectedTemplate || 'standard');
+  const previewProduct = selectedProduct;
+  const previewPricing = selectedProductPricing;
+  const previewTemplate = effectiveSelectedTemplate || 'standard';
   const isProductSelected = Boolean(selectedProduct);
   const isDeviceSelected = Boolean(selectedDeviceId);
   const isTemplateSelected = Boolean(effectiveSelectedTemplate);
@@ -967,7 +967,7 @@ export default function ESLManagement() {
             </div>
             <div className="esl-preview-container">
               <ESLPreview
-                key={`${selectedDeviceId || lastPreview?.deviceId || 'no-device'}-${selectedProductId || lastPreview?.product?.id || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
+                key={`${selectedDeviceId || 'no-device'}-${selectedProductId || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
                 product={previewProduct && previewPricing ? {
                   name: getProductNameLabel(previewProduct),
                   barcode: getProductBarcodeLabel(previewProduct),
@@ -979,32 +979,30 @@ export default function ESLManagement() {
                 template={previewTemplate}
               />
 
-              {previewProduct && previewPricing && (
-                <div className="esl-preview-info">
-                  <div className="esl-preview-info-row">
-                    <span>Ürün:</span>
-                    <strong>{getProductNameLabel(previewProduct)}</strong>
-                  </div>
-                  <div className="esl-preview-info-row">
-                    <span>SKU:</span>
-                    <strong>{getProductSkuLabel(previewProduct)}</strong>
-                  </div>
-                  <div className="esl-preview-info-row">
-                    <span>Barkod:</span>
-                    <strong>{getProductBarcodeLabel(previewProduct)}</strong>
-                  </div>
-                  <div className="esl-preview-info-row">
-                    <span>Etikete gidecek fiyat:</span>
-                    <strong>{getProductPriceLabel(previewPricing)}</strong>
-                  </div>
-                  {previewPricing.hasActiveCampaign ? (
-                    <div className="esl-preview-info-row">
-                      <span>Normal fiyat:</span>
-                      <strong>₺{previewPricing.regularPrice.toFixed(2)}</strong>
-                    </div>
-                  ) : null}
+              <div className="esl-preview-info">
+                <div className="esl-preview-info-row">
+                  <span>Ürün:</span>
+                  <strong>{previewProduct ? getProductNameLabel(previewProduct) : 'Ürün seçilmedi'}</strong>
                 </div>
-              )}
+                <div className="esl-preview-info-row">
+                  <span>SKU:</span>
+                  <strong>{previewProduct ? getProductSkuLabel(previewProduct) : '-'}</strong>
+                </div>
+                <div className="esl-preview-info-row">
+                  <span>Barkod:</span>
+                  <strong>{previewProduct ? getProductBarcodeLabel(previewProduct) : '-'}</strong>
+                </div>
+                <div className="esl-preview-info-row">
+                  <span>Etikete gidecek fiyat:</span>
+                  <strong>{previewPricing ? getProductPriceLabel(previewPricing) : '-'}</strong>
+                </div>
+                {previewPricing?.hasActiveCampaign ? (
+                  <div className="esl-preview-info-row">
+                    <span>Normal fiyat:</span>
+                    <strong>₺{previewPricing.regularPrice.toFixed(2)}</strong>
+                  </div>
+                ) : null}
+              </div>
 
               <div className="esl-action-buttons">
                 <button

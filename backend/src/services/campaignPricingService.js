@@ -233,6 +233,12 @@ const normalizeCampaign = (campaign = {}, now = new Date()) => {
     targetCategoryIds: Array.isArray(campaign.targetCategoryIds)
       ? campaign.targetCategoryIds.map((id) => normalizeString(id)).filter(Boolean)
       : [],
+    targetCategoryLabelIds: Array.isArray(campaign.targetCategoryLabelIds)
+      ? campaign.targetCategoryLabelIds.map((id) => normalizeString(id)).filter(Boolean)
+      : [],
+    targetCategoryLabels: Array.isArray(campaign.targetCategoryLabels)
+      ? campaign.targetCategoryLabels.map((label) => normalizeString(label)).filter(Boolean)
+      : [],
     targetBrands: normalizeBrandTokens(campaign),
     channelScopes: normalizeScopeTokens(campaign.channelScope || campaign.channelScopes || campaign.channels || campaign.targetChannels),
     audienceScopes: normalizeScopeTokens(campaign.audience || campaign.audiences || campaign.targetAudience || campaign.targetAudiences),
@@ -272,12 +278,20 @@ const matchCampaignToProduct = (campaign, product = {}, options = {}) => {
 
   const productId = normalizeString(product.id || product.productId);
   const categoryId = normalizeString(product.categoryId);
+  const categoryLabelId = normalizeString(product.labelId || product.tagId || product.selectedTagId || product.categoryLabelId);
+  const categoryLabelName = normalizeString(product.etiket || product.categoryLabelName || product.labelName || product.tag).toLocaleLowerCase('tr-TR');
   const productBrand = normalizeString(product.brand || product.brandName).toLocaleLowerCase('tr-TR');
 
   const productMatched = campaign.targetProductIds.includes(productId);
-  const categoryMatched = categoryId ? campaign.targetCategoryIds.includes(categoryId) : false;
+  const targetCategoryLabels = Array.isArray(campaign.targetCategoryLabels)
+    ? campaign.targetCategoryLabels.map((label) => normalizeString(label).toLocaleLowerCase('tr-TR')).filter(Boolean)
+    : [];
+  const labelMatched = campaign.targetCategoryLabelIds.length
+    ? (categoryLabelId && campaign.targetCategoryLabelIds.includes(categoryLabelId)) || (categoryLabelName && targetCategoryLabels.includes(categoryLabelName))
+    : true;
+  const categoryMatched = categoryId ? campaign.targetCategoryIds.includes(categoryId) && labelMatched : false;
   const brandMatched = productBrand ? campaign.targetBrands.includes(productBrand) : false;
-  const hasExplicitScope = campaign.targetProductIds.length > 0 || campaign.targetCategoryIds.length > 0 || campaign.targetBrands.length > 0;
+  const hasExplicitScope = campaign.targetProductIds.length > 0 || campaign.targetCategoryIds.length > 0 || campaign.targetCategoryLabelIds.length > 0 || campaign.targetBrands.length > 0;
 
   if (productMatched || brandMatched || categoryMatched) {
     return resolveCampaignSpecificity({

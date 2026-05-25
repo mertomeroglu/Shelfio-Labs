@@ -843,7 +843,7 @@ export default function POS({ deskCode = 'B1' }) {
     }
 
     if (Number(card.remainingUsage ?? card.usageLimit ?? 1) <= 0) {
-      showToast('error', 'Bu hediye kartÄ±nÄ±n kullanÄ±m hakkÄ± kalmadÄ±');
+      showToast('error', 'Bu hediye kartının kullanım hakkı kalmadı');
       return;
     }
 
@@ -1531,7 +1531,7 @@ export default function POS({ deskCode = 'B1' }) {
         </div>
       )}
 
-      {/* ?? TOP BAR  */}
+      {/* ? TOP BAR  */}
       <header className="pos-topbar">
         <div className="pos-topbar-left">
           <div className="pos-logo-mark"><ShoppingCart size={20} /></div>
@@ -1808,7 +1808,7 @@ export default function POS({ deskCode = 'B1' }) {
         </div>
       )}
 
-      {/* ?? BODY - 3 Column  */}
+      {/* ? BODY - 3 Column  */}
       <div className="pos-body pos-body-2col">
 
         {/* DDLE: Product Grid + Cart  */}
@@ -1933,7 +1933,7 @@ export default function POS({ deskCode = 'B1' }) {
         </div>
       </div>
 
-      {/* ?? PAYMENT MODAL - 5 Types + Split  */}
+      {/* ? PAYMENT MODAL - 5 Types + Split  */}
       {paymentModal && (
         <div className="pos-modal-backdrop" onClick={() => setPaymentModal(false)}>
           <div className="pos-modal pos-payment-modal-lg" onClick={(e) => e.stopPropagation()}>
@@ -2094,7 +2094,7 @@ export default function POS({ deskCode = 'B1' }) {
 
       <footer className="pos-screen-footer">{APP_FOOTER_TEXT}</footer>
 
-      {/* ?? RETURN MODAL - Receipt Search  */}
+      {/* ? RETURN MODAL - Receipt Search  */}
       {returnModal && (
         <div className="pos-modal-backdrop" onClick={() => setReturnModal(false)}>
           <div className="pos-modal pos-return-modal-lg" onClick={(e) => e.stopPropagation()}>

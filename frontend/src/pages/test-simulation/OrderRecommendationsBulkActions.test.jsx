@@ -93,8 +93,8 @@ describe('OrderRecommendations bulk actions', () => {
       { id: 'p2' },
     ]);
     mockListSupplierProducts.mockResolvedValue([
-      { productId: 'p1', leadTimeDays: 3 },
-      { productId: 'p2', leadTimeDays: 3 },
+      { productId: 'p1', supplierId: 's1', leadTimeDays: 3 },
+      { productId: 'p2', supplierId: 's1', leadTimeDays: 3 },
     ]);
   });
 

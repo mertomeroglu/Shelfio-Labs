@@ -1,4 +1,5 @@
 export const PAGE_ACCESS_RULES = [
+  { path: '/skt-takibi', pattern: /^\/skt-takibi(?:\/|$)/, permission: 'stock:view', label: 'SKT Takibi' },
   { path: '/anasayfa', pattern: /^\/anasayfa(?:\/|$)/, permission: 'report:view', label: 'Dashboard' },
   { path: '/urunler', pattern: /^\/urunler(?:\/|$)/, permission: 'product:view', label: 'Ürün Yönetimi' },
   { path: '/kategoriler', pattern: /^\/kategoriler(?:\/|$)/, permission: 'category:view', label: 'Kategoriler' },

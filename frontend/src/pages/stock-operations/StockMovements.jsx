@@ -19,6 +19,7 @@ import { supplierService } from '../../services/supplierService.js';
 import { stockService } from '../../services/stockService.js';
 import { warehouseService } from '../../services/warehouseService.js';
 import { CAMERA_PERMISSION_HELP_TEXT, getCameraErrorMessage, logCameraError, startHtml5Scanner, waitForCameraElement } from '../../utils/cameraAccess.js';
+import { resolveSktPolicy, SKT_POLICIES } from '../../utils/sktPolicy.js';
 import {
   buildInventoryCountArchive,
   createInventoryCountRecord,
@@ -229,6 +230,10 @@ const OPERATION_HISTORY_META = {
     title: 'Stok İmha - Son 5 İşlem',
     matcher: (item) => item.type === 'OUT' && item.reasonCode === 'write_off',
   },
+  COUNT: {
+    title: 'Sayım - Son 5 İşlem',
+    matcher: (item) => item.reasonCode === 'count_surplus' || item.reasonCode === 'count_deficit',
+  },
 };
 
 const parseBatchAndSktFromNote = (note) => {
@@ -298,7 +303,6 @@ const PAGE_VIEW_OPTIONS = [
   { value: 'VIEW', label: 'Stok Görüntüleme' },
   { value: 'MOVEMENTS', label: 'Stok Hareketleri' },
   { value: 'OPERATIONS', label: 'Stok İşlemleri' },
-  { value: 'COUNT', label: 'Sayım' },
 ];
 
 const OPERATION_VIEW_OPTIONS = [
@@ -307,6 +311,7 @@ const OPERATION_VIEW_OPTIONS = [
   { value: 'ADJUSTMENT', label: 'Stok Düzeltme' },
   { value: 'TRANSFER', label: 'Reyon Besleme' },
   { value: 'DISPOSAL', label: 'Stok İmha' },
+  { value: 'COUNT', label: 'Sayım' },
 ];
 
 const formatRelativeTime = (value) => {
@@ -402,10 +407,6 @@ export default function StockMovements() {
   const [adjustErrors, setAdjustErrors] = useState({});
   const [transferErrors, setTransferErrors] = useState({});
   const [disposalErrors, setDisposalErrors] = useState({});
-  const [expiredBatchRows, setExpiredBatchRows] = useState([]);
-  const [selectedExpiredBatchIds, setSelectedExpiredBatchIds] = useState([]);
-  const [expiredBatchDisposalTarget, setExpiredBatchDisposalTarget] = useState(null);
-  const [expiredBatchDisposalNote, setExpiredBatchDisposalNote] = useState('');
   const [transferSectionRows, setTransferSectionRows] = useState([]);
   const [transferWarehouseRows, setTransferWarehouseRows] = useState([]);
   const [quickEntryForm, setQuickEntryForm] = useState(baseQuickEntryForm);
@@ -452,21 +453,18 @@ export default function StockMovements() {
         setIsLoading(true);
       }
 
-      const [stockRows, movementRows, productRows, supplierRows, sectionRows, expiredRows] = await Promise.all([
+      const [stockRows, movementRows, productRows, supplierRows, sectionRows] = await Promise.all([
         stockService.getStocks({ fetchAll: false, page: 1, limit: 100, includeBatches: false }),
         stockService.getMovements({ ...query, page: 1, limit: 50 }),
         productService.list({ fetchAll: false, page: 1, limit: 100, includeTotal: true }),
         supplierService.list(),
         sectionService.list(),
-        stockService.getExpiredBatchWarnings({ fetchAll: true, limit: 500 }),
       ]);
       setStocks(stockRows);
       setMovements(movementRows);
       setSuppliers(Array.isArray(supplierRows) ? supplierRows : []);
       setProducts(Array.isArray(productRows) ? productRows : []);
       setSections(Array.isArray(sectionRows) ? sectionRows : []);
-      setExpiredBatchRows(Array.isArray(expiredRows) ? expiredRows : []);
-      setSelectedExpiredBatchIds((current) => current.filter((id) => (Array.isArray(expiredRows) ? expiredRows : []).some((row) => String(row.id) === String(id))));
       setProductsById(Object.fromEntries(productRows.map((item) => [item.id, item])));
       setPendingReceiptOrders((current) => (Array.isArray(current) ? current : []));
     } catch (error) {
@@ -579,6 +577,15 @@ export default function StockMovements() {
   }, [receiptForm.productId, receiptLocationOptions, receiptSuggestedLocation]);
 
   const receiptSelectedProduct = useMemo(() => productsById[receiptForm.productId] || null, [productsById, receiptForm.productId]);
+  const receiptSktPolicy = useMemo(() => resolveSktPolicy(receiptSelectedProduct || {}), [receiptSelectedProduct]);
+  const isReceiptSktRequired = receiptSktPolicy.policy === SKT_POLICIES.REQUIRED;
+  const isReceiptSktApplicable = receiptSktPolicy.policy !== SKT_POLICIES.NOT_APPLICABLE;
+
+  useEffect(() => {
+    if (isReceiptSktApplicable || !receiptForm.skt) return;
+    setReceiptForm((current) => ({ ...current, skt: '' }));
+    setReceiptErrors((current) => ({ ...current, skt: '' }));
+  }, [isReceiptSktApplicable, receiptForm.skt]);
   const selectedPendingReceiptItem = useMemo(
     () => selectedPendingReceiptItems.find((item) => String(item.id || item.productId || '') === String(selectedPendingReceiptItemId || '')) || null,
     [selectedPendingReceiptItemId, selectedPendingReceiptItems],
@@ -1429,7 +1436,7 @@ export default function StockMovements() {
     const errors = {};
     if (!receiptForm.productId) errors.productId = 'Ürün seçimi zorunludur.';
     if (!String(receiptForm.batchNo).trim()) errors.batchNo = 'Parti No zorunludur.';
-    if (!String(receiptForm.skt).trim()) errors.skt = 'SKT zorunludur.';
+    if (isReceiptSktRequired && !String(receiptForm.skt).trim()) errors.skt = 'SKT zorunludur.';
     if (!String(receiptForm.acceptedCaseCount).trim()) errors.acceptedCaseCount = 'Toplam kabul edilen koli zorunludur.';
     if (!String(receiptForm.acceptanceType).trim()) errors.acceptanceType = 'Kabul tipi zorunludur.';
     if (!String(receiptForm.receiptDate).trim()) errors.receiptDate = 'Mal kabul tarihi zorunludur.';
@@ -1468,7 +1475,7 @@ export default function StockMovements() {
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    if (receiptForm.skt && receiptForm.skt < today) {
+    if (isReceiptSktApplicable && receiptForm.skt && receiptForm.skt < today) {
       errors.skt = 'SKT bugünden geride olamaz.';
     }
 
@@ -1510,7 +1517,7 @@ export default function StockMovements() {
       entryType: 'receipt',
       reasonCode: 'product_purchase',
       batchNo: String(receiptForm.batchNo).trim(),
-      skt: receiptForm.skt,
+      skt: isReceiptSktApplicable ? receiptForm.skt : '',
       purchasePrice,
       acceptedCaseCount,
       acceptanceType: receiptForm.acceptanceType,
@@ -1522,7 +1529,7 @@ export default function StockMovements() {
       productionDate: String(receiptForm.productionDate || receiptForm.receiptDate || getTodayDateValue()).trim(),
       note: buildMovementNote({
         batchNo: receiptForm.batchNo,
-        skt: receiptForm.skt,
+        skt: isReceiptSktApplicable ? receiptForm.skt : '',
         note: [
           `Kabul Tipi: ${receiptForm.acceptanceType}`,
           String(receiptForm.acceptanceNote || '').trim(),
@@ -1654,43 +1661,6 @@ export default function StockMovements() {
       await loadData();
     } catch (error) {
       setToast({ type: 'error', title: 'Stok İşlemleri', message: error.message || 'İmha işlemi başarısız.' });
-    } finally {
-      setProcessingType('');
-    }
-  };
-
-  const openExpiredBatchDisposal = (rows) => {
-    const safeRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
-    if (!safeRows.length) {
-      setToast({ type: 'error', title: 'SKT Uyarıları', message: 'İmha için en az bir SKT geçmiş parti seçin.' });
-      return;
-    }
-    setExpiredBatchDisposalTarget(safeRows);
-    setExpiredBatchDisposalNote('');
-  };
-
-  const confirmExpiredBatchDisposal = async () => {
-    const rows = Array.isArray(expiredBatchDisposalTarget) ? expiredBatchDisposalTarget : [];
-    if (!rows.length) return;
-
-    try {
-      setProcessingType('EXPIRED_DISPOSAL');
-      const result = await stockService.disposeExpiredBatches({
-        items: rows.map((row) => ({ batchId: row.id })),
-        reason: 'SKT geçmiş ürün imhası',
-        note: expiredBatchDisposalNote,
-      });
-      setToast({
-        type: 'success',
-        title: 'SKT Uyarıları',
-        message: `${formatNumber(result?.disposedBatchCount || rows.length)} parti batch düzeyinde imha edildi.`,
-      });
-      setExpiredBatchDisposalTarget(null);
-      setExpiredBatchDisposalNote('');
-      setSelectedExpiredBatchIds([]);
-      await loadData();
-    } catch (error) {
-      setToast({ type: 'error', title: 'SKT Uyarıları', message: error.message || 'SKT geçmiş ürün imhası başarısız.' });
     } finally {
       setProcessingType('');
     }
@@ -2139,8 +2109,9 @@ export default function StockMovements() {
     if (activeOperation === 'TRANSFER') return transferForm.productId;
     if (activeOperation === 'ADJUSTMENT') return adjustForm.productId;
     if (activeOperation === 'DISPOSAL') return disposalForm.productId;
+    if (activeOperation === 'COUNT') return countForm.productId;
     return '';
-  }, [activeOperation, adjustForm.productId, disposalForm.productId, outForm.productId, receiptForm.productId, transferForm.productId]);
+  }, [activeOperation, adjustForm.productId, countForm.productId, disposalForm.productId, outForm.productId, receiptForm.productId, transferForm.productId]);
 
   const pendingReceiptColumns = useMemo(() => ([
     { key: 'orderNumber', label: 'Sipariş No' },
@@ -2396,58 +2367,6 @@ export default function StockMovements() {
     },
   ];
 
-  const selectedExpiredBatchRows = expiredBatchRows.filter((row) => selectedExpiredBatchIds.some((id) => String(id) === String(row.id)));
-  const allExpiredRowsSelected = expiredBatchRows.length > 0 && selectedExpiredBatchIds.length === expiredBatchRows.length;
-  const expiredBatchColumns = [
-    {
-      key: 'select',
-      label: '',
-      render: (row) => (
-        <input
-          type="checkbox"
-          checked={selectedExpiredBatchIds.some((id) => String(id) === String(row.id))}
-          onChange={(event) => {
-            setSelectedExpiredBatchIds((current) => event.target.checked
-              ? Array.from(new Set([...current, row.id]))
-              : current.filter((id) => String(id) !== String(row.id)));
-          }}
-          disabled={!isAdmin || processingType === 'EXPIRED_DISPOSAL'}
-          aria-label={`${row.batchNo} partisini seç`}
-        />
-      ),
-      sortable: false,
-    },
-    { key: 'productName', label: 'Ürün adı', render: (row) => formatUnit(row.productName) },
-    { key: 'sku', label: 'SKU' },
-    { key: 'barcode', label: 'Barkod', render: (row) => row.barcode || '-' },
-    { key: 'batchNo', label: 'Parti No' },
-    { key: 'skt', label: 'SKT Tarihi', render: (row) => formatDate(row.skt), sortValue: (row) => new Date(row.skt).getTime() },
-    { key: 'warehouseQuantity', label: 'Depo Stok', render: (row) => formatNumber(row.warehouseQuantity || 0), sortValue: (row) => row.warehouseQuantity || 0 },
-    { key: 'shelfQuantity', label: 'Reyon Stok', render: (row) => formatNumber(row.shelfQuantity || 0), sortValue: (row) => row.shelfQuantity || 0 },
-    { key: 'totalQuantity', label: 'Toplam Stok', render: (row) => formatNumber(row.totalQuantity || 0), sortValue: (row) => row.totalQuantity || 0 },
-    {
-      key: 'riskStatus',
-      label: 'Risk / Durum',
-      render: (row) => <StatusBadge tone={row.daysExpired > 30 ? 'danger' : 'warning'}>{row.riskStatus || 'SKT geçmiş'}</StatusBadge>,
-      sortable: false,
-    },
-    {
-      key: 'action',
-      label: 'Aksiyon',
-      render: (row) => (
-        <button
-          className="danger-button movement-inline-action movement-inline-action-compact"
-          type="button"
-          onClick={() => openExpiredBatchDisposal([row])}
-          disabled={!isAdmin || processingType === 'EXPIRED_DISPOSAL'}
-        >
-          İmha Et
-        </button>
-      ),
-      sortable: false,
-    },
-  ];
-
   const movementColumns = [
     { key: 'referenceNo', label: 'Ref No' },
     { key: 'transferRequestId', label: 'Talep ID', render: (row) => row.transferRequestId || '-' },
@@ -2489,48 +2408,6 @@ export default function StockMovements() {
         }}
         onConfirm={handleCancelMovement}
       />
-      <FormModal
-        isOpen={Boolean(expiredBatchDisposalTarget)}
-        title="SKT Geçmiş Parti İmhası"
-        description={expiredBatchDisposalTarget ? `${formatNumber(expiredBatchDisposalTarget.length)} parti batch düzeyinde imha edilecek.` : ''}
-        modalClassName="movement-expired-disposal-dialog"
-        onClose={() => {
-          if (processingType !== 'EXPIRED_DISPOSAL') {
-            setExpiredBatchDisposalTarget(null);
-            setExpiredBatchDisposalNote('');
-          }
-        }}
-        confirmOnDirtyClose={false}
-      >
-        <div className="modal-form movement-expired-disposal-modal">
-          <div className="movement-critical-note">Varsayılan imha nedeni: SKT geçmiş ürün imhası</div>
-          <label className="field-group">
-            <span>Ek Not</span>
-            <textarea
-              value={expiredBatchDisposalNote}
-              onChange={(event) => setExpiredBatchDisposalNote(event.target.value)}
-              placeholder="İmha onayı için ek not"
-              disabled={processingType === 'EXPIRED_DISPOSAL'}
-            />
-          </label>
-          <div className="modal-actions app-dialog-actions">
-            <button
-              className="outline-button"
-              type="button"
-              onClick={() => {
-                setExpiredBatchDisposalTarget(null);
-                setExpiredBatchDisposalNote('');
-              }}
-              disabled={processingType === 'EXPIRED_DISPOSAL'}
-            >
-              Vazgeç
-            </button>
-            <button className="danger-button" type="button" onClick={confirmExpiredBatchDisposal} disabled={processingType === 'EXPIRED_DISPOSAL'}>
-              {processingType === 'EXPIRED_DISPOSAL' ? 'İmha Ediliyor...' : 'Evet, İmha Et'}
-            </button>
-          </div>
-        </div>
-      </FormModal>
       <PageHeader className="dashboard-hero" icon={<Boxes size={22} />} title="Stok İşlemleri" description="Stok giriş, çıkış ve düzeltme işlemlerini yönetin." />
 
       <div className="mod-card movement-type-card">
@@ -2760,11 +2637,13 @@ export default function StockMovements() {
               {renderReadonlyProductBlock(receiptForm.productId)}
               <div className="movement-inline-grid">
                 <label className="field-group"><span>Parti No</span><input value={receiptForm.batchNo} onChange={(event) => { setReceiptForm((current) => ({ ...current, batchNo: event.target.value })); setReceiptErrors((current) => ({ ...current, batchNo: '' })); }} placeholder="örn. PINAR-B7K29Q-01" disabled={!isAdmin} /></label>
-                <label className="field-group"><span>SKT</span><input type="date" value={receiptForm.skt} onChange={(event) => { setReceiptForm((current) => ({ ...current, skt: event.target.value })); setReceiptErrors((current) => ({ ...current, skt: '' })); }} disabled={!isAdmin} /></label>
+                {isReceiptSktApplicable ? (
+                  <label className="field-group"><span>SKT{isReceiptSktRequired ? <span className="modal-required">*</span> : null}</span><input type="date" value={receiptForm.skt} onChange={(event) => { setReceiptForm((current) => ({ ...current, skt: event.target.value })); setReceiptErrors((current) => ({ ...current, skt: '' })); }} disabled={!isAdmin} /></label>
+                ) : <span />}
               </div>
               <div className="movement-inline-grid movement-inline-errors">
                 {receiptErrors.batchNo ? <small className="movement-field-error">{receiptErrors.batchNo}</small> : <span />}
-                {receiptErrors.skt ? <small className="movement-field-error">{receiptErrors.skt}</small> : <span />}
+                {isReceiptSktApplicable && receiptErrors.skt ? <small className="movement-field-error">{receiptErrors.skt}</small> : <span />}
               </div>
               <div className="movement-inline-grid">
                 <label className="field-group"><span>Kabul Tipi</span><select value={receiptForm.acceptanceType} onChange={(event) => { setReceiptForm((current) => ({ ...current, acceptanceType: event.target.value })); setReceiptErrors((current) => ({ ...current, acceptanceType: '' })); }} disabled={!isAdmin}>{ACCEPTANCE_TYPE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
@@ -3165,57 +3044,7 @@ export default function StockMovements() {
         </form>
         </>
         ) : null}
-          </div>
-          <div className="mod-card movement-context-card movement-context-side">
-            <div className="mod-card-header">
-              <div className="mod-card-icon mod-icon-indigo"><Activity size={18} /></div>
-              <div><h3>İşlem Öncesi Bağlam</h3><p>Anlık stok ve son hareketleri kontrol ederek daha güvenli işlem yapın.</p></div>
-            </div>
-            {renderMovementContext(selectedContextProductId, activeOperation)}
-          </div>
-          </div>
-          {activeOperation === 'DISPOSAL' ? (
-            <div className="movement-op-card op-disposal active movement-expired-warning-card movement-expired-warning-card-full">
-              <div className="movement-op-header">
-                <div className="mod-card-icon mod-icon-rose"><AlertTriangle size={18} /></div>
-                <div><h3>SKT Geçmiş Ürün Uyarıları</h3><p>Yalnızca SKT tarihi geçmiş ve stokta kalan batch kayıtları listelenir.</p></div>
-              </div>
-              <div className="movement-expired-warning-actions">
-                <label className="checkbox-group stock-filter-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={allExpiredRowsSelected}
-                    onChange={(event) => setSelectedExpiredBatchIds(event.target.checked ? expiredBatchRows.map((row) => row.id) : [])}
-                    disabled={!isAdmin || !expiredBatchRows.length || processingType === 'EXPIRED_DISPOSAL'}
-                  />
-                  <span>Tümünü seç</span>
-                </label>
-                <button
-                  className="danger-button movement-inline-action"
-                  type="button"
-                  onClick={() => openExpiredBatchDisposal(selectedExpiredBatchRows)}
-                  disabled={!isAdmin || !selectedExpiredBatchRows.length || processingType === 'EXPIRED_DISPOSAL'}
-                >
-                  Seçili Ürünleri İmha Et
-                </button>
-              </div>
-              <DataTable
-                columns={expiredBatchColumns}
-                rows={expiredBatchRows}
-                keyField="id"
-                isLoading={isLoading}
-                emptyMessage="SKT geçmiş aktif batch bulunmuyor."
-                initialSort={{ key: 'skt', direction: 'asc' }}
-                pageSize={10}
-                topHorizontalScroll
-              />
-            </div>
-          ) : null}
-        </>
-      ) : null}
-
-      {activePageView === 'COUNT' ? (
-        <section className="movement-count-layout movement-page-panel-spaced">
+        {activeOperation === 'COUNT' ? (
           <div className="movement-op-card op-adjust active movement-count-card">
             <div className="movement-op-header">
               <div className="mod-card-icon mod-icon-amber"><ScanBarcode size={18} /></div>
@@ -3329,6 +3158,71 @@ export default function StockMovements() {
               );
             })() : null}
           </div>
+        ) : null}
+          </div>
+          <div className="mod-card movement-context-card movement-context-side">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-indigo"><Activity size={18} /></div>
+              <div><h3>İşlem Öncesi Bağlam</h3><p>Anlık stok ve son hareketleri kontrol ederek daha güvenli işlem yapın.</p></div>
+            </div>
+            {renderMovementContext(selectedContextProductId, activeOperation)}
+          </div>
+          </div>
+        </>
+      ) : null}
+
+      {activePageView === 'OPERATIONS' && activeOperation === 'COUNT' ? (
+        <section className="mod-card movement-count-preview-card movement-page-panel-spaced">
+          <div className="movement-count-preview-head">
+            <div className="mod-card-icon mod-icon-amber"><Activity size={18} /></div>
+            <div>
+              <h3>Sayım Sonucu Önizlemesi</h3>
+              <p>Barkod okutulduğunda sistem stoğu ile fiziksel sayım karşılaştırılır.</p>
+            </div>
+          </div>
+
+          {countPhysicalQuantity === null ? (
+            <div className="movement-count-preview-grid">
+              <div className="movement-count-preview-item tone-success">
+                <span className="movement-count-preview-icon"><CheckCircle2 size={16} /></span>
+                <div>
+                  <strong>Tam Eşleşme</strong>
+                  <p>Fiziksel sayım sistem stoğu ile aynı.</p>
+                </div>
+              </div>
+              <div className="movement-count-preview-item tone-warning">
+                <span className="movement-count-preview-icon"><TrendingDown size={16} /></span>
+                <div>
+                  <strong>Eksik Stok</strong>
+                  <p>Fiziksel sayım sistem stoğundan düşük.</p>
+                </div>
+              </div>
+              <div className="movement-count-preview-item tone-primary">
+                <span className="movement-count-preview-icon"><TrendingUp size={16} /></span>
+                <div>
+                  <strong>Fazla Stok</strong>
+                  <p>Fiziksel sayım sistem stoğundan yüksek.</p>
+                </div>
+              </div>
+            </div>
+          ) : (() => {
+            const resultLabel = countDifference === 0 ? 'Tam' : countDifference > 0 ? 'Eksik' : 'Fazla';
+            const resultTone = countDifference === 0 ? 'success' : countDifference > 0 ? 'warning' : 'primary';
+            return (
+              <div className="movement-count-result-grid">
+                <div><span>Sayılan ürün</span><strong>{countSelectedProduct?.name || countSelectedStock?.productName || '-'}</strong></div>
+                <div><span>Sistem stoğu</span><strong>{formatNumber(countExpectedQuantity)}</strong></div>
+                <div><span>Fiziksel sayım</span><strong>{formatNumber(countPhysicalQuantity)}</strong></div>
+                <div><span>Fark</span><strong>{formatNumber(Math.abs(countDifference || 0))}</strong></div>
+                <div><span>Sonuç</span><StatusBadge tone={resultTone}>{resultLabel}</StatusBadge></div>
+              </div>
+            );
+          })()}
+        </section>
+      ) : null}
+
+      {activePageView === 'OPERATIONS' && activeOperation === 'COUNT' ? (
+        <section className="movement-count-layout movement-count-layout--archive movement-page-panel-spaced">
           <div className="mod-card movement-count-archive-card">
             <div className="mod-card-header">
               <div className="mod-card-icon mod-icon-blue"><Activity size={18} /></div>

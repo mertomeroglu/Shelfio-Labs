@@ -27,6 +27,16 @@ const PRIORITY_WEIGHT = {
   low: 1,
 };
 
+const GROUPABLE_OPERATIONAL_TYPES = new Set([
+  'skt_expired',
+  'expiry_soon',
+  'critical_stock',
+  'stock_out',
+  'out_of_stock',
+  'stockout',
+]);
+const GROUP_WINDOW_MS = 15 * 60 * 1000;
+
 const TYPE_LABELS_TR = {
   overdue: 'Geciken Görev',
   upcoming: 'Yaklaşan Teslim',
@@ -44,6 +54,11 @@ const TYPE_LABELS_TR = {
   task: 'Görev',
   purchase_order: 'Sipariş Takibi',
   goods_receipt: 'Mal Kabul',
+  campaign: 'Kampanya Yönetimi',
+  pricing_analysis: 'Fiyat & Talep Analizi',
+  price_recommendations: 'Fiyat & Talep Analizi',
+  pricing_demand_analysis: 'Fiyat & Talep Analizi',
+  price_demand_analysis: 'Fiyat & Talep Analizi',
 };
 
 const ACTION_LABELS_TR = {
@@ -57,6 +72,174 @@ const ACTION_LABELS_TR = {
   dismiss: 'Göz Ardı Edildi',
   archive: 'Arşivlendi',
   mark_read: 'Okundu',
+};
+
+const PRICING_DEMAND_SOURCE_LABEL = 'Fiyat & Talep Analizi';
+const PRICING_DEMAND_SOURCE_ALIASES = new Set([
+  'price recommendations',
+  'price_recommendations',
+  'price-recommendations',
+  'pricing recommendations',
+  'pricing_recommendations',
+  'pricing_demand_analysis',
+  'pricing demand analysis',
+  'price_demand_analysis',
+  'price demand analysis',
+  'pricing_analysis',
+  'pricing analysis',
+  'price_analysis',
+  'price analysis',
+  'demand_analysis',
+  'demand analysis',
+  'fiyat_talep_analizi',
+  'fiyat talep analizi',
+  'pricing',
+]);
+
+const normalizeNotificationKey = (value) => String(value ?? '')
+  .trim()
+  .toLocaleLowerCase('tr-TR')
+  .replace(/ı/g, 'i')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[._-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const extractTextFromObject = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const keys = ['campaignName', 'name', 'publicName', 'displayName', 'title', 'label', 'message', 'text', 'description'];
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' || typeof candidate === 'number') {
+      const text = String(candidate).trim();
+      if (text && text !== '[object Object]') return text;
+    }
+  }
+  return '';
+};
+
+const toNotificationText = (value, fallback = '') => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const text = normalizeTurkishText(value).trim();
+    return text && text !== '[object Object]' ? text : fallback;
+  }
+  const objectText = extractTextFromObject(value);
+  return objectText ? normalizeTurkishText(objectText).trim() : fallback;
+};
+
+const resolveSourceLabel = (value, fallback = '') => {
+  const raw = toNotificationText(value, '');
+  const key = normalizeNotificationKey(raw);
+  if (!key) return fallback;
+  if (PRICING_DEMAND_SOURCE_ALIASES.has(key) || key.includes('price recommendations')) {
+    return PRICING_DEMAND_SOURCE_LABEL;
+  }
+  return raw;
+};
+
+const pickFirstText = (...values) => {
+  for (const value of values) {
+    const text = toNotificationText(value, '');
+    if (text) return text;
+  }
+  return '';
+};
+
+const resolveCampaignName = (source = {}, fallback = 'Yeni kampanya') => {
+  const payload = source?.payload && typeof source.payload === 'object' ? source.payload : {};
+  const campaign = payload.campaign && typeof payload.campaign === 'object' ? payload.campaign : {};
+  const rootCampaign = source?.campaign && typeof source.campaign === 'object' ? source.campaign : {};
+  return pickFirstText(
+    payload.campaignName,
+    campaign.name,
+    campaign.publicName,
+    campaign.displayName,
+    rootCampaign.name,
+    source.campaignName,
+    source.name,
+    payload.name,
+    fallback
+  ) || fallback;
+};
+
+const buildCampaignCreatedMessage = (campaignName, sourceLabel = PRICING_DEMAND_SOURCE_LABEL) => {
+  const name = toNotificationText(campaignName, 'Yeni kampanya');
+  const label = resolveSourceLabel(sourceLabel, PRICING_DEMAND_SOURCE_LABEL);
+  return name === 'Yeni kampanya'
+    ? `Yeni kampanya ${label} üzerinden oluşturuldu.`
+    : `"${name}" kampanyası ${label} üzerinden oluşturuldu.`;
+};
+
+const isPricingDemandSource = (value) => {
+  const key = normalizeNotificationKey(value);
+  return PRICING_DEMAND_SOURCE_ALIASES.has(key) || key.includes('price recommendations') || key.includes('fiyat talep analizi');
+};
+
+const isPricingCampaignCreatedPayload = (source = {}) => {
+  const payload = source?.payload && typeof source.payload === 'object' ? source.payload : {};
+  const sourceMatches = [
+    payload.source,
+    payload.sourceModule,
+    payload.module,
+    payload.page,
+    payload.pageName,
+    payload.sourceLabel,
+    source.source,
+    source.sourceLabel,
+    source.actionType,
+    source.type,
+  ].some(isPricingDemandSource);
+  if (!sourceMatches) return false;
+
+  const actionText = [
+    source.type,
+    source.actionType,
+    payload.event,
+    payload.action,
+    payload.entityType,
+    payload.module,
+  ].map((value) => normalizeNotificationKey(value)).join(' ');
+  return actionText.includes('campaign')
+    || actionText.includes('kampanya')
+    || Boolean(payload.campaignId || payload.campaignName || payload.campaign);
+};
+
+export const normalizeNotificationRecordPayload = (input = {}) => {
+  const payload = input?.payload && typeof input.payload === 'object' ? { ...input.payload } : input?.payload || null;
+  const base = {
+    ...input,
+    title: toNotificationText(input.title, 'Bildirim'),
+    message: toNotificationText(input.message, ''),
+    actionUrl: input.actionUrl || input.targetRoute || null,
+    actionType: input.actionType || null,
+    payload,
+  };
+
+  if (!isPricingCampaignCreatedPayload(base)) {
+    return base;
+  }
+
+  const campaignName = resolveCampaignName(base);
+  const sourceLabel = PRICING_DEMAND_SOURCE_LABEL;
+  return {
+    ...base,
+    type: 'campaign',
+    title: 'Kampanya oluşturuldu',
+    message: buildCampaignCreatedMessage(campaignName, sourceLabel),
+    actionUrl: '/kampanya-yonetimi',
+    actionType: 'campaign',
+    payload: {
+      ...(payload && typeof payload === 'object' ? payload : {}),
+      event: 'campaign_created',
+      entityType: 'campaign',
+      campaignName,
+      source: 'pricing_demand_analysis',
+      sourceLabel,
+      targetRoute: '/kampanya-yonetimi',
+    },
+  };
 };
 
 const toTurkishLabel = (value, dictionary) => {
@@ -85,25 +268,189 @@ const createNotificationRecord = ({
   delivery = null,
   payload = null,
   isDraft = false,
-}) => ({
-  id: uuidv4(),
-  userId,
-  type,
-  title: normalizeTurkishText(title),
-  message: normalizeTurkishText(message),
-  severity: VALID_SEVERITIES.has(severity) ? severity : 'low',
-  isRead: false,
-  createdAt: new Date().toISOString(),
-  relatedTaskId,
-  dedupeKey,
-  actionUrl,
-  actionType,
-  createdBy,
-  audience,
-  delivery,
-  payload,
-  isDraft: Boolean(isDraft),
-});
+}) => {
+  const normalized = normalizeNotificationRecordPayload({
+    userId,
+    type,
+    title,
+    message,
+    severity,
+    relatedTaskId,
+    dedupeKey,
+    actionUrl,
+    actionType,
+    createdBy,
+    audience,
+    delivery,
+    payload,
+    isDraft,
+  });
+  return {
+    id: uuidv4(),
+    userId,
+    type: normalized.type,
+    title: normalized.title,
+    message: normalized.message,
+    severity: VALID_SEVERITIES.has(severity) ? severity : 'low',
+    isRead: false,
+    createdAt: new Date().toISOString(),
+    relatedTaskId,
+    dedupeKey,
+    actionUrl: normalized.actionUrl,
+    actionType: normalized.actionType,
+    createdBy,
+    audience,
+    delivery,
+    payload: normalized.payload,
+    isDraft: Boolean(isDraft),
+  };
+};
+
+const normalizeGroupableType = (type) => {
+  const normalized = String(type || '').trim().toLowerCase();
+  if (normalized === 'out_of_stock' || normalized === 'stockout') return 'stock_out';
+  return normalized;
+};
+
+const isGroupedNotificationPayload = (payload) => (
+  payload && typeof payload === 'object' && payload.isNotificationGroup === true
+);
+
+const buildGroupWindowKey = (now = new Date()) => {
+  const time = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const safeTime = Number.isFinite(time) ? time : Date.now();
+  return Math.floor(safeTime / GROUP_WINDOW_MS);
+};
+
+const resolveGroupSource = (payload = {}, actionType = '') => (
+  String(payload.sourceModule || payload.module || payload.source || actionType || 'stock')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_') || 'stock'
+);
+
+const buildOperationalGroupDedupeKey = ({ userId, type, severity, actionType, payload, now = new Date() }) => {
+  const normalizedType = normalizeGroupableType(type);
+  const source = resolveGroupSource(payload || {}, actionType);
+  const windowKey = payload?.groupWindowKey || buildGroupWindowKey(now);
+  return `notification-group:${userId}:${normalizedType}:${severity || 'low'}:${source}:${windowKey}`;
+};
+
+const getOperationalGroupTitle = (type, count) => {
+  const safeCount = Math.max(1, Number(count) || 1);
+  if (type === 'skt_expired') return `${safeCount} üründe SKT geçti`;
+  if (type === 'expiry_soon') return `${safeCount} üründe SKT yaklaşıyor`;
+  if (type === 'critical_stock') return `${safeCount} üründe kritik stok seviyesi görüldü`;
+  if (type === 'stock_out') return `${safeCount} ürünün stoğu tükendi`;
+  return `${safeCount} benzer bildirim`;
+};
+
+const buildOperationalGroupItem = (payload = {}, source = {}, now = new Date()) => {
+  const itemPayload = payload && typeof payload === 'object' ? payload : {};
+  return {
+    productId: itemPayload.productId || itemPayload.entityId || null,
+    sku: itemPayload.sku || itemPayload.productSku || '',
+    barcode: itemPayload.barcode || '',
+    productName: itemPayload.productName || itemPayload.name || source.title || '',
+    batchNo: itemPayload.batchNo || '',
+    expiryDate: itemPayload.expiryDate || itemPayload.skt || '',
+    quantity: itemPayload.quantity ?? itemPayload.currentStock ?? itemPayload.stock ?? null,
+    reason: itemPayload.reason || source.type || '',
+    reasonLabel: itemPayload.reasonLabel || source.message || '',
+    sourceKey: source.dedupeKey || itemPayload.sourceKey || itemPayload.eventId || `${source.type}:${source.title}:${source.message}`,
+    createdAt: now.toISOString(),
+  };
+};
+
+const mergeOperationalGroupRecord = (existing, source, now = new Date()) => {
+  const payload = existing.payload && typeof existing.payload === 'object' ? existing.payload : {};
+  const items = Array.isArray(payload.items) ? [...payload.items] : [];
+  const incoming = buildOperationalGroupItem(source.payload, source, now);
+  const existingKeys = new Set(items.map((item) => String(item.sourceKey || '').trim()).filter(Boolean));
+  if (!existingKeys.has(incoming.sourceKey)) {
+    items.push(incoming);
+  }
+  const type = normalizeGroupableType(source.type);
+  const title = getOperationalGroupTitle(type, items.length);
+  const existingWeight = PRIORITY_WEIGHT[existing.severity] || 1;
+  const incomingWeight = PRIORITY_WEIGHT[source.severity] || 1;
+  return {
+    ...existing,
+    type,
+    title,
+    message: 'Benzer uyarılar tek bildirime toplandı. Detay için bildirimi açın.',
+    severity: incomingWeight > existingWeight ? source.severity : existing.severity,
+    isRead: false,
+    createdAt: now.toISOString(),
+    actionUrl: source.actionUrl || existing.actionUrl,
+    actionType: source.actionType || existing.actionType,
+    payload: {
+      ...payload,
+      isNotificationGroup: true,
+      entityType: 'notification_group',
+      groupType: type,
+      groupLabel: TYPE_LABELS_TR[type] || toTurkishLabel(type, TYPE_LABELS_TR),
+      groupWindow: '15m',
+      itemCount: items.length,
+      affectedProductCount: countUniqueGroupProducts(items),
+      sampleProductNames: items.slice(0, 5).map((item) => item.productName).filter(Boolean),
+      items,
+    },
+  };
+};
+
+const countUniqueGroupProducts = (items = []) => new Set(
+  items
+    .map((item) => String(item.productId || item.sku || item.productName || '').trim())
+    .filter(Boolean),
+).size;
+
+const maybeCreateGroupedOperationalNotification = async (payload) => {
+  const now = new Date();
+  const type = normalizeGroupableType(payload.type);
+  if (!GROUPABLE_OPERATIONAL_TYPES.has(type) || isGroupedNotificationPayload(payload.payload)) {
+    return null;
+  }
+
+  const groupKey = payload.payload?.notificationGroupKey || buildOperationalGroupDedupeKey({
+    userId: payload.userId,
+    type,
+    severity: payload.severity,
+    actionType: payload.actionType,
+    payload: payload.payload,
+    now,
+  });
+  const source = { ...payload, type, dedupeKey: payload.dedupeKey || payload.payload?.sourceKey || null };
+  const existing = await notificationRepo.findByUserAndDedupeKey(payload.userId, groupKey);
+  if (existing) {
+    const next = mergeOperationalGroupRecord(existing, source, now);
+    await notificationRepo.updateById(existing.id, next);
+    return next;
+  }
+
+  const item = buildOperationalGroupItem(payload.payload, source, now);
+  const record = createNotificationRecord({
+    ...payload,
+    type,
+    title: getOperationalGroupTitle(type, 1),
+    message: 'Benzer uyarılar tek bildirime toplandı. Detay için bildirimi açın.',
+    dedupeKey: groupKey,
+    payload: {
+      ...(payload.payload && typeof payload.payload === 'object' ? payload.payload : {}),
+      isNotificationGroup: true,
+      entityType: 'notification_group',
+      groupType: type,
+      groupLabel: TYPE_LABELS_TR[type] || toTurkishLabel(type, TYPE_LABELS_TR),
+      groupWindow: '15m',
+      itemCount: 1,
+      affectedProductCount: countUniqueGroupProducts([item]),
+      sampleProductNames: item.productName ? [item.productName] : [],
+      items: [item],
+    },
+  });
+  await notificationRepo.create(record);
+  return record;
+};
 
 const getActorName = (actorUser) => {
   const safe = String(actorUser?.name || '').trim();
@@ -147,6 +494,11 @@ const resolveMentionedUserIds = async (text) => {
 const maybeCreate = async (payload) => {
   if (!payload?.userId || !payload?.type || !payload?.message) {
     return null;
+  }
+
+  const groupedRecord = await maybeCreateGroupedOperationalNotification(payload);
+  if (groupedRecord) {
+    return groupedRecord;
   }
 
   if (payload.dedupeKey) {
@@ -321,8 +673,8 @@ export const notificationService = {
   },
 
   async createManualNotification(actorUserId, payload = {}) {
-    const title = String(payload.title || '').trim();
-    const message = String(payload.message || '').trim();
+    const title = toNotificationText(payload.title, '');
+    const message = toNotificationText(payload.message, '');
     const type = String(payload.type || 'system').trim().toLowerCase() || 'system';
     const severity = String(payload.severity || 'medium').trim().toLowerCase();
     const actionUrl = String(payload.targetRoute || payload.actionUrl || '').trim() || '/bildirimler';
@@ -393,6 +745,7 @@ export const notificationService = {
         actionUrl,
         actionType,
         createdBy: actorUserId,
+        payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : null,
         audience: {
           mode: targeting.mode,
           departments: targeting.departments,

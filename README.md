@@ -162,6 +162,20 @@ cd /var/www/shelfio/Shelfio-Labs
 ./deploy.sh
 ```
 
+Production DB migration checklist:
+
+```bash
+cd /var/www/shelfio/Shelfio-Labs/backend
+npx prisma migrate deploy
+npx prisma generate
+```
+
+PostgreSQL extension note:
+
+- `backend/prisma/migrations/20260506161000_add_query_indexes/migration.sql` runs `CREATE EXTENSION IF NOT EXISTS pg_trgm;`.
+- The VPS database role used by `DATABASE_URL` must be allowed to create extensions, or `pg_trgm` must be installed once by a PostgreSQL superuser before `npx prisma migrate deploy`.
+- The database dump/restore path must preserve the `pg_trgm` extension and the GIN trigram indexes used by product/supplier search.
+
 Backend restart:
 
 ```bash
