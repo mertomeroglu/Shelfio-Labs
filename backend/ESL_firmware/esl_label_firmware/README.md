@@ -79,12 +79,17 @@ Android customer scanner şu alanları okuyabilir:
 Arduino IDE:
 
 1. ESP32 board paketini kurun.
-2. `backend/ESL_firmware/esl_label_firmware.ino` dosyasını açın.
-3. `shelfio_ble_beacon.h` ve `shelfio_ble_beacon.cpp` aynı klasörde kalmalıdır.
-4. Kart/port seçin.
-5. `Tools > Partition Scheme` menüsünden `Huge APP (3MB No OTA/1MB SPIFFS)` seçin. Bu birleşik firmware default `1310720` byte app alanına sığmaz.
-6. Upload edin.
-7. Serial Monitor baud rate: `115200`.
+2. Arduino IDE'de `File > Open` ile `backend/ESL_firmware/esl_label_firmware/esl_label_firmware.ino` dosyasını açın.
+3. IDE penceresinin başlığı `esl_label_firmware` olmalıdır. `sketch_may28a` veya `.arduinoIDE-unsaved...` görürseniz dosya geçici sketch olarak açılmıştır; pencereyi kapatıp repo içindeki `.ino` dosyasını tekrar açın.
+4. `shelfio_ble_beacon.h` ve `shelfio_ble_beacon.cpp` aynı klasörde kalmalıdır.
+5. Kart/port seçin.
+6. `Tools > Partition Scheme` menüsünden `Huge APP (3MB No OTA/1MB SPIFFS)` seçin. Bu birleşik firmware default `1310720` byte app alanına sığmaz.
+7. Upload edin.
+8. Serial Monitor baud rate: `115200`.
+
+Resetten hemen sonra, `CIHAZ BASLATILIYOR` basligindan once tek satirlik bozuk karakter gorulebilir. Bu ESP boot ROM ciktisidir ve firmware baslamadan once geldigi icin tamamen kapatilamaz. Basliktan sonraki yazi da bozuk gorunuyorsa Serial Monitor baud rate `115200` degildir veya yanlis port aciktir.
+
+`shelfio_ble_beacon.h: No such file or directory` hatası genelde `.ino` dosyasının klasörüyle birlikte değil, Arduino IDE'nin geçici sketch klasöründen derlendiğini gösterir. Firmware bu durumda ESL-only fallback ile derlenebilir, ancak BLE proximity beacon için `shelfio_ble_beacon.h/.cpp` dosyalarının sketch klasöründe bulunması gerekir.
 
 ESP32 Arduino IDE'de `text section exceeds available space` veya `Sketch too big` hatası görürseniz partition hâlâ default demektir. Kod yaklaşık 1.95 MB olabilir; default partition 1.31 MB, Huge APP partition yaklaşık 3 MB app alanı verir.
 

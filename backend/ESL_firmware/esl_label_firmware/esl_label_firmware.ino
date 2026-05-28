@@ -9,7 +9,14 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSansBold24pt7b.h>
+
+#if __has_include("shelfio_ble_beacon.h")
 #include "shelfio_ble_beacon.h"
+#else
+#define SHELFIO_BLE_BEACON_COMPILED 0
+void initShelfioBleBeacon() {}
+void maintainShelfioBleBeacon() {}
+#endif
 
 // =========================
 // Etiket Verisi (struct en başta olmalı)
@@ -30,6 +37,11 @@ struct LabelData {
   String labelVersion;
   bool clearMode;
 };
+
+static void drawStandardLayout(const LabelData& data);
+static void drawCampaignLayout(const LabelData& data);
+static void drawDiscountLayout(const LabelData& data);
+static void drawLayout(const LabelData& data);
 
 // Türkçe karakterleri ASCII'ye çevir
 String normalizeTrToAscii(const String& text) {
@@ -150,6 +162,8 @@ String powerSource = "battery";
 // Seri giris yardimcilari
 // =========================
 const uint32_t SERIAL_BAUD = 115200;
+const unsigned long SERIAL_BOOT_SETTLE_MS = 1600;
+const unsigned long SERIAL_INPUT_QUIET_MS = 500;
 
 static void drainSerialInput(unsigned long quietMs = 150)
 {
@@ -168,16 +182,16 @@ static void printCleanBootBanner()
 {
   // ESP32 ROM boot mesajlari sketch baslamadan once yazilir; tamamen kapatilamaz.
   // Bu temiz baslik, Serial Monitor 115200 baud iken kullanicinin firmware cikisini net ayirir.
-  Serial.write(27);
-  Serial.print("[2J");
-  Serial.write(27);
-  Serial.print("[H");
+  Serial.flush();
+  Serial.println();
   Serial.println();
   Serial.println("=========================================");
   Serial.println("          CIHAZ BASLATILIYOR             ");
   Serial.println("=========================================");
   Serial.println("Serial Monitor baud: 115200");
+  Serial.println("Bu basliktan once gorulen bozuk karakterler ESP boot ROM ciktisidir.");
   Serial.println();
+  Serial.flush();
 }
 
 static String readLineFromSerial(unsigned long timeoutMs = 60000)
@@ -1390,9 +1404,11 @@ void sendBattery()
 // =========================
 void setup()
 {
+  Serial.setRxBufferSize(256);
   Serial.begin(SERIAL_BAUD);
-  delay(1200);
-  drainSerialInput();
+  Serial.setDebugOutput(false);
+  delay(SERIAL_BOOT_SETTLE_MS);
+  drainSerialInput(SERIAL_INPUT_QUIET_MS);
   printCleanBootBanner();
 
   askNetworkConfigFromSerial();
@@ -1408,7 +1424,7 @@ void setup()
 
   // 3) E-paper baslat
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
-  display.init(SERIAL_BAUD);
+  display.init(0);
 
   // 4) Ilk batarya gonderimi
   isStoreOpen = fetchStoreScheduleStatus();
