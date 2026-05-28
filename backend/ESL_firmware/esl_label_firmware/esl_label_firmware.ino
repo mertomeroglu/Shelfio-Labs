@@ -14,7 +14,9 @@
 #include "shelfio_ble_beacon.h"
 #else
 #define SHELFIO_BLE_BEACON_COMPILED 0
-void initShelfioBleBeacon() {}
+void initShelfioBleBeacon() {
+  Serial.println("Shelfio BLE Beacon disabled (shelfio_ble_beacon.h not found)");
+}
 void maintainShelfioBleBeacon() {}
 #endif
 
@@ -1364,6 +1366,8 @@ int readBatteryPercent()
   Serial.println(percent);
   Serial.println("Guc kaynagi: Batarya");
 
+
+
   return percent;
 }
 
@@ -1412,16 +1416,14 @@ void setup()
   drainSerialInput(SERIAL_INPUT_QUIET_MS);
   printCleanBootBanner();
 
+  // 1) BLE beacon baslat
+  initShelfioBleBeacon();
+
   askNetworkConfigFromSerial();
 
-  // 1) WiFi baglan
+  // 2) WiFi baglan
   connectWiFi();
   checkBackendHealth();
-
-  // 2) BLE beacon baslat
-  if (ENABLE_SHELFIO_BLE_BEACON) {
-    initShelfioBleBeacon();
-  }
 
   // 3) E-paper baslat
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
@@ -1518,14 +1520,7 @@ void loop()
         }
         updateDisplay();
       } else {
-    
         Serial.println("Etiket ayni, ekran guncellenmiyor.");
       }
-
-      if (!labelReady) {
-        labelReady = true;
-        updateDisplay();
-      }
-    }
   }
 }
