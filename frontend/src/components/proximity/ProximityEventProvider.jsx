@@ -231,6 +231,9 @@ function ProximityNotificationCard({ notification, onClose, onAction }) {
   );
 }
 
+const APP_BUILD_VERSION = '1.0.0-proximity-debug-v2';
+const APP_BUILD_TIMESTAMP = '2026-05-29T00:43:55+03:00';
+
 export default function ProximityEventProvider({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -241,6 +244,32 @@ export default function ProximityEventProvider({ children }) {
   const [activeNotification, setActiveNotification] = useState(null);
   const [notificationPrefs, setNotificationPrefs] = useState(readCustomerNotificationPrefs);
   const surface = useMemo(() => resolveSurface(location.pathname), [location.pathname]);
+
+  useEffect(() => {
+    logProximityDebug('PROXIMITY_PROVIDER_MOUNTED', {
+      version: APP_BUILD_VERSION,
+      buildTimestamp: APP_BUILD_TIMESTAMP,
+      mountedAt: new Date().toISOString(),
+      surface,
+      currentRoute: currentRoute(),
+      localStorageDebug: typeof window !== 'undefined' ? window.localStorage.getItem('shelfio.proximity.debug') : null,
+    });
+
+    if (typeof window !== 'undefined') {
+      window.triggerShelfioBeaconTest = (detail = {}) => {
+        const defaultDetail = {
+          eventType: 'ZONE_ENTER',
+          deviceId: 'esp_sut_01',
+          rssi: -65,
+          detectedAt: new Date().toISOString(),
+          source: 'WEBVIEW_BRIDGE_TEST',
+        };
+        const merged = { ...defaultDetail, ...detail };
+        console.log('[proximity-test-helper] Dispatching test beacon event:', merged);
+        window.dispatchEvent(new CustomEvent(NATIVE_BEACON_EVENT, { detail: merged }));
+      };
+    }
+  }, []);
 
   useEffect(() => {
     const refreshPrefs = () => setNotificationPrefs(readCustomerNotificationPrefs());
@@ -310,7 +339,7 @@ export default function ProximityEventProvider({ children }) {
 
   const deliverNormalizedEvent = useCallback(async ({ detail, normalized }) => {
     const route = currentRoute();
-    const activeSurface = resolveSurface(typeof window === 'undefined' ? location.pathname : window.location.pathname);
+    const activeSurface = resolveSurface(typeof window === 'undefined' ? '' : window.location.pathname);
 
     if (activeSurface === 'personnel') {
       logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'PERSONNEL_SURFACE' }));
@@ -384,6 +413,12 @@ export default function ProximityEventProvider({ children }) {
       }
       return true;
     } catch (error) {
+      logProximityDebug('PROXIMITY_POST_FAILED', buildDebugFields({
+        detail,
+        normalized,
+        route,
+        reason: error?.message || 'PROXIMITY_POST_FAILED',
+      }));
       logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({
         detail,
         normalized,
@@ -392,12 +427,13 @@ export default function ProximityEventProvider({ children }) {
       }));
       return false;
     }
-  }, [location.pathname, notificationPrefs]);
+  }, [notificationPrefs]);
 
   const flushQueuedEvents = useCallback(async () => {
     if (processingQueueRef.current) return;
     pruneQueuedEvents();
-    if (surface !== 'customer') return;
+    const activeSurface = resolveSurface(typeof window === 'undefined' ? '' : window.location.pathname);
+    if (activeSurface !== 'customer') return;
 
     processingQueueRef.current = true;
     try {
@@ -408,7 +444,7 @@ export default function ProximityEventProvider({ children }) {
     } finally {
       processingQueueRef.current = false;
     }
-  }, [deliverNormalizedEvent, pruneQueuedEvents, surface]);
+  }, [deliverNormalizedEvent, pruneQueuedEvents]);
 
   const handleBeaconDetected = useCallback(async (event) => {
     const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -421,7 +457,7 @@ export default function ProximityEventProvider({ children }) {
       return;
     }
 
-    const activeSurface = resolveSurface(typeof window === 'undefined' ? location.pathname : window.location.pathname);
+    const activeSurface = resolveSurface(typeof window === 'undefined' ? '' : window.location.pathname);
     if (activeSurface === 'personnel') {
       logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'PERSONNEL_SURFACE' }));
       return;
@@ -433,7 +469,7 @@ export default function ProximityEventProvider({ children }) {
     }
 
     await deliverNormalizedEvent({ detail, normalized });
-  }, [deliverNormalizedEvent, enqueueBeaconEvent, location.pathname]);
+  }, [deliverNormalizedEvent, enqueueBeaconEvent]);
 
   useEffect(() => {
     window.addEventListener(NATIVE_BEACON_EVENT, handleBeaconDetected);
@@ -444,7 +480,7 @@ export default function ProximityEventProvider({ children }) {
 
   useEffect(() => {
     flushQueuedEvents();
-  }, [flushQueuedEvents]);
+  }, [flushQueuedEvents, surface]);
 
   useEffect(() => {
     window.addEventListener(CUSTOMER_AUTH_UPDATED_EVENT, flushQueuedEvents);

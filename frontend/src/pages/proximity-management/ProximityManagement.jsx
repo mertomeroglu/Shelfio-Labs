@@ -71,10 +71,11 @@ const REASON_LABELS = {
   NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT: 'Etiketteki üründe aktif indirim yok',
   NO_LINKED_ESL_DEVICE: 'Beacon elektronik etiketle eşleşmemiş',
   NO_LABEL_PRODUCT: 'Etikette ürün bilgisi yok',
-  UNKNOWN_BEACON: 'Beacon eşleşmedi',
+  UNKNOWN_BEACON: 'Bilinmeyen beacon cihazı',
   NOT_AUTHENTICATED: 'Müşteri oturumu yok / geçersiz',
-  CUSTOMER_ONLY_FEATURE: 'Sadece müşteri uygulaması için',
-  INVALID_EVENT_TYPE: 'Event tipi geçersiz',
+  CUSTOMER_ONLY_FEATURE: 'Bu bildirim sadece müşteri uygulaması için',
+  INVALID_EVENT_TYPE: 'Geçersiz proximity event tipi',
+  INVALID_DEVICE_IDENTITY: 'Beacon kimliği belirsiz veya geçersiz',
   NO_MATCHING_ZONE: 'Zone eşleşmesi bulunamadı',
 };
 

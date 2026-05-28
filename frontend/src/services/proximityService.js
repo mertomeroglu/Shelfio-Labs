@@ -28,10 +28,11 @@ export function normalizeNativeBeaconEvent(detail = {}) {
   const uuid = normalizeText(detail.uuid);
   const major = parseOptionalInteger(detail.major);
   const minor = parseOptionalInteger(detail.minor);
-  const rssi = Number(detail.rssi);
+  const rssi = detail.rssi !== undefined && detail.rssi !== null && detail.rssi !== '' ? Number(detail.rssi) : NaN;
   const rawEventType = normalizeText(detail.eventType || detail.checkType).toUpperCase();
   const eventType = EVENT_TYPE_ALIASES.get(rawEventType) || rawEventType;
   const detectedAt = normalizeText(detail.detectedAt) || new Date().toISOString();
+  const source = normalizeText(detail.source || FRONTEND_SOURCE);
 
   if (!Number.isFinite(rssi)) {
     return { valid: false, reason: 'INVALID_RSSI' };
@@ -58,7 +59,7 @@ export function normalizeNativeBeaconEvent(detail = {}) {
       ...(minor !== null ? { minor } : {}),
       rssi: Math.trunc(rssi),
       eventType,
-      source: FRONTEND_SOURCE,
+      source,
       detectedAt,
     },
   };
