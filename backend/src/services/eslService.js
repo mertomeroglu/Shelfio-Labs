@@ -256,6 +256,47 @@ const resolveBridgeAssignedProductId = (device = {}, label = {}) => toOptionalSt
   120
 );
 
+const resolveAssignmentRequestedAt = (device = {}) => toOptionalString(
+  device.assignmentRequestedAt
+  || device.pendingAssignmentRequestedAt
+  || device.pendingAssignment?.requestedAt
+  || device.pendingAssignment?.assignmentRequestedAt
+  || device.lastSyncAt
+  || device.updatedAt,
+  80
+);
+
+const pickAssignmentLabelHashFields = (label = {}) => ({
+  productId: toOptionalString(label.productId || label.assignedProductId, 120),
+  productName: toOptionalString(label.productName, 240),
+  barcode: toOptionalString(label.barcode, 80),
+  template: toOptionalString(label.template || 'standard', 40) || 'standard',
+  clearLabel: Boolean(label.clearLabel),
+  price: toOptionalString(label.price, 40),
+  regularPrice: toPriceNumber(label.regularPrice ?? label.price, 0),
+  displayPrice: toPriceNumber(label.displayPrice ?? label.price, 0),
+  campaignPrice: label.campaignPrice === null || label.campaignPrice === undefined ? null : toPriceNumber(label.campaignPrice, 0),
+  hasActiveCampaign: Boolean(label.hasActiveCampaign),
+  campaignName: toOptionalString(label.campaignName, 160),
+  previousPrice: toOptionalString(label.previousPrice, 40),
+});
+
+const buildAssignmentHashInput = ({
+  deviceId,
+  assignedProductId = null,
+  template = 'standard',
+  clearLabel = false,
+  label = {},
+  assignmentRequestedAt = '',
+} = {}) => ({
+  deviceId,
+  assignedProductId: assignedProductId || null,
+  template: template || 'standard',
+  clearLabel: Boolean(clearLabel),
+  assignmentRequestedAt: assignmentRequestedAt || null,
+  label: pickAssignmentLabelHashFields(label),
+});
+
 const shouldUseBridgeAssignedLabel = ({ device = {}, label = {}, assignedProduct = null }) => {
   if (!label || typeof label !== 'object') {
     return { useBridgeLabel: false, reason: 'missing_label' };
@@ -293,7 +334,7 @@ const shouldUseBridgeAssignedLabel = ({ device = {}, label = {}, assignedProduct
     };
   }
 
-  const assignedChangedAt = toTimeMs(device.lastSyncAt);
+  const assignedChangedAt = toTimeMs(resolveAssignmentRequestedAt(device));
   const bridgeSyncedAt = Math.max(
     toTimeMs(device.bridgeAssignmentSyncedAt),
     toTimeMs(device.bridgeAssignment?.updatedAt),
@@ -455,14 +496,29 @@ const getResolvedProductById = async (productId) => {
 
 const enrichDevice = async (device, activeCampaigns = null) => {
   const normalized = normalizeDevice(device);
+  const confirmedProductId = resolveBridgeAssignedProductId(device, device.bridgeAssignedLabel || {}) || null;
+  const pendingAssignmentHash = device.pendingAssignmentHash || device.pendingAssignmentVersion || null;
+  const confirmedAssignmentHash = device.bridgeAssignmentHash || device.bridgeAssignmentVersion || null;
+  const assignmentRequestedAt = resolveAssignmentRequestedAt(device) || null;
+  const assignmentState = {
+    confirmedProductId,
+    confirmedAssignmentHash,
+    pendingAssignmentHash,
+    assignmentRequestedAt,
+    lastConfirmedAt: device.bridgeAssignmentSyncedAt || device.bridgeReportedAt || null,
+    isPending: Boolean(device.assignedProductId && (
+      String(device.assignedProductId) !== String(confirmedProductId || '')
+      || (pendingAssignmentHash && pendingAssignmentHash !== confirmedAssignmentHash)
+    )),
+  };
 
   if (!device.assignedProductId) {
-    return { ...normalized, product: null };
+    return { ...normalized, ...assignmentState, product: null };
   }
 
   const product = await getResolvedProductById(device.assignedProductId);
   if (!product) {
-    return { ...normalized, product: null };
+    return { ...normalized, ...assignmentState, product: null };
   }
 
   const stock = await stockRepo.findByProductId(product.id);
@@ -471,6 +527,7 @@ const enrichDevice = async (device, activeCampaigns = null) => {
 
   return {
     ...normalized,
+    ...assignmentState,
     product: {
       id: product.id,
       name: product.name,
@@ -549,7 +606,7 @@ export const eslService = {
       if (bridgeDecision.useBridgeLabel) {
         const bridgeResult = {
           ...cachedLabel,
-          currentLabelSource: 'bridgeAssignedLabel',
+          currentLabelSource: 'bridge-confirmed',
           assignedProductId: heartbeatedDevice.assignedProductId || cachedLabel.assignedProductId || null,
           bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, cachedLabel) || null,
           staleBridgeLabelIgnored: false,
@@ -587,7 +644,7 @@ export const eslService = {
         previousPrice: '0.00',
         origin: 'Turkiye',
         expiryDate: '',
-        currentLabelSource: 'unassigned',
+        currentLabelSource: 'clear-label',
         assignedProductId: null,
         bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
         staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
@@ -613,6 +670,13 @@ export const eslService = {
     }
 
     const product = assignedProduct;
+    const confirmedProductId = resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null;
+    const pendingAssignmentHash = heartbeatedDevice.pendingAssignmentHash || heartbeatedDevice.pendingAssignmentVersion || null;
+    const confirmedAssignmentHash = heartbeatedDevice.bridgeAssignmentHash || heartbeatedDevice.bridgeAssignmentVersion || null;
+    const isPendingAssignment = Boolean(
+      String(product.id) !== String(confirmedProductId || '')
+      || (pendingAssignmentHash && pendingAssignmentHash !== confirmedAssignmentHash)
+    );
     const computedFdtDate = resolveLastRealPriceChangeDate(product);
     const fallbackStoredFdt = product.lastPriceChangeDate || product.lastPriceChangeAt || '';
     const fdtDate = computedFdtDate || (fallbackStoredFdt ? String(fallbackStoredFdt).slice(0, 10) : '');
@@ -625,7 +689,7 @@ export const eslService = {
       deviceId: heartbeatedDevice.id,
       productId: product.id,
       assignedProductId: product.id,
-      bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
+      bridgeAssignedProductId: confirmedProductId,
       template: effectiveTemplate,
       clearLabel: false,
       productName: product.name || 'Bilinmeyen Urun',
@@ -641,7 +705,7 @@ export const eslService = {
       origin: product.origin || 'Turkiye',
       expiryDate: fdtDate,
       lastPriceChangeDate: fdtDate,
-      currentLabelSource: 'assignedProduct',
+      currentLabelSource: isPendingAssignment ? 'pending-assignment' : 'assigned-product',
       staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
     };
     console.log('[ESL DEBUG] getCurrentLabel response:', JSON.stringify(result));
@@ -749,16 +813,27 @@ export const eslService = {
 
     const product = device.assignedProductId ? await getResolvedProductById(device.assignedProductId) : null;
     const label = await buildResolvedLabelPayload({ device, product });
-    const assignmentInput = {
+    const assignmentRequestedAt = resolveAssignmentRequestedAt(device);
+    const assignmentInput = buildAssignmentHashInput({
       deviceId: device.id,
       assignedProductId: device.assignedProductId || null,
       template: device.template || 'standard',
-      lastSyncAt: device.lastSyncAt || null,
-      updatedAt: device.updatedAt || null,
       clearLabel: label.clearLabel,
       label,
-    };
+      assignmentRequestedAt,
+    });
     const assignmentHash = createAssignmentHash(assignmentInput);
+    const confirmedProductId = resolveBridgeAssignedProductId(device, device.bridgeAssignedLabel || {}) || null;
+    const confirmedHash = device.bridgeAssignmentHash || device.bridgeAssignmentVersion || null;
+    const lastConfirmedAt = device.bridgeAssignmentSyncedAt || device.bridgeReportedAt || null;
+    const isPending = Boolean(
+      device.assignedProductId
+      && (
+        String(device.assignedProductId) !== String(confirmedProductId || '')
+        || (confirmedHash && confirmedHash !== assignmentHash)
+        || (!confirmedHash && assignmentRequestedAt)
+      )
+    );
 
     return {
       deviceId: device.id,
@@ -770,6 +845,11 @@ export const eslService = {
       label,
       assignmentVersion: assignmentHash,
       assignmentHash,
+      assignmentRequestedAt: assignmentRequestedAt || null,
+      confirmedProductId,
+      confirmedAssignmentHash: confirmedHash,
+      isPending,
+      lastConfirmedAt,
       timestamp: new Date().toISOString(),
     };
   },
@@ -893,7 +973,6 @@ export const eslService = {
       ...device,
       assignedProductId: productId,
       template: effectiveTemplate,
-      lastSyncAt: now,
       updatedAt: now,
     };
     const label = await buildResolvedLabelPayload({
@@ -901,37 +980,31 @@ export const eslService = {
       product,
       activeCampaigns,
     });
-    const assignmentInput = {
+    const assignmentInput = buildAssignmentHashInput({
       deviceId,
       assignedProductId: productId,
       template: effectiveTemplate,
-      lastSyncAt: now,
-      updatedAt: now,
       clearLabel: false,
       label,
-    };
+      assignmentRequestedAt: now,
+    });
     const assignmentHash = createAssignmentHash(assignmentInput);
 
-    // Update device assignment
+    // Update desired assignment only; confirmed bridge label is written by bridgeLabelSync.
     const updatedDevice = {
       ...nextAssignmentDevice,
-      bridgeAssignmentSyncedAt: now,
-      bridgeReportedAt: now,
-      bridgeAssignmentVersion: assignmentHash,
-      bridgeAssignmentHash: assignmentHash,
-      bridgeAssignment: {
+      assignmentRequestedAt: now,
+      pendingAssignmentRequestedAt: now,
+      pendingAssignmentVersion: assignmentHash,
+      pendingAssignmentHash: assignmentHash,
+      pendingAssignment: {
         deviceId,
         assignedProductId: productId,
         template: effectiveTemplate,
-        lastSyncAt: now,
-        updatedAt: now,
+        assignmentRequestedAt: now,
         clearLabel: false,
+        label,
       },
-      bridgeAssignedProductId: productId,
-      bridgeAssignedTemplate: effectiveTemplate,
-      bridgeAssignedClearLabel: false,
-      bridgeAssignedLabel: label,
-      lastSyncAt: now,
       updatedAt: now,
     };
     await eslDeviceRepo.updateById(deviceId, updatedDevice);
@@ -993,7 +1066,7 @@ export const eslService = {
     return {
       device: await enrichDevice(updatedDevice, activeCampaigns),
       history: historyEntry,
-      message: `"${product.name}" etiketi "${device.name}" cihazına başarıyla gönderildi.`,
+      message: `"${product.name}" için "${device.name}" cihazına güncelleme isteği oluşturuldu.`,
     };
   },
 
@@ -1006,36 +1079,30 @@ export const eslService = {
       device: { ...device, assignedProductId: null, template: null },
       product: null,
     });
-    const assignmentHash = createAssignmentHash({
+    const assignmentHash = createAssignmentHash(buildAssignmentHashInput({
       deviceId,
       assignedProductId: null,
       template: null,
-      lastSyncAt: now,
-      updatedAt: now,
       clearLabel: true,
       label: clearLabelPayload,
-    });
+      assignmentRequestedAt: now,
+    }));
     const updated = {
       ...device,
       assignedProductId: null,
       template: null,
-      bridgeAssignmentSyncedAt: now,
-      bridgeReportedAt: now,
-      bridgeAssignmentVersion: assignmentHash,
-      bridgeAssignmentHash: assignmentHash,
-      bridgeAssignment: {
+      assignmentRequestedAt: now,
+      pendingAssignmentRequestedAt: now,
+      pendingAssignmentVersion: assignmentHash,
+      pendingAssignmentHash: assignmentHash,
+      pendingAssignment: {
         deviceId,
         assignedProductId: null,
         template: null,
-        lastSyncAt: now,
-        updatedAt: now,
+        assignmentRequestedAt: now,
         clearLabel: true,
+        label: clearLabelPayload,
       },
-      bridgeAssignedProductId: null,
-      bridgeAssignedTemplate: null,
-      bridgeAssignedClearLabel: true,
-      bridgeAssignedLabel: clearLabelPayload,
-      lastSyncAt: now,
       updatedAt: now,
     };
 
@@ -1043,7 +1110,7 @@ export const eslService = {
     return {
       device: await enrichDevice(updated),
       message: device.assignedProductId
-        ? `"${device.name}" cihazının etiketi başarıyla temizlendi.`
+        ? `"${device.name}" cihazı için etiket temizleme isteği oluşturuldu.`
         : `"${device.name}" cihazında temizlenecek etiket yoktu; önizleme sıfırlandı.`,
     };
   },
@@ -1201,18 +1268,24 @@ export const eslService = {
       clearLabel: payload.clearLabel ?? payload.label?.clearLabel,
     });
     const assignmentHash = toOptionalString(payload.assignmentHash || payload.assignmentVersion, 128)
-      || createAssignmentHash({
+      || createAssignmentHash(buildAssignmentHashInput({
         deviceId,
         assignedProductId: payload.assignedProductId || null,
         template: payload.template || label.template,
-        lastSyncAt: payload.lastSyncAt || null,
-        updatedAt: payload.updatedAt || null,
         clearLabel: label.clearLabel,
         label,
-      });
+        assignmentRequestedAt: payload.assignmentRequestedAt || payload.lastSyncAt || payload.updatedAt || null,
+      }));
 
     const currentHash = device.bridgeAssignmentHash || device.bridgeAssignmentVersion || '';
     if (currentHash && currentHash === assignmentHash) {
+      console.info('[ESL DEBUG] bridgeLabelSync unchanged assignment', {
+        deviceId,
+        assignmentHash,
+        previousHash: currentHash,
+        assignedProductId: payload.assignedProductId || null,
+        bridgeAssignedProductId: device.bridgeAssignedProductId || device.bridgeAssignment?.assignedProductId || null,
+      });
       return {
         deviceId,
         synced: false,
@@ -1234,12 +1307,15 @@ export const eslService = {
         template: payload.template || label.template,
         lastSyncAt: payload.lastSyncAt || null,
         updatedAt: payload.updatedAt || null,
+        assignmentRequestedAt: payload.assignmentRequestedAt || payload.lastSyncAt || payload.updatedAt || null,
         clearLabel: label.clearLabel,
       },
       bridgeAssignedProductId: payload.assignedProductId || null,
       bridgeAssignedTemplate: payload.template || label.template,
       bridgeAssignedClearLabel: label.clearLabel,
       bridgeAssignedLabel: label,
+      bridgeReportedAt: now,
+      lastSyncAt: now,
     };
 
     await eslDeviceRepo.updateById(deviceId, updated);

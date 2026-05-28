@@ -115,6 +115,7 @@ const sendLocalBridgeLabelSync = async (assignmentState) => {
       template: assignmentState?.template || 'standard',
       lastSyncAt: assignmentState?.lastSyncAt || null,
       updatedAt: assignmentState?.updatedAt || null,
+      assignmentRequestedAt: assignmentState?.assignmentRequestedAt || null,
       clearLabel: Boolean(assignmentState?.clearLabel),
       assignmentVersion: assignmentState?.assignmentVersion || assignmentState?.assignmentHash || '',
       assignmentHash: assignmentState?.assignmentHash || assignmentState?.assignmentVersion || '',
