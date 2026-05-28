@@ -1,4 +1,6 @@
-import { customerPortalRequest, refreshCustomerSession } from './customerPortalAuthService.js';
+import { customerPortalRequest, refreshCustomerSession, customerPortalAuthService } from './customerPortalAuthService.js';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const EVENT_TYPE_ALIASES = new Map([
   ['ZONE_STAY', 'DWELL'],
@@ -73,24 +75,57 @@ export function getBeaconCooldownKey(payload = {}) {
 }
 
 export const proximityService = {
+  /** POST with customer auth token (via customerPortalRequest). */
   sendEvent(payload) {
     return customerPortalRequest('/proximity/events', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
   },
-  async sendEventWithAuthRetry(payload, { onRetryAfterRefresh, onRefreshFailed } = {}) {
-    const response = await this.sendEvent(payload);
-    if (response?.shouldNotify === false && response?.reason === 'NOT_AUTHENTICATED') {
-      try {
-        await refreshCustomerSession();
-        if (typeof onRetryAfterRefresh === 'function') onRetryAfterRefresh(response);
-        return this.sendEvent(payload);
-      } catch (error) {
-        if (typeof onRefreshFailed === 'function') onRefreshFailed(error, response);
-        return response;
-      }
+
+  /**
+   * POST without auth token — used when customer is not logged in.
+   * The backend will still create a ProximityEvent record for diagnostics.
+   */
+  async sendEventRaw(payload) {
+    const res = await fetch(`${API_BASE_URL}/proximity/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data?.data ?? data;
+  },
+
+  /**
+   * Smart POST: tries auth first, falls back to raw if auth fails.
+   * Always ensures the event reaches the backend.
+   */
+  async sendEventWithAuthRetry(payload, { onRetryAfterRefresh, onRefreshFailed, onUnauthenticated } = {}) {
+    // If not logged in at all, send raw (no auth header)
+    if (!customerPortalAuthService.isLoggedIn()) {
+      if (typeof onUnauthenticated === 'function') onUnauthenticated();
+      return this.sendEventRaw(payload);
     }
-    return response;
+
+    try {
+      const response = await this.sendEvent(payload);
+      if (response?.shouldNotify === false && response?.reason === 'NOT_AUTHENTICATED') {
+        try {
+          await refreshCustomerSession();
+          if (typeof onRetryAfterRefresh === 'function') onRetryAfterRefresh(response);
+          return this.sendEvent(payload);
+        } catch (error) {
+          if (typeof onRefreshFailed === 'function') onRefreshFailed(error, response);
+          // Even if refresh fails, the first response already has eventRecorded:true
+          return response;
+        }
+      }
+      return response;
+    } catch (error) {
+      // Auth completely broken — fallback to raw POST so event is still recorded
+      if (typeof onUnauthenticated === 'function') onUnauthenticated();
+      return this.sendEventRaw(payload);
+    }
   },
 };

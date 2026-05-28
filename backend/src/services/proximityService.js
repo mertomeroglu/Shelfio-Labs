@@ -118,10 +118,12 @@ const getLocationZone = async (locationZoneId) => {
 
 const createProximityEvent = async ({ actor, input, beaconDevice, locationZone }) => {
   const prisma = await getPrisma();
+  const userId = actor?.id || 'anonymous';
+  const userType = actor?.userType || 'anonymous';
   return prisma.proximityEvent.create({
     data: {
-      userId: actor.id,
-      userType: actor.userType,
+      userId,
+      userType,
       beaconDeviceId: beaconDevice?.id || null,
       locationZoneId: locationZone?.id || beaconDevice?.locationZoneId || null,
       deviceCode: input.deviceCode || beaconDevice?.deviceCode || null,
@@ -148,6 +150,7 @@ const updateBeaconLastSeen = async (beaconDevice) => {
 
 const toResponse = ({
   eventId,
+  eventRecorded = false,
   shouldNotify = false,
   reason = null,
   notification = null,
@@ -159,6 +162,7 @@ const toResponse = ({
 }) => {
   const response = {
     success: true,
+    eventRecorded,
     shouldNotify,
   };
   if (eventId) response.eventId = eventId;
@@ -174,18 +178,15 @@ const toResponse = ({
 
 export const proximityService = {
   async recordEvent(payload = {}, actor = null) {
-    if (!actor?.id) {
-      return toResponse({ reason: 'NOT_AUTHENTICATED' });
-    }
-
-    if (actor.userType !== 'customer') {
-      return toResponse({ reason: 'CUSTOMER_ONLY_FEATURE' });
-    }
-
+    // 1. Validate & normalize payload (throws AppError on bad input)
     const input = validateAndNormalizePayload(payload);
+
+    // 2. Beacon lookup & lastSeen update
     const matchedBeacon = await findBeaconDevice(input);
     const beaconDevice = matchedBeacon ? await updateBeaconLastSeen(matchedBeacon) : null;
     const locationZone = await getLocationZone(beaconDevice?.locationZoneId);
+
+    // 3. Always create ProximityEvent record (diagnostic log)
     const proximityEvent = await createProximityEvent({
       actor,
       input,
@@ -193,22 +194,36 @@ export const proximityService = {
       locationZone,
     });
 
+    // 4. If no authenticated actor, record event but skip notification
+    if (!actor?.id) {
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'NOT_AUTHENTICATED' });
+    }
+
+    // 5. Non-customer actor: record event but skip notification
+    if (actor.userType !== 'customer') {
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'CUSTOMER_ONLY_FEATURE' });
+    }
+
+    // 6. Beacon not found in system
     if (!beaconDevice) {
-      return toResponse({ eventId: proximityEvent.id, reason: 'UNKNOWN_BEACON' });
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'UNKNOWN_BEACON' });
     }
 
+    // 7. Beacon inactive
     if (normalizeUpper(beaconDevice.status || 'ACTIVE') !== 'ACTIVE') {
-      return toResponse({ eventId: proximityEvent.id, reason: 'UNKNOWN_BEACON' });
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'UNKNOWN_BEACON' });
     }
 
+    // 8. Zone checks
     if (locationZone && locationZone.isActive === false) {
-      return toResponse({ eventId: proximityEvent.id, reason: 'NO_MATCHING_ZONE' });
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'NO_MATCHING_ZONE' });
     }
 
     if (!locationZone && !beaconDevice.locationZoneId && !beaconDevice.sectionId) {
-      return toResponse({ eventId: proximityEvent.id, reason: 'NO_MATCHING_ZONE' });
+      return toResponse({ eventId: proximityEvent.id, eventRecorded: true, reason: 'NO_MATCHING_ZONE' });
     }
 
+    // 9. Notification rule evaluation (only for authenticated customers)
     const evaluation = await notificationRuleEngine.evaluate({
       userId: actor.id,
       userType: actor.userType,
@@ -219,6 +234,7 @@ export const proximityService = {
 
     return toResponse({
       eventId: proximityEvent.id,
+      eventRecorded: true,
       shouldNotify: Boolean(evaluation.shouldNotify),
       reason: evaluation.reason || null,
       notification: evaluation.notification || null,

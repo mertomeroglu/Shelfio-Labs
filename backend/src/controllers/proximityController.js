@@ -450,10 +450,16 @@ export const proximityController = {
         const delivery = deliveryByEvent.get(row.id);
         const deliveryRule = delivery?.notificationRuleId ? ruleMap.get(delivery.notificationRuleId) || null : null;
         const diagnostics = productDiagnosticsFromMaps({ row: delivery || {}, productById, productByBarcode });
-        const actor = row.userType === 'customer'
-          ? customerMap.get(row.userId)
-          : userMap.get(row.userId);
+        const isAnonymous = !row.userId || row.userId === 'anonymous' || row.userType === 'anonymous';
+        const isNonCustomer = !isAnonymous && row.userType && row.userType !== 'customer';
+        const actor = isAnonymous
+          ? null
+          : row.userType === 'customer'
+            ? customerMap.get(row.userId)
+            : userMap.get(row.userId);
         const inferredReason = delivery?.skipReason
+          || (isAnonymous ? 'NOT_AUTHENTICATED' : null)
+          || (isNonCustomer ? 'CUSTOMER_ONLY_FEATURE' : null)
           || (!row.beaconDeviceId ? 'UNKNOWN_BEACON' : null)
           || (!row.locationZoneId ? 'NO_MATCHING_ZONE' : null);
         return {
@@ -462,8 +468,8 @@ export const proximityController = {
           beaconDevice: row.beaconDeviceId ? beaconMap.get(row.beaconDeviceId) || null : null,
           zone: row.locationZoneId ? zoneMap.get(row.locationZoneId) || null : null,
           locationZone: row.locationZoneId ? zoneMap.get(row.locationZoneId) || null : null,
-          user: row.userId ? actor || null : null,
-          actor: row.userId ? actor || null : null,
+          user: actor || null,
+          actor: actor || null,
           delivery: delivery || null,
           result: delivery?.status || 'LOGGED',
           reason: inferredReason,

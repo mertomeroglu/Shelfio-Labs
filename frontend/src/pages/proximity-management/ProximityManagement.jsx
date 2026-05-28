@@ -72,7 +72,10 @@ const REASON_LABELS = {
   NO_LINKED_ESL_DEVICE: 'Beacon elektronik etiketle eşleşmemiş',
   NO_LABEL_PRODUCT: 'Etikette ürün bilgisi yok',
   UNKNOWN_BEACON: 'Beacon eşleşmedi',
-  NOT_AUTHENTICATED: 'Müşteri oturumu yok',
+  NOT_AUTHENTICATED: 'Müşteri oturumu yok / geçersiz',
+  CUSTOMER_ONLY_FEATURE: 'Sadece müşteri uygulaması için',
+  INVALID_EVENT_TYPE: 'Event tipi geçersiz',
+  NO_MATCHING_ZONE: 'Zone eşleşmesi bulunamadı',
 };
 
 const empty = (value) => {
@@ -83,12 +86,6 @@ const empty = (value) => {
 const formatReason = (value) => {
   const code = String(value || '').trim();
   if (!code) return '-';
-  if (code === 'PRODUCT_DISCOUNT_ALREADY_NOTIFIED_12H') return 'Bu \u00fcr\u00fcn i\u00e7in yak\u0131n zamanda bildirim g\u00f6nderildi';
-  if (code === 'NO_ACTIVE_DISCOUNT_FOR_LABEL_PRODUCT') return 'Etiketteki \u00fcr\u00fcnde aktif indirim yok';
-  if (code === 'NO_LINKED_ESL_DEVICE') return 'Beacon elektronik etiketle eşleşmemiş';
-  if (code === 'NO_LABEL_PRODUCT') return 'Etikette ürün bilgisi yok';
-  if (code === 'UNKNOWN_BEACON') return 'Beacon e\u015fle\u015fmedi';
-  if (code === 'NOT_AUTHENTICATED') return 'M\u00fc\u015fteri oturumu yok';
   return REASON_LABELS[code] || code;
 };
 

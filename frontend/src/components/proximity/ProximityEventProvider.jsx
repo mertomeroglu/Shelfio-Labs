@@ -321,11 +321,6 @@ export default function ProximityEventProvider({ children }) {
       return false;
     }
 
-    if (!customerPortalAuthService.isLoggedIn()) {
-      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', buildDebugFields({ detail, normalized, route, reason: 'CUSTOMER_TOKEN_MISSING' }));
-      return false;
-    }
-
     const cooldownKey = getBeaconCooldownKey(normalized.payload);
     const now = Date.now();
     const cooldownUntil = cooldownRef.current.get(cooldownKey) || 0;
@@ -336,6 +331,7 @@ export default function ProximityEventProvider({ children }) {
     cooldownRef.current.set(cooldownKey, now + FRONTEND_COOLDOWN_MS);
 
     try {
+      const isAuthenticated = customerPortalAuthService.isLoggedIn();
       logProximityDebug('PROXIMITY_POST_STARTED', buildDebugFields({ detail, normalized, route }));
       const response = await proximityService.sendEventWithAuthRetry(normalized.payload, {
         onRetryAfterRefresh: () => {
@@ -349,11 +345,15 @@ export default function ProximityEventProvider({ children }) {
             reason: error?.message || 'CUSTOMER_REFRESH_FAILED',
           }));
         },
+        onUnauthenticated: () => {
+          logProximityDebug('PROXIMITY_POST_UNAUTHENTICATED', buildDebugFields({ detail, normalized, route, reason: 'CUSTOMER_TOKEN_MISSING' }));
+        },
       });
       logProximityDebug('PROXIMITY_POST_RESULT', buildDebugFields({ detail, normalized, route, response }));
       if (!response?.success) return true;
 
-      if (!response.shouldNotify || !response.notification) {
+      // Notification display only for authenticated customers
+      if (!isAuthenticated || !response.shouldNotify || !response.notification) {
         return true;
       }
 
@@ -398,10 +398,6 @@ export default function ProximityEventProvider({ children }) {
     if (processingQueueRef.current) return;
     pruneQueuedEvents();
     if (surface !== 'customer') return;
-    if (!customerPortalAuthService.isLoggedIn()) {
-      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', { route: currentRoute(), reason: 'CUSTOMER_TOKEN_MISSING', queuedCount: queuedEventsRef.current.length });
-      return;
-    }
 
     processingQueueRef.current = true;
     try {
@@ -428,12 +424,6 @@ export default function ProximityEventProvider({ children }) {
     const activeSurface = resolveSurface(typeof window === 'undefined' ? location.pathname : window.location.pathname);
     if (activeSurface === 'personnel') {
       logProximityDebug('BEACON_EVENT_DROPPED', buildDebugFields({ detail, normalized, route, reason: 'PERSONNEL_SURFACE' }));
-      return;
-    }
-
-    if (!customerPortalAuthService.isLoggedIn()) {
-      logProximityDebug('PROXIMITY_POST_SKIPPED_AUTH', buildDebugFields({ detail, normalized, route, reason: 'CUSTOMER_TOKEN_MISSING' }));
-      enqueueBeaconEvent({ detail, normalized, reason: 'CUSTOMER_TOKEN_MISSING' });
       return;
     }
 
