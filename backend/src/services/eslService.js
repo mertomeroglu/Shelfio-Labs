@@ -181,6 +181,8 @@ const normalizeBridgeLabel = (value = {}) => {
 
   return {
     deviceId: toOptionalString(label.deviceId, 120),
+    productId: toOptionalString(label.productId || label.assignedProductId, 120),
+    assignedProductId: toOptionalString(label.assignedProductId || label.productId, 120),
     template: toOptionalString(label.template || 'standard', 40) || 'standard',
     clearLabel: Boolean(label.clearLabel),
     productName: toOptionalString(label.productName || 'Ürün Seçilmedi', 240) || 'Ürün Seçilmedi',
@@ -235,6 +237,87 @@ const resolveTemplateForEslPricing = (template, eslPricing = {}) => {
   return requestedTemplate;
 };
 
+const isPlaceholderBarcodeValue = (value) => {
+  const barcode = toOptionalString(value, 80);
+  return !barcode || barcode === '0000000000000';
+};
+
+const toTimeMs = (value) => {
+  if (!value) return 0;
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+};
+
+const resolveBridgeAssignedProductId = (device = {}, label = {}) => toOptionalString(
+  device.bridgeAssignedProductId
+  || device.bridgeAssignment?.assignedProductId
+  || label.productId
+  || label.assignedProductId,
+  120
+);
+
+const shouldUseBridgeAssignedLabel = ({ device = {}, label = {}, assignedProduct = null }) => {
+  if (!label || typeof label !== 'object') {
+    return { useBridgeLabel: false, reason: 'missing_label' };
+  }
+
+  if (device.bridgeAssignedClearLabel === true || label.clearLabel === true) {
+    return { useBridgeLabel: false, reason: 'bridge_clear_label' };
+  }
+
+  const assignedProductId = toOptionalString(device.assignedProductId, 120);
+  if (!assignedProductId) {
+    return { useBridgeLabel: false, reason: 'unassigned_device' };
+  }
+
+  const bridgeAssignedProductId = resolveBridgeAssignedProductId(device, label);
+  if (assignedProductId && bridgeAssignedProductId && assignedProductId !== bridgeAssignedProductId) {
+    return {
+      useBridgeLabel: false,
+      reason: 'assigned_product_mismatch',
+      assignedProductId,
+      bridgeAssignedProductId,
+    };
+  }
+
+  const labelBarcode = toOptionalString(label.barcode, 80);
+  const assignedBarcode = toOptionalString(assignedProduct?.barcode, 80);
+  if (assignedProductId && assignedBarcode && !isPlaceholderBarcodeValue(labelBarcode) && labelBarcode !== assignedBarcode) {
+    return {
+      useBridgeLabel: false,
+      reason: 'assigned_barcode_mismatch',
+      assignedProductId,
+      bridgeAssignedProductId,
+      labelBarcode,
+      assignedBarcode,
+    };
+  }
+
+  const assignedChangedAt = toTimeMs(device.lastSyncAt);
+  const bridgeSyncedAt = Math.max(
+    toTimeMs(device.bridgeAssignmentSyncedAt),
+    toTimeMs(device.bridgeAssignment?.updatedAt),
+    toTimeMs(device.bridgeAssignment?.lastSyncAt)
+  );
+  if (assignedProductId && assignedChangedAt && bridgeSyncedAt && assignedChangedAt > bridgeSyncedAt) {
+    return {
+      useBridgeLabel: false,
+      reason: 'assigned_newer_than_bridge_label',
+      assignedProductId,
+      bridgeAssignedProductId,
+      assignedChangedAt: new Date(assignedChangedAt).toISOString(),
+      bridgeSyncedAt: new Date(bridgeSyncedAt).toISOString(),
+    };
+  }
+
+  return {
+    useBridgeLabel: true,
+    reason: 'bridge_label_current',
+    assignedProductId,
+    bridgeAssignedProductId,
+  };
+};
+
 const buildResolvedLabelPayload = async ({ device, product = null, activeCampaigns = null }) => {
   const template = device?.template || 'standard';
   if (!device?.assignedProductId || !product) {
@@ -260,6 +343,8 @@ const buildResolvedLabelPayload = async ({ device, product = null, activeCampaig
 
   return normalizeBridgeLabel({
     deviceId: device.id,
+    productId: product.id,
+    assignedProductId: product.id,
     template: effectiveTemplate,
     clearLabel: false,
     productName: product.name || 'Bilinmeyen Urun',
@@ -442,6 +527,10 @@ export const eslService = {
     };
     await eslDeviceRepo.updateById(deviceId, heartbeatedDevice);
 
+    const assignedProduct = heartbeatedDevice.assignedProductId
+      ? await getResolvedProductById(heartbeatedDevice.assignedProductId)
+      : null;
+
     if (heartbeatedDevice.bridgeAssignedLabel && typeof heartbeatedDevice.bridgeAssignedLabel === 'object') {
       const bridgeClearLabel = heartbeatedDevice.bridgeAssignedClearLabel
         ?? heartbeatedDevice.bridgeAssignedLabel.clearLabel
@@ -452,13 +541,38 @@ export const eslService = {
         template: heartbeatedDevice.bridgeAssignedTemplate || heartbeatedDevice.bridgeAssignedLabel.template || 'standard',
         clearLabel: bridgeClearLabel,
       });
-      console.log('[ESL DEBUG] getCurrentLabel bridge cache response:', JSON.stringify({
-        deviceId: cachedLabel.deviceId,
-        template: cachedLabel.template,
-        clearLabel: cachedLabel.clearLabel,
-        assignmentHash: heartbeatedDevice.bridgeAssignmentHash || heartbeatedDevice.bridgeAssignmentVersion || null,
-      }));
-      return cachedLabel;
+      const bridgeDecision = shouldUseBridgeAssignedLabel({
+        device,
+        label: cachedLabel,
+        assignedProduct,
+      });
+      if (bridgeDecision.useBridgeLabel) {
+        const bridgeResult = {
+          ...cachedLabel,
+          currentLabelSource: 'bridgeAssignedLabel',
+          assignedProductId: heartbeatedDevice.assignedProductId || cachedLabel.assignedProductId || null,
+          bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, cachedLabel) || null,
+          staleBridgeLabelIgnored: false,
+        };
+        console.log('[ESL DEBUG] getCurrentLabel bridge cache response:', JSON.stringify({
+          deviceId: bridgeResult.deviceId,
+          template: bridgeResult.template,
+          clearLabel: bridgeResult.clearLabel,
+          assignedProductId: bridgeResult.assignedProductId,
+          bridgeAssignedProductId: bridgeResult.bridgeAssignedProductId,
+          assignmentHash: heartbeatedDevice.bridgeAssignmentHash || heartbeatedDevice.bridgeAssignmentVersion || null,
+        }));
+        return bridgeResult;
+      }
+
+      console.warn('[ESL WARN] stale bridgeAssignedLabel ignored for current-label', {
+        deviceId,
+        reason: bridgeDecision.reason,
+        assignedProductId: bridgeDecision.assignedProductId || heartbeatedDevice.assignedProductId || null,
+        bridgeAssignedProductId: bridgeDecision.bridgeAssignedProductId || resolveBridgeAssignedProductId(heartbeatedDevice, cachedLabel) || null,
+        labelProductId: cachedLabel.productId || cachedLabel.assignedProductId || null,
+        labelBarcode: cachedLabel.barcode || null,
+      });
     }
 
     console.log('[ESL DEBUG] assignedProductId:', heartbeatedDevice.assignedProductId, 'template:', heartbeatedDevice.template);
@@ -473,11 +587,14 @@ export const eslService = {
         previousPrice: '0.00',
         origin: 'Turkiye',
         expiryDate: '',
+        currentLabelSource: 'unassigned',
+        assignedProductId: null,
+        bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
+        staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
       };
     }
 
-    const product = await getResolvedProductById(heartbeatedDevice.assignedProductId);
-    if (!product) {
+    if (!assignedProduct) {
       return {
         deviceId: heartbeatedDevice.id,
         template: heartbeatedDevice.template || 'standard',
@@ -488,9 +605,14 @@ export const eslService = {
         previousPrice: '0.00',
         origin: 'Turkiye',
         expiryDate: '',
+        currentLabelSource: 'assignedProductMissing',
+        assignedProductId: heartbeatedDevice.assignedProductId || null,
+        bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
+        staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
       };
     }
 
+    const product = assignedProduct;
     const computedFdtDate = resolveLastRealPriceChangeDate(product);
     const fallbackStoredFdt = product.lastPriceChangeDate || product.lastPriceChangeAt || '';
     const fdtDate = computedFdtDate || (fallbackStoredFdt ? String(fallbackStoredFdt).slice(0, 10) : '');
@@ -501,6 +623,9 @@ export const eslService = {
 
     const result = {
       deviceId: heartbeatedDevice.id,
+      productId: product.id,
+      assignedProductId: product.id,
+      bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
       template: effectiveTemplate,
       clearLabel: false,
       productName: product.name || 'Bilinmeyen Urun',
@@ -516,6 +641,8 @@ export const eslService = {
       origin: product.origin || 'Turkiye',
       expiryDate: fdtDate,
       lastPriceChangeDate: fdtDate,
+      currentLabelSource: 'assignedProduct',
+      staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
     };
     console.log('[ESL DEBUG] getCurrentLabel response:', JSON.stringify(result));
     return result;
@@ -762,12 +889,48 @@ export const eslService = {
     const now = new Date().toISOString();
     const actorId = String(actorUser?.id || payload.actorId || payload.userId || '').trim();
     const actorName = String(actorUser?.name || actorUser?.username || payload.actorName || payload.userName || '').trim();
-
-    // Update device assignment
-    const updatedDevice = {
+    const nextAssignmentDevice = {
       ...device,
       assignedProductId: productId,
       template: effectiveTemplate,
+      lastSyncAt: now,
+      updatedAt: now,
+    };
+    const label = await buildResolvedLabelPayload({
+      device: nextAssignmentDevice,
+      product,
+      activeCampaigns,
+    });
+    const assignmentInput = {
+      deviceId,
+      assignedProductId: productId,
+      template: effectiveTemplate,
+      lastSyncAt: now,
+      updatedAt: now,
+      clearLabel: false,
+      label,
+    };
+    const assignmentHash = createAssignmentHash(assignmentInput);
+
+    // Update device assignment
+    const updatedDevice = {
+      ...nextAssignmentDevice,
+      bridgeAssignmentSyncedAt: now,
+      bridgeReportedAt: now,
+      bridgeAssignmentVersion: assignmentHash,
+      bridgeAssignmentHash: assignmentHash,
+      bridgeAssignment: {
+        deviceId,
+        assignedProductId: productId,
+        template: effectiveTemplate,
+        lastSyncAt: now,
+        updatedAt: now,
+        clearLabel: false,
+      },
+      bridgeAssignedProductId: productId,
+      bridgeAssignedTemplate: effectiveTemplate,
+      bridgeAssignedClearLabel: false,
+      bridgeAssignedLabel: label,
       lastSyncAt: now,
       updatedAt: now,
     };
@@ -838,12 +1001,42 @@ export const eslService = {
     const device = await eslDeviceRepo.findById(deviceId);
     if (!device || isDeletedDevice(device)) throw createNotFoundError('ESL cihazı bulunamadı');
 
+    const now = new Date().toISOString();
+    const clearLabelPayload = await buildResolvedLabelPayload({
+      device: { ...device, assignedProductId: null, template: null },
+      product: null,
+    });
+    const assignmentHash = createAssignmentHash({
+      deviceId,
+      assignedProductId: null,
+      template: null,
+      lastSyncAt: now,
+      updatedAt: now,
+      clearLabel: true,
+      label: clearLabelPayload,
+    });
     const updated = {
       ...device,
       assignedProductId: null,
       template: null,
-      lastSyncAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      bridgeAssignmentSyncedAt: now,
+      bridgeReportedAt: now,
+      bridgeAssignmentVersion: assignmentHash,
+      bridgeAssignmentHash: assignmentHash,
+      bridgeAssignment: {
+        deviceId,
+        assignedProductId: null,
+        template: null,
+        lastSyncAt: now,
+        updatedAt: now,
+        clearLabel: true,
+      },
+      bridgeAssignedProductId: null,
+      bridgeAssignedTemplate: null,
+      bridgeAssignedClearLabel: true,
+      bridgeAssignedLabel: clearLabelPayload,
+      lastSyncAt: now,
+      updatedAt: now,
     };
 
     await eslDeviceRepo.updateById(deviceId, updated);

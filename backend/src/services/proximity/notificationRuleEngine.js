@@ -69,6 +69,30 @@ const resolveLinkedEslDeviceId = (beaconDevice = {}) => {
   const metadata = isObject(beaconDevice?.metadata) ? beaconDevice.metadata : {};
   return normalizeText(metadata.eslDeviceId || metadata.linkedEslDeviceId || metadata.esl_device_id) || null;
 };
+const getEslDeviceResolutionContext = async (eslDeviceId) => {
+  const id = normalizeText(eslDeviceId);
+  if (!id) return {};
+  const prisma = await getPrisma();
+  const device = await prisma.eslDevice.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      assignedProductId: true,
+      payload: true,
+    },
+  });
+  const payload = isObject(device?.payload) ? device.payload : {};
+  return {
+    id: device?.id || id,
+    assignedProductId: normalizeText(device?.assignedProductId || payload.assignedProductId) || null,
+    bridgeAssignedProductId: normalizeText(
+      payload.bridgeAssignedProductId
+      || payload.bridgeAssignment?.assignedProductId
+      || payload.bridgeAssignedLabel?.productId
+      || payload.bridgeAssignedLabel?.assignedProductId
+    ) || null,
+  };
+};
 const buildProductDetailRoute = (productId) => {
   const id = normalizeText(productId);
   return id ? `/musteri/urun/${encodeURIComponent(id)}` : null;
@@ -865,7 +889,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
     return { candidate: null, reason: 'NO_LABEL_PRODUCT' };
   }
 
-  const product = await findLabelProduct({ label, eslDevice: {} });
+  const eslDeviceContext = await getEslDeviceResolutionContext(eslDeviceId);
+  const product = await findLabelProduct({ label, eslDevice: eslDeviceContext });
   if (!product) return { candidate: null, reason: 'INVALID_PRODUCT_DETAIL_ROUTE' };
   const actionUrl = buildProductDetailRoute(product.id);
   if (!actionUrl || !isCustomerActionUrl(actionUrl) || actionUrl.startsWith('/personel')) {
@@ -878,7 +903,17 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
     productId: product.id,
     barcode: barcode || null,
     productName,
+    eslDeviceId,
+    currentLabelSource: normalizeText(label.currentLabelSource) || null,
+    assignedProductId: normalizeText(label.assignedProductId || eslDeviceContext.assignedProductId) || null,
+    bridgeAssignedProductId: normalizeText(label.bridgeAssignedProductId || eslDeviceContext.bridgeAssignedProductId) || null,
+    labelProductId: normalizeText(label.productId || label.assignedProductId) || null,
+    labelBarcode: normalizeText(label.barcode) || null,
+    resolvedProductId: product.id,
+    resolvedBarcode: product.barcode || barcode || null,
+    staleBridgeLabelIgnored: label.staleBridgeLabelIgnored === true,
   };
+  console.info('[proximity] product discount label resolution', productDiagnostic);
   const productAisle = resolveProductAisle({ product, label, context });
   const displaySectionName = normalizeText(productAisle.displaySectionName || productAisle.sectionName) || 'Yakındaki Reyon';
   const productDedupeKey = buildProductDiscountDedupeKey({ userId, productId: product.id, barcode });
@@ -941,6 +976,14 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           campaignPrice,
           offerSource: offerSignal.offerSource || 'UNKNOWN_DISCOUNT_SIGNAL',
           campaignName: normalizeText(label.campaignName) || null,
+          currentLabelSource: productDiagnostic.currentLabelSource,
+          assignedProductId: productDiagnostic.assignedProductId,
+          bridgeAssignedProductId: productDiagnostic.bridgeAssignedProductId,
+          labelProductId: productDiagnostic.labelProductId,
+          labelBarcode: productDiagnostic.labelBarcode,
+          resolvedProductId: productDiagnostic.resolvedProductId,
+          resolvedBarcode: productDiagnostic.resolvedBarcode,
+          staleBridgeLabelIgnored: productDiagnostic.staleBridgeLabelIgnored,
           zoneId: context.locationZoneId,
           zoneCode: context.zoneCode,
           zoneName: context.zoneName,
