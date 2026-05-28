@@ -589,7 +589,7 @@ export default function ESLManagement() {
       setProductSearchResults([]);
       setScanMatch(null);
       setScanError('');
-      showToast('success', 'Gönderildi', result.message);
+      showToast('success', 'İstek Oluşturuldu', result.message || 'Etiket güncellemesi kuyruğa alındı.');
     } catch (err) {
       showToast('error', 'Gönderim Hatası', err?.message || 'Etiket gönderilemedi.');
     } finally {
@@ -1021,6 +1021,11 @@ export default function ESLManagement() {
                         <Tag size={11} /> {getProductNameLabel(device.product)}
                       </div>
                     )}
+                    {device.isPending && (
+                      <div className="esl-device-pending-sync">
+                        <AlertCircle size={11} /> Cihaz güncellemesi bekleniyor
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -1181,6 +1186,10 @@ export default function ESLManagement() {
                 <div className="esl-device-info-item">
                   <span>Son Senkron</span>
                   <strong>{hasSelectedDevice ? formatDate(selectedDevice.lastSyncAt) : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>Güncelleme Durumu</span>
+                  <strong>{hasSelectedDevice ? (selectedDevice.isPending ? 'Cihaz bekleniyor' : 'Senkron') : '-'}</strong>
                 </div>
               </div>
 

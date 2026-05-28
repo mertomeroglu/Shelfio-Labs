@@ -543,6 +543,16 @@
   font-weight: 600;
 }
 
+.esl-device-pending-sync {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  font-size: 0.675rem;
+  font-weight: 600;
+  color: #92400e;
+}
+
 /*  Template Grid  */
 .esl-template-grid {
   display: grid;
