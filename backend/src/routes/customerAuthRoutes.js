@@ -8,6 +8,7 @@ router.post('/register', customerAuthController.register);
 router.post('/forgot-password', customerAuthController.forgotPassword);
 router.post('/reset-password', customerAuthController.resetPassword);
 router.post('/refresh', customerAuthController.refresh);
+router.post('/logout', authenticateCustomer, customerAuthController.logout);
 router.get('/catalog', customerAuthController.catalog);
 router.get('/catalog/:id', customerAuthController.catalogDetail);
 router.get('/catalog/:id/stock-forecast', customerAuthController.catalogStockForecast);

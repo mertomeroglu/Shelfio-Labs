@@ -1022,6 +1022,71 @@ model AccessAuditLog {
   @@map("access_audit_logs")
 }
 
+model AuditLog {
+  id            String    @id @default(uuid())
+  createdAt     DateTime  @default(now()) @map("created_at")
+  actorUserId   String?   @map("actor_user_id")
+  actorName     String?   @map("actor_name")
+  actorRole     String?   @map("actor_role")
+  actorEmail    String?   @map("actor_email")
+  action        String?
+  module        String?
+  entityType    String?   @map("entity_type")
+  entityId      String?   @map("entity_id")
+  entityLabel   String?   @map("entity_label")
+  method        String?
+  endpoint      String?
+  statusCode    Int?      @map("status_code")
+  ip            String?
+  userAgent     String?   @map("user_agent")
+  requestId     String?   @map("request_id")
+  correlationId String?   @map("correlation_id")
+  summary       String?
+  metadata      Json?
+  severity      String?   @default("info")
+  source        String?   @default("user_action")
+  archivedAt    DateTime? @map("archived_at")
+
+  @@index([createdAt])
+  @@index([actorUserId])
+  @@index([module])
+  @@index([action])
+  @@index([source])
+  @@index([statusCode])
+  @@map("audit_logs")
+}
+
+model LoginActivityLog {
+  id            String    @id @default(uuid())
+  userId        String?   @map("user_id")
+  userType      String?   @map("user_type")
+  name          String?
+  email         String?
+  username      String?
+  role          String?
+  department    String?
+  eventType     String?   @map("event_type")
+  source        String?
+  status        String?
+  ip            String?
+  userAgent     String?   @map("user_agent")
+  browser       String?
+  os            String?
+  requestId     String?   @map("request_id")
+  failureReason String?   @map("failure_reason")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  archivedAt    DateTime? @map("archived_at")
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([userType])
+  @@index([eventType])
+  @@index([source])
+  @@index([status])
+  @@index([ip])
+  @@map("login_activity_logs")
+}
+
 model CatalogImport {
   id               String    @id
   supplierId       String?   @map("supplier_id")

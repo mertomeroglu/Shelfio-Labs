@@ -1819,6 +1819,25 @@ const safeReportCell = (value) => {
   return text || '-';
 };
 
+const getAuditActorName = (row = {}) => row.actorName || row.actor || row.userName || '-';
+const getAuditActionLabel = (row = {}) => row.actionLabel || row.action || 'Kullanıcı işlemi';
+const getAuditSummary = (row = {}) => row.summary || row.details || row.detail || row.note || '-';
+const getAuditObjectLabel = (row = {}) => row.entityLabel || row.entityId || row.referenceCode || row.requestId || '-';
+const getAuditStatusLabel = (row = {}) => {
+  if (row.statusCode) return String(row.statusCode);
+  if (row.severity) return String(row.severity);
+  return '-';
+};
+const getAuditMetadataJson = (row = {}) => {
+  const value = row.metadata || row.payload || null;
+  if (!value) return 'Metadata bulunmuyor.';
+  try {
+    return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
 const loadXlsx = async () => {
   const mod = await import('xlsx');
   return mod.default || mod;
@@ -1885,6 +1904,12 @@ const resolveLoginActivityDate = (activity) => {
 
 const parseUserAgentInfo = (activity) => {
   const row = activity && typeof activity === 'object' ? activity : {};
+  if (row.os || row.browser) {
+    return {
+      os: row.os || 'Bilinmiyor',
+      browser: row.browser || 'Bilinmiyor',
+    };
+  }
   const ua = String(row.userAgent || row.browserInfo || row.device || '').toLowerCase();
 
   let os = 'Bilinmiyor';
@@ -1903,6 +1928,29 @@ const parseUserAgentInfo = (activity) => {
 
   return { os, browser };
 };
+
+const LOGIN_EVENT_LABELS = {
+  login_success: 'Başarılı giriş',
+  login_failed: 'Başarısız giriş',
+  logout: 'Çıkış',
+  token_refresh: 'Oturum yenileme',
+};
+
+const LOGIN_SOURCE_LABELS = {
+  admin_web: 'Admin/Web',
+  personnel_mobile: 'Personel Mobil',
+  customer_mobile: 'Müşteri Mobil',
+};
+
+const LOGIN_STATUS_LABELS = {
+  success: 'Başarılı',
+  failed: 'Başarısız',
+};
+
+const getLoginEventLabel = (value) => LOGIN_EVENT_LABELS[String(value || '').trim()] || String(value || '-');
+const getLoginSourceLabel = (value) => LOGIN_SOURCE_LABELS[String(value || '').trim()] || String(value || '-');
+const getLoginStatusLabel = (value) => LOGIN_STATUS_LABELS[String(value || '').trim()] || String(value || '-');
+const getLoginActorName = (row = {}) => row.name || row.userName || row.username || row.email || '-';
 
 const getLogLevelLabel = (level) => {
   if (level === 'warning') return 'Uyarı';
@@ -1934,6 +1982,9 @@ const DEFAULT_DEVELOPER_LOG_FILTERS = {
 
 const DEFAULT_AUDIT_LOG_FILTERS = {
   action: '',
+  module: '',
+  source: '',
+  status: '',
   from: '',
   to: '',
   user: '',
@@ -1942,9 +1993,11 @@ const DEFAULT_AUDIT_LOG_FILTERS = {
 
 const DEFAULT_LOGIN_ACTIVITY_FILTERS = {
   user: '',
+  eventType: '',
+  source: '',
+  status: '',
   from: '',
   to: '',
-  browser: '',
   ip: '',
   search: '',
 };
@@ -2881,12 +2934,17 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       const sourceRows = Array.isArray(rowsOverride) ? rowsOverride : (auditLogs || []);
       const rows = sourceRows.map((row) => ({
         'Tarih/Saat': formatDateTime(row.createdAt || row.at),
-        'Kullanıcı': row.actorName || row.actor || row.userName || '-',
-        Aksiyon: row.actionLabel || row.action || '-',
-        Detay: row.details || row.detail || row.summary || '-',
+        Kullanıcı: getAuditActorName(row),
+        Modül: row.module || '-',
+        İşlem: getAuditActionLabel(row),
+        'Kayıt/Nesne': getAuditObjectLabel(row),
+        Özet: getAuditSummary(row),
+        Kaynak: row.source || '-',
+        IP: row.ip || '-',
+        Durum: getAuditStatusLabel(row),
       }));
 
-      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', 'Kullanıcı': '-', Aksiyon: '-', Detay: '-' }]);
+      const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Tarih/Saat': '-', Kullanıcı: '-', Modül: '-', İşlem: '-', 'Kayıt/Nesne': '-', Özet: '-', Kaynak: '-', IP: '-', Durum: '-' }]);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Audit Log');
       XLSX.writeFile(workbook, `audit-log-raporu-${reportDate}.xlsx`);
@@ -2910,20 +2968,24 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
         [
           { text: 'Tarih/Saat', style: 'tableHeader' },
           { text: 'Kullanıcı', style: 'tableHeader' },
-          { text: 'Aksiyon', style: 'tableHeader' },
-          { text: 'Detay', style: 'tableHeader' },
+          { text: 'Modül', style: 'tableHeader' },
+          { text: 'İşlem', style: 'tableHeader' },
+          { text: 'Özet', style: 'tableHeader' },
+          { text: 'Durum', style: 'tableHeader' },
         ],
         ...sourceRows.map((row) => ([
           { text: safeReportCell(formatDateTime(row.createdAt || row.at)), style: 'tableCellSubtle' },
-          { text: safeReportCell(row.actorName || row.actor || row.userName), style: 'tableCell' },
-          { text: safeReportCell(row.actionLabel || row.action), style: 'tableCell' },
-          { text: safeReportCell(row.details || row.detail || row.summary), style: 'tableCellWrap' },
+          { text: safeReportCell(getAuditActorName(row)), style: 'tableCell' },
+          { text: safeReportCell(row.module), style: 'tableCell' },
+          { text: safeReportCell(getAuditActionLabel(row)), style: 'tableCell' },
+          { text: safeReportCell(getAuditSummary(row)), style: 'tableCellWrap' },
+          { text: safeReportCell(getAuditStatusLabel(row)), style: 'tableCell' },
         ])),
       ];
 
       const docDefinition = {
         pageSize: 'A4',
-        pageOrientation: 'portrait',
+        pageOrientation: 'landscape',
         pageMargins: [36, 46, 36, 42],
         defaultStyle: {
           font: 'Roboto',
@@ -2956,7 +3018,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               headerRows: 1,
               dontBreakRows: true,
               keepWithHeaderRows: 1,
-              widths: [92, 90, 110, '*'],
+              widths: [92, 90, 70, 120, '*', 52],
               body: tableBody,
             },
             layout: {
@@ -3192,9 +3254,12 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     const sheetRows = rows.map((item) => {
       const { os, browser } = parseUserAgentInfo(item);
       return {
-        'Personel Adı': item.userName || '-',
-        'Sicil No': item.registerPin || '-',
-        'E-posta': item.email || item.username || '-',
+        'Kullanıcı': getLoginActorName(item),
+        Rol: item.role || '-',
+        Kaynak: getLoginSourceLabel(item.source),
+        Olay: getLoginEventLabel(item.eventType),
+        Durum: getLoginStatusLabel(item.status),
+        'E-posta/Kullanıcı Adı': item.email || item.username || '-',
         'IP Adresi': item.ipAddress || item.ip || '-',
         'İşletim Sistemi': os,
         'Tarayıcı': browser,
@@ -3202,7 +3267,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ 'Personel Adı': '-', 'Sicil No': '-', 'E-posta': '-', 'IP Adresi': '-', 'İşletim Sistemi': '-', 'Tarayıcı': '-', 'Tarih/Saat': '-' }]);
+    const worksheet = XLSX.utils.json_to_sheet(sheetRows.length ? sheetRows : [{ Kullanıcı: '-', Rol: '-', Kaynak: '-', Olay: '-', Durum: '-', 'E-posta/Kullanıcı Adı': '-', 'IP Adresi': '-', 'İşletim Sistemi': '-', Tarayıcı: '-', 'Tarih/Saat': '-' }]);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Giriş Aktiviteleri');
     XLSX.writeFile(workbook, `login-aktivite-raporu-${toReportDate()}.xlsx`);
@@ -3224,21 +3289,22 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       const reportDate = toReportDate();
       const tableBody = [
         [
-          { text: 'Personel Adı', style: 'tableHeader' },
-          { text: 'Sicil No', style: 'tableHeader' },
-          { text: 'E-posta', style: 'tableHeader' },
+          { text: 'Kullanıcı', style: 'tableHeader' },
+          { text: 'Rol', style: 'tableHeader' },
+          { text: 'Kaynak', style: 'tableHeader' },
+          { text: 'Olay', style: 'tableHeader' },
           { text: 'IP Adresi', style: 'tableHeader' },
-          { text: 'İşletim Sistemi', style: 'tableHeader' },
+          { text: 'Durum', style: 'tableHeader' },
           { text: 'Tarih/Saat', style: 'tableHeader' },
         ],
         ...rows.map((item) => {
-          const { os } = parseUserAgentInfo(item);
           return [
-            { text: safeReportCell(item.userName), style: 'tableCell' },
-            { text: safeReportCell(item.registerPin), style: 'tableCell' },
-            { text: safeReportCell(item.email || item.username), style: 'tableCellWrap' },
+            { text: safeReportCell(getLoginActorName(item)), style: 'tableCell' },
+            { text: safeReportCell(item.role), style: 'tableCell' },
+            { text: safeReportCell(getLoginSourceLabel(item.source)), style: 'tableCell' },
+            { text: safeReportCell(getLoginEventLabel(item.eventType)), style: 'tableCell' },
             { text: safeReportCell(item.ipAddress || item.ip), style: 'tableCell' },
-            { text: safeReportCell(os), style: 'tableCell' },
+            { text: safeReportCell(getLoginStatusLabel(item.status)), style: 'tableCell' },
             { text: safeReportCell(formatDateTime(resolveLoginActivityDate(item))), style: 'tableCellSubtle' },
           ];
         }),
@@ -3279,7 +3345,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
               headerRows: 1,
               dontBreakRows: true,
               keepWithHeaderRows: 1,
-              widths: [86, 52, 112, 76, 74, '*'],
+              widths: [78, 46, 86, 74, 66, 54, '*'],
               body: tableBody,
             },
             layout: {
@@ -3457,21 +3523,69 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
   }, [auditLogs]);
 
+  const auditModules = useMemo(() => {
+    const values = new Set();
+    (auditLogs || []).forEach((row) => {
+      const value = String(row.module || '').trim();
+      if (value) values.add(value);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+  }, [auditLogs]);
+
+  const auditSources = useMemo(() => {
+    const values = new Set();
+    (auditLogs || []).forEach((row) => {
+      const value = String(row.source || '').trim();
+      if (value) values.add(value);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+  }, [auditLogs]);
+
+  const auditStatuses = useMemo(() => {
+    const values = new Set();
+    (auditLogs || []).forEach((row) => {
+      const value = String(row.statusCode || row.severity || '').trim();
+      if (value) values.add(value);
+    });
+    return Array.from(values).sort((a, b) => String(a).localeCompare(String(b), 'tr-TR'));
+  }, [auditLogs]);
+
   const loginUsers = useMemo(() => {
     const values = new Set();
     (loginActivities || []).forEach((row) => {
-      const value = String(row.userName || row.username || '').trim();
+      const value = String(getLoginActorName(row)).trim();
+      if (value && value !== '-') values.add(value);
+      const email = String(row.email || '').trim();
+      if (email) values.add(email);
+      const username = String(row.username || '').trim();
+      if (username) values.add(username);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+  }, [loginActivities]);
+
+  const loginEventOptions = useMemo(() => {
+    const values = new Set(Object.keys(LOGIN_EVENT_LABELS));
+    (loginActivities || []).forEach((row) => {
+      const value = String(row.eventType || '').trim();
       if (value) values.add(value);
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
   }, [loginActivities]);
 
-  const loginBrowserOptions = useMemo(() => {
-    const values = new Set();
+  const loginSourceOptions = useMemo(() => {
+    const values = new Set(Object.keys(LOGIN_SOURCE_LABELS));
     (loginActivities || []).forEach((row) => {
-      const parsed = parseUserAgentInfo(row);
-      const value = String(parsed.browser || '').trim();
-      if (value && value !== 'Bilinmiyor') values.add(value);
+      const value = String(row.source || '').trim();
+      if (value) values.add(value);
+    });
+    return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+  }, [loginActivities]);
+
+  const loginStatusOptions = useMemo(() => {
+    const values = new Set(Object.keys(LOGIN_STATUS_LABELS));
+    (loginActivities || []).forEach((row) => {
+      const value = String(row.status || '').trim();
+      if (value) values.add(value);
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b, 'tr-TR'));
   }, [loginActivities]);
@@ -3495,10 +3609,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       if ((active.from || active.to) && !isDateInRange(rowDate, active.from, active.to)) return false;
       const action = String(row.actionLabel || row.action || '');
       const userName = String(row.actorName || row.actor || row.userName || '');
+      const moduleName = String(row.module || '');
+      const sourceName = String(row.source || '');
+      const statusCode = String(row.statusCode || row.severity || '');
       if (active.action && action !== active.action) return false;
       if (active.user && userName !== active.user) return false;
+      if (active.module && moduleName !== active.module) return false;
+      if (active.source && sourceName !== active.source) return false;
+      if (active.status && statusCode !== active.status) return false;
       if (query) {
-        const haystack = [action, userName, row.details, row.detail, row.summary, row.id]
+        const haystack = [action, userName, moduleName, sourceName, row.entityType, row.entityId, row.entityLabel, row.endpoint, row.details, row.detail, row.summary, row.id]
           .filter(Boolean)
           .join(' ')
           .toLocaleLowerCase('tr-TR');
@@ -3515,19 +3635,29 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       if (!row || typeof row !== 'object') return false;
       const loginDate = resolveLoginActivityDate(row);
       if ((active.from || active.to) && !isDateInRange(loginDate, active.from, active.to)) return false;
-      const userName = String(row.userName || row.username || '');
+      const userName = String(getLoginActorName(row));
       const ipValue = String(row.ipAddress || row.ip || '');
-      const browser = parseUserAgentInfo(row).browser;
-      if (active.user && userName !== active.user) return false;
-      if (active.browser && browser !== active.browser) return false;
+      const eventType = String(row.eventType || '');
+      const source = String(row.source || '');
+      const status = String(row.status || '');
+      if (active.user && userName !== active.user && row.email !== active.user && row.username !== active.user) return false;
+      if (active.eventType && eventType !== active.eventType) return false;
+      if (active.source && source !== active.source) return false;
+      if (active.status && status !== active.status) return false;
       if (active.ip && !ipValue.toLocaleLowerCase('tr-TR').includes(String(active.ip).toLocaleLowerCase('tr-TR'))) return false;
       if (query) {
         const parsed = parseUserAgentInfo(row);
         const haystack = [
           userName,
-          row.registerPin,
           row.email,
           row.username,
+          row.role,
+          row.department,
+          getLoginSourceLabel(source),
+          getLoginEventLabel(eventType),
+          getLoginStatusLabel(status),
+          row.failureReason,
+          row.requestId,
           ipValue,
           parsed.os,
           parsed.browser,
@@ -3634,6 +3764,10 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
   };
 
   const handleClearLogRecords = async (type = activityLogTab) => {
+    if (type === 'audit') {
+      setToast({ type: 'warning', title: 'Audit Log', message: 'Audit kayıtları güvenlik nedeniyle bu ekrandan temizlenemez.' });
+      return;
+    }
     const labels = {
       activity: 'aktivite kayıtları',
       audit: 'audit kayıtları',
@@ -8652,7 +8786,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                       className={`s-activity-log-tab ${activityLogTab === 'activity' ? 'is-active' : ''}`}
                       onClick={() => setActivityLogTab('activity')}
                     >
-                      {formatTabCount('Aktivite', loginActivitiesTotal)}
+                      {formatTabCount('Giriş Aktiviteleri', loginActivitiesTotal)}
                     </button>
                     <button
                       type="button"
@@ -8691,8 +8825,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         <div className="s-card-header s-card-header-tight">
                           <div className="s-card-icon s-icon-slate"><ShieldCheck size={18} /></div>
                           <div className="s-card-header-copy">
-                            <h3 className="s-card-title">Son Giriş Aktiviteleri</h3>
-                            <p className="s-card-desc">Sisteme yapılan başarılı girişler ve cihaz bilgileri</p>
+                            <h3 className="s-card-title">Giriş Aktiviteleri</h3>
+                            <p className="s-card-desc">Oturum, giriş güvenliği ve cihaz bilgileri</p>
                           </div>
                           <div className="s-login-activity-actions">
                             <button type="button" className="s-audit-btn" onClick={openLoginActivityManagerModal}>
@@ -8713,20 +8847,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         {loginActivities.length ? (
                           <div className="s-login-activity-list">
                             {loginActivities.map((activity) => {
-                              const { os, browser } = parseUserAgentInfo(activity);
+                              const { browser } = parseUserAgentInfo(activity);
                               const loginDate = resolveLoginActivityDate(activity);
                               return (
                                 <article className="s-login-activity-item" key={activity.id}>
                                   <div className="s-login-activity-main">
-                                    <strong>{activity.userName || 'Kullanıcı'}</strong>
-                                    <span>Kullanıcı Adı: {activity.username || '-'}</span>
-                                    <span>Sicil No: {activity.registerPin || '-'}</span>
-                                    <span>Giriş Saati: {formatDateTime(loginDate)}</span>
+                                    <strong>{getLoginActorName(activity)}</strong>
+                                    <span>Rol: {activity.role || '-'}</span>
+                                    <span>Kaynak: {getLoginSourceLabel(activity.source)}</span>
+                                    <span>Olay: {getLoginEventLabel(activity.eventType)}</span>
+                                    <span>Zaman: {formatDateTime(loginDate)}</span>
                                   </div>
                                   <div className="s-login-activity-meta">
                                     <span>IP: {activity.ipAddress || activity.ip || 'IP yok'}</span>
-                                    <span>İşletim Sistemi: {os}</span>
                                     <span>Tarayıcı: {browser}</span>
+                                    <span>Durum: {getLoginStatusLabel(activity.status)}</span>
                                   </div>
                                 </article>
                               );
@@ -8744,20 +8879,11 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                           <div className="s-card-icon s-icon-slate"><Shield size={18} /></div>
                           <div className="s-card-header-copy">
                             <h3 className="s-card-title">Audit Log</h3>
-                            <p className="s-card-desc">Yapilan kritik ayar değişikliklerini izleyin</p>
+                            <p className="s-card-desc">Kullanıcı işlem geçmişini izleyin</p>
                           </div>
                           <div className="s-login-activity-actions">
                             <button type="button" className="s-audit-btn" onClick={openAuditLogManagerModal}>
                               Detay
-                            </button>
-                            <button
-                              type="button"
-                              className="s-audit-btn s-audit-btn-icon s-audit-btn-danger"
-                              onClick={() => { void handleClearLogRecords('audit'); }}
-                              aria-label="Detay içeriğini temizle"
-                              title="Detay içeriğini temizle"
-                            >
-                              <Eraser size={14} />
                             </button>
                           </div>
                         </div>
@@ -8767,8 +8893,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                             {auditLogs.slice(0, 16).map((log) => (
                               <article className="s-audit-log-item" key={log.id}>
                                 <div className="s-audit-log-main">
-                                  <strong>{log.actionLabel || log.action || 'Ayar işlemi'}</strong>
-                                  <span>{log.actorName || 'Sistem'}</span>
+                                  <strong>{getAuditActionLabel(log)}</strong>
+                                  <span>{log.actorName || 'Sistem'} - {log.module || 'modul yok'}</span>
                                 </div>
                                 <div className="s-audit-log-meta">
                                   <time dateTime={log.createdAt}>{formatDateTime(log.createdAt)}</time>
@@ -9581,7 +9707,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={auditModalOpen}
         title="Audit Log Detayı"
-        description="Seçilen ayar değişikliği kaydıni read-only olarak inceleyin."
+        description="Seçilen kullanıcı işlem kaydını read-only olarak inceleyin."
         headerIcon={<FileText size={16} />}
         modalClassName="product-form-fit-modal s-audit-detail-modal"
         onClose={() => {
@@ -9591,43 +9717,95 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       >
         <div className="modal-form modal-structured-form s-audit-detail-form">
           <div className="modal-form-body-scroll s-audit-detail-scroll s-log-detail-body">
-            <FormSection title="Kayıt Özeti" description="İşlem, kullanıcı ve zaman bilgileri.">
+            <FormSection title="Kayıt Özeti" description="İşlem, kullanıcı, kaynak ve durum bilgileri.">
               <FormGrid className="s-log-detail-grid">
-                <label className="field-group col-4 s-log-detail-readonly-field">
+                <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>İşlem</span>
-                  <input type="text" value={selectedAuditLog?.actionLabel || selectedAuditLog?.action || '-'} readOnly />
+                  <input type="text" value={getAuditActionLabel(selectedAuditLog || {})} readOnly />
                 </label>
-                <label className="field-group col-4 s-log-detail-readonly-field">
-                  <span>Yapan</span>
-                  <input type="text" value={selectedAuditLog?.actorName || '-'} readOnly />
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Kullanıcı</span>
+                  <input type="text" value={getAuditActorName(selectedAuditLog || {})} readOnly />
                 </label>
-                <label className="field-group col-4 s-log-detail-readonly-field">
+                <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>Zaman</span>
                   <input type="text" value={formatDateTime(selectedAuditLog?.createdAt || selectedAuditLog?.at)} readOnly />
                 </label>
-                <label className="field-group col-4 s-log-detail-readonly-field">
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Durum</span>
+                  <input type="text" value={getAuditStatusLabel(selectedAuditLog || {})} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>Kayıt ID</span>
                   <input type="text" value={selectedAuditLog?.id || '-'} readOnly />
                 </label>
-                <label className="field-group col-12 s-log-detail-readonly-field s-log-detail-changed-field">
-                  <span>Değişen Alanlar</span>
-                  <textarea
-                    value={Array.isArray(selectedAuditLog?.changedKeys) && selectedAuditLog.changedKeys.length ?
-                       selectedAuditLog.changedKeys.join(', ')
-                      : 'Değişen alan bilgisi bulunmuyor.'}
-                    readOnly
-                    rows={3}
-                  />
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Modül</span>
+                  <input type="text" value={selectedAuditLog?.module || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Kaynak</span>
+                  <input type="text" value={selectedAuditLog?.source || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Rol</span>
+                  <input type="text" value={selectedAuditLog?.actorRole || '-'} readOnly />
+                </label>
+                <label className="field-group col-6 s-log-detail-readonly-field">
+                  <span>E-posta</span>
+                  <input type="text" value={selectedAuditLog?.actorEmail || '-'} readOnly />
+                </label>
+                <label className="field-group col-6 s-log-detail-readonly-field">
+                  <span>Kayıt / Nesne</span>
+                  <input type="text" value={getAuditObjectLabel(selectedAuditLog || {})} readOnly />
                 </label>
               </FormGrid>
             </FormSection>
 
-            <FormSection title="Aksiyon Detayı" description="Log mesajı ve açıklama içeriği.">
+            <FormSection title="İstek Bilgisi" description="Endpoint, method, IP ve istek izleme bilgileri.">
+              <FormGrid className="s-log-detail-grid">
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Method</span>
+                  <input type="text" value={selectedAuditLog?.method || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Durum Kodu</span>
+                  <input type="text" value={selectedAuditLog?.statusCode || '-'} readOnly />
+                </label>
+                <label className="field-group col-6 s-log-detail-readonly-field">
+                  <span>Endpoint</span>
+                  <input type="text" value={selectedAuditLog?.endpoint || '-'} readOnly />
+                </label>
+                <label className="field-group col-4 s-log-detail-readonly-field">
+                  <span>Request ID</span>
+                  <input type="text" value={selectedAuditLog?.requestId || selectedAuditLog?.correlationId || '-'} readOnly />
+                </label>
+                <label className="field-group col-4 s-log-detail-readonly-field">
+                  <span>IP</span>
+                  <input type="text" value={selectedAuditLog?.ip || '-'} readOnly />
+                </label>
+                <label className="field-group col-4 s-log-detail-readonly-field">
+                  <span>User Agent</span>
+                  <input type="text" value={selectedAuditLog?.userAgent || '-'} readOnly />
+                </label>
+              </FormGrid>
+            </FormSection>
+
+            <FormSection title="Aksiyon Detayı" description="İşlem özeti ve sanitize edilmiş metadata.">
               <FormGrid className="s-log-detail-grid">
                 <label className="field-group col-12 s-log-detail-readonly-field">
-                  <span>Detay</span>
+                  <span>Özet</span>
                   <textarea
-                    value={formatLogDetailsForDisplay(selectedAuditLog?.details || selectedAuditLog?.detail || selectedAuditLog?.summary || selectedAuditLog?.note, 'Detay içeriği bulunmuyor.')}
+                    value={formatLogDetailsForDisplay(getAuditSummary(selectedAuditLog || {}), 'Özet içeriği bulunmuyor.')}
+                    readOnly
+                    rows={4}
+                    className="s-log-detail-textarea"
+                  />
+                </label>
+                <label className="field-group col-12 s-log-detail-readonly-field">
+                  <span>Metadata JSON</span>
+                  <textarea
+                    value={getAuditMetadataJson(selectedAuditLog || {})}
                     readOnly
                     rows={8}
                     className="s-log-detail-textarea"
@@ -9790,7 +9968,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={loginActivityDetailModalOpen}
         title="Giriş Aktivitesi Detayı"
-        description="Seçilen giriş kaydıni read-only olarak inceleyin."
+        description="Seçilen oturum güvenliği kaydını read-only olarak inceleyin."
         headerIcon={<ShieldCheck size={16} />}
         modalClassName="product-form-fit-modal s-audit-detail-modal"
         onClose={() => {
@@ -9800,27 +9978,43 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       >
         <div className="modal-form modal-structured-form s-audit-detail-form">
           <div className="modal-form-body-scroll s-audit-detail-scroll s-log-detail-body">
-            <FormSection title="Kayıt Özeti" description="Kullanıcı, cihaz ve zaman bilgileri.">
+            <FormSection title="Kayıt Özeti" description="Kullanıcı, kaynak, olay ve zaman bilgileri.">
               <FormGrid className="s-log-detail-grid">
-                <label className="field-group col-4 s-log-detail-readonly-field">
+                <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>Kullanıcı</span>
-                  <input type="text" value={selectedLoginActivity?.userName || selectedLoginActivity?.username || '-'} readOnly />
+                  <input type="text" value={getLoginActorName(selectedLoginActivity || {})} readOnly />
                 </label>
-                <label className="field-group col-2 s-log-detail-readonly-field">
-                  <span>Sicil No</span>
-                  <input type="text" value={selectedLoginActivity?.registerPin || '-'} readOnly />
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>E-posta / Kullanıcı Adı</span>
+                  <input type="text" value={selectedLoginActivity?.email || selectedLoginActivity?.username || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Rol</span>
+                  <input type="text" value={selectedLoginActivity?.role || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Departman</span>
+                  <input type="text" value={selectedLoginActivity?.department || '-'} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Kaynak</span>
+                  <input type="text" value={getLoginSourceLabel(selectedLoginActivity?.source)} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Olay</span>
+                  <input type="text" value={getLoginEventLabel(selectedLoginActivity?.eventType)} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Durum</span>
+                  <input type="text" value={getLoginStatusLabel(selectedLoginActivity?.status)} readOnly />
+                </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Zaman</span>
+                  <input type="text" value={formatDateTime(resolveLoginActivityDate(selectedLoginActivity))} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>IP</span>
                   <input type="text" value={selectedLoginActivity?.ipAddress || selectedLoginActivity?.ip || '-'} readOnly />
-                </label>
-                <label className="field-group col-3 s-log-detail-readonly-field">
-                  <span>Giriş Zamani</span>
-                  <input type="text" value={formatDateTime(resolveLoginActivityDate(selectedLoginActivity))} readOnly />
-                </label>
-                <label className="field-group col-6 s-log-detail-readonly-field">
-                  <span>E-posta</span>
-                  <input type="text" value={selectedLoginActivity?.email || selectedLoginActivity?.username || '-'} readOnly />
                 </label>
                 <label className="field-group col-3 s-log-detail-readonly-field">
                   <span>İşletim Sistemi</span>
@@ -9830,6 +10024,16 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <span>Tarayıcı</span>
                   <input type="text" value={parseUserAgentInfo(selectedLoginActivity).browser} readOnly />
                 </label>
+                <label className="field-group col-3 s-log-detail-readonly-field">
+                  <span>Request ID</span>
+                  <input type="text" value={selectedLoginActivity?.requestId || '-'} readOnly />
+                </label>
+                {selectedLoginActivity?.failureReason ? (
+                  <label className="field-group col-12 s-log-detail-readonly-field">
+                    <span>Başarısızlık Sebebi</span>
+                    <input type="text" value={selectedLoginActivity.failureReason} readOnly />
+                  </label>
+                ) : null}
                 <label className="field-group col-12 s-log-detail-readonly-field">
                   <span>User-Agent</span>
                   <textarea
@@ -9860,7 +10064,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <FormModal
         isOpen={auditLogManagerModalOpen}
         title="Audit Log Yönetimi"
-        description="Filtreleme, dışa aktarma ve kayıt inceleme işlemlerini buradan yapın"
+        description="Sistemdeki kullanıcı işlem geçmişini filtreleyin, dışa aktarın ve inceleyin"
         headerIcon={<Shield size={16} />}
         onClose={() => setAuditLogManagerModalOpen(false)}
         modalClassName="product-form-fit-modal s-devlog-manager-modal"
@@ -9886,6 +10090,27 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <label className="field-group s-devlog-field s-devlog-field-from s-devlog-field-date">
                   <span>Başlangıç</span>
                   <input type="date" name="from" value={auditLogFilters.from} onChange={handleAuditLogFilterChange} />
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>Modul</span>
+                  <select name="module" value={auditLogFilters.module} onChange={handleAuditLogFilterChange}>
+                    <option value="">Tumu</option>
+                    {auditModules.map((item) => <option key={item} value={item}>{item}</option>)}
+                  </select>
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>Kaynak</span>
+                  <select name="source" value={auditLogFilters.source} onChange={handleAuditLogFilterChange}>
+                    <option value="">Tumu</option>
+                    {auditSources.map((item) => <option key={item} value={item}>{item}</option>)}
+                  </select>
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>Durum</span>
+                  <select name="status" value={auditLogFilters.status} onChange={handleAuditLogFilterChange}>
+                    <option value="">Tumu</option>
+                    {auditStatuses.map((item) => <option key={item} value={item}>{item}</option>)}
+                  </select>
                 </label>
                 <label className="field-group s-devlog-field s-devlog-field-to s-devlog-field-date">
                   <span>Bitiş</span>
@@ -9915,19 +10140,33 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <thead>
                       <tr>
                         <th>Tarih & Saat</th>
-                        <th>İşlem</th>
                         <th>Kullanıcı</th>
+                        <th>Modül</th>
+                        <th>İşlem</th>
+                        <th>Kayıt / Nesne</th>
+                        <th>Özet</th>
+                        <th>Kaynak</th>
+                        <th>IP</th>
+                        <th>Durum</th>
                         <th>Detay</th>
-                        <th>İncele</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredAuditLogs.map((row) => (
                         <tr key={row.id}>
                           <td className="s-devlog-cell-time">{formatDateTime(row.createdAt || row.at)}</td>
-                          <td className="s-devlog-cell-action">{row.actionLabel || row.action || '-'}</td>
-                          <td className="s-devlog-cell-user">{row.actorName || row.actor || row.userName || '-'}</td>
-                          <td className="s-devlog-cell-message">{row.details || row.detail || row.summary || '-'}</td>
+                          <td className="s-devlog-cell-user">{getAuditActorName(row)}</td>
+                          <td className="s-devlog-cell-source">{row.module || '-'}</td>
+                          <td className="s-devlog-cell-action">{getAuditActionLabel(row)}</td>
+                          <td className="s-devlog-cell-action">{getAuditObjectLabel(row)}</td>
+                          <td className="s-devlog-cell-message">{getAuditSummary(row)}</td>
+                          <td className="s-devlog-cell-source">{row.source || '-'}</td>
+                          <td className="s-devlog-cell-action">{row.ip || '-'}</td>
+                          <td className="s-devlog-cell-level">
+                            <span className={`s-log-level-badge level-${String(row.severity || 'info').toLowerCase()}`}>
+                              {getAuditStatusLabel(row)}
+                            </span>
+                          </td>
                           <td className="s-devlog-cell-detail">
                             <button
                               type="button"
@@ -9955,8 +10194,8 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
 
       <FormModal
         isOpen={loginActivityManagerModalOpen}
-        title="Son Giriş Aktiviteleri Yönetimi"
-        description="Filtreleme, dışa aktarma ve kayıt inceleme işlemlerini buradan yapın"
+        title="Giriş Aktiviteleri Yönetimi"
+        description="Oturum güvenliği kayıtlarını filtreleyin, dışa aktarın ve inceleyin"
         headerIcon={<ShieldCheck size={16} />}
         onClose={() => setLoginActivityManagerModalOpen(false)}
         modalClassName="product-form-fit-modal s-devlog-manager-modal"
@@ -9973,10 +10212,24 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   </select>
                 </label>
                 <label className="field-group s-devlog-field s-devlog-field-level">
-                  <span>Tarayıcı</span>
-                  <select name="browser" value={loginActivityFilters.browser} onChange={handleLoginActivityFilterChange}>
+                  <span>Olay Tipi</span>
+                  <select name="eventType" value={loginActivityFilters.eventType} onChange={handleLoginActivityFilterChange}>
                     <option value="">Tümü</option>
-                    {loginBrowserOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                    {loginEventOptions.map((item) => <option key={item} value={item}>{getLoginEventLabel(item)}</option>)}
+                  </select>
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>Kaynak</span>
+                  <select name="source" value={loginActivityFilters.source} onChange={handleLoginActivityFilterChange}>
+                    <option value="">Tümü</option>
+                    {loginSourceOptions.map((item) => <option key={item} value={item}>{getLoginSourceLabel(item)}</option>)}
+                  </select>
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>Durum</span>
+                  <select name="status" value={loginActivityFilters.status} onChange={handleLoginActivityFilterChange}>
+                    <option value="">Tümü</option>
+                    {loginStatusOptions.map((item) => <option key={item} value={item}>{getLoginStatusLabel(item)}</option>)}
                   </select>
                 </label>
                 <label className="field-group s-devlog-field s-devlog-field-from s-devlog-field-date">
@@ -9986,6 +10239,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                 <label className="field-group s-devlog-field s-devlog-field-to s-devlog-field-date">
                   <span>Bitiş</span>
                   <input type="date" name="to" value={loginActivityFilters.to} onChange={handleLoginActivityFilterChange} />
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-level">
+                  <span>IP</span>
+                  <input type="text" name="ip" value={loginActivityFilters.ip} onChange={handleLoginActivityFilterChange} placeholder="IP adresi" />
+                </label>
+                <label className="field-group s-devlog-field s-devlog-field-search">
+                  <span>Arama</span>
+                  <input type="text" name="search" value={loginActivityFilters.search} onChange={handleLoginActivityFilterChange} placeholder="Kullanıcı, rol, cihaz, sebep" />
                 </label>
               </div>
 
@@ -10006,12 +10267,15 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <table className="s-devlog-table">
                     <thead>
                       <tr>
-                        <th>Tarih & Saat</th>
+                        <th>Tarih</th>
                         <th>Kullanıcı</th>
-                        <th>Sicil No</th>
-                        <th>Tarayıcı</th>
+                        <th>Rol</th>
+                        <th>Kaynak</th>
+                        <th>Olay</th>
                         <th>IP</th>
-                        <th>İncele</th>
+                        <th>Tarayıcı</th>
+                        <th>Durum</th>
+                        <th>Detay</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -10020,10 +10284,17 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                         return (
                           <tr key={row.id}>
                             <td className="s-devlog-cell-time">{formatDateTime(resolveLoginActivityDate(row))}</td>
-                            <td className="s-devlog-cell-user">{row.userName || row.username || '-'}</td>
-                            <td className="s-devlog-cell-action">{row.registerPin || '-'}</td>
-                            <td className="s-devlog-cell-source">{parsed.browser}</td>
+                            <td className="s-devlog-cell-user">{getLoginActorName(row)}</td>
+                            <td className="s-devlog-cell-action">{row.role || '-'}</td>
+                            <td className="s-devlog-cell-source">{getLoginSourceLabel(row.source)}</td>
+                            <td className="s-devlog-cell-action">{getLoginEventLabel(row.eventType)}</td>
                             <td className="s-devlog-cell-action">{row.ipAddress || row.ip || '-'}</td>
+                            <td className="s-devlog-cell-source">{parsed.browser}</td>
+                            <td className="s-devlog-cell-level">
+                              <span className={`s-log-level-badge level-${row.status === 'failed' ? 'error' : 'info'}`}>
+                                {getLoginStatusLabel(row.status)}
+                              </span>
+                            </td>
                             <td className="s-devlog-cell-detail">
                               <button
                                 type="button"

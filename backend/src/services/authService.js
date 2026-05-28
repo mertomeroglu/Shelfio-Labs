@@ -71,24 +71,66 @@ const issueSessionTokens = (user) => {
   return { token, refreshToken };
 };
 
+const recordStaffLoginActivity = async (user, context = {}) => {
+  try {
+    await settingsService.recordLoginActivity(user, {
+      userType: 'staff',
+      source: context.source,
+      eventType: context.eventType || 'login_success',
+      status: context.status,
+      failureReason: context.failureReason,
+      identity: context.identity,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      device: context.device,
+      requestId: context.requestId,
+    });
+  } catch {
+    // Oturum akışını log hatası yüzünden kesmiyoruz.
+  }
+};
+
 export const authService = {
   async login(payload, context = {}) {
     validateLoginPayload(payload);
 
     const username = String(payload.username).trim();
     const password = String(payload.password);
+    const activityContext = {
+      ...context,
+      source: context.source || payload.source || 'admin_web',
+      identity: username,
+    };
     const user = await userRepo.findByUsername(username);
 
     if (!user) {
+      await recordStaffLoginActivity(null, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Kullanıcı bulunamadı',
+      });
       throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     if (!user.isActive) {
+      await recordStaffLoginActivity(user, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Kullanıcı pasif',
+      });
       throw new AppError(403, 'Bu kullanıcı pasif durumda');
     }
 
     const passwordHash = String(user?.passwordHash || '').trim();
     if (!passwordHash) {
+      await recordStaffLoginActivity(user, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Şifre kaydı yok',
+      });
       throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
@@ -96,10 +138,22 @@ export const authService = {
     try {
       isMatch = await comparePassword(password, passwordHash);
     } catch {
+      await recordStaffLoginActivity(user, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Şifre doğrulama hatası',
+      });
       throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
     if (!isMatch) {
+      await recordStaffLoginActivity(user, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Şifre hatalı',
+      });
       throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
     }
 
@@ -111,11 +165,11 @@ export const authService = {
 
     await userRepo.updateById(user.id, loggedInUser);
 
-    try {
-      await settingsService.recordLoginActivity(loggedInUser, context);
-    } catch {
-      // Login başarısını etkilememesi için aktivite log hatasını yutuyoruz.
-    }
+    await recordStaffLoginActivity(loggedInUser, {
+      ...activityContext,
+      eventType: 'login_success',
+      status: 'success',
+    });
 
     const { token, refreshToken } = issueSessionTokens(loggedInUser);
 
@@ -153,11 +207,27 @@ export const authService = {
     }
 
     const { token, refreshToken: nextRefreshToken } = issueSessionTokens(user);
+    await recordStaffLoginActivity(user, {
+      ...payload.context,
+      eventType: 'token_refresh',
+      status: 'success',
+      source: payload.source || payload.context?.source || 'admin_web',
+    });
     return {
       token,
       refreshToken: nextRefreshToken,
       user: mapUser(user),
     };
+  },
+
+  async logout(user, context = {}) {
+    await recordStaffLoginActivity(user, {
+      ...context,
+      eventType: 'logout',
+      status: 'success',
+      source: context.source || 'admin_web',
+    });
+    return { ok: true };
   },
 
   async getCurrentUser(userId) {

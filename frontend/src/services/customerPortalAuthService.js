@@ -27,6 +27,18 @@ const clear = () => {
   localStorage.removeItem(CUSTOMER_USER_KEY);
   dispatchAuthUpdated({ authenticated: false });
 };
+const requestLogout = () => {
+  const token = getToken();
+  if (!token) return;
+  fetch(`${API_BASE_URL}/customer-auth/logout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({}),
+  }).catch(() => {});
+};
 const setUser = (user) => localStorage.setItem(CUSTOMER_USER_KEY, JSON.stringify(normalizeCustomerUser(user) || null));
 const getUser = () => {
   try {
@@ -103,7 +115,10 @@ export { request as customerPortalRequest, refreshSessionToken as refreshCustome
 export const customerPortalAuthService = {
   getStoredUser: getUser,
   isLoggedIn: () => Boolean(getToken()),
-  logout: clear,
+  logout: () => {
+    requestLogout();
+    clear();
+  },
   async login(identity, password) {
     const data = await request('/customer-auth/login', { method: 'POST', body: JSON.stringify({ identity, password }) });
     setToken(data.token);

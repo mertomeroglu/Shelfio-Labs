@@ -129,6 +129,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    void authService.logout().catch(() => {});
     clearAuthToken();
     setUser(null);
   };

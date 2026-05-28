@@ -84,14 +84,6 @@ const getLabelLocationDisplay = (device) => (
   hasAssignedProduct(device) ? (device.location || '-') : UNASSIGNED_LABEL_LOCATION
 );
 
-const getDeviceRenderState = (device) => {
-  const status = String(device?.renderStatus || '').toUpperCase();
-  if (status === 'FAILED') return { tone: 'failed', label: 'Etiket ekranı güncellenemedi' };
-  if (status === 'SUCCESS' && !device?.isPending) return { tone: 'success', label: 'Etiket ekranı güncellendi' };
-  if (device?.isPending || status === 'PENDING') return { tone: 'pending', label: 'Cihaz güncellemesi bekleniyor' };
-  return { tone: 'idle', label: 'Senkron' };
-};
-
 const getProductNameLabel = (product) => formatUnit(product?.name || product?.productName || 'Ürün seçilmedi');
 
 const getProductSkuLabel = (product) => product?.sku || product?.barcode || 'SKU yok';
@@ -483,7 +475,6 @@ export default function ESLManagement() {
     : selectedTemplate;
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || null;
   const hasSelectedDevice = Boolean(selectedDevice);
-  const selectedDeviceRenderState = getDeviceRenderState(selectedDevice);
   const historyTotalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
   const historyStart = history.length ? ((historyPage - 1) * HISTORY_PAGE_SIZE) + 1 : 0;
   const historyEnd = history.length ? Math.min(historyPage * HISTORY_PAGE_SIZE, history.length) : 0;
@@ -998,9 +989,7 @@ export default function ESLManagement() {
             </div>
             <div className="esl-form-body">
               <div className="esl-device-grid">
-                {devices.map((device) => {
-                  const renderState = getDeviceRenderState(device);
-                  return (
+                {devices.map((device) => (
                   <button
                     key={device.id}
                     type="button"
@@ -1032,14 +1021,8 @@ export default function ESLManagement() {
                         <Tag size={11} /> {getProductNameLabel(device.product)}
                       </div>
                     )}
-                    {renderState.tone !== 'idle' && (
-                      <div className={`esl-device-render-state ${renderState.tone}`}>
-                        <AlertCircle size={11} /> {renderState.label}
-                      </div>
-                    )}
                   </button>
-                  );
-                })}
+                ))}
               </div>
             </div>
           </div>
@@ -1198,10 +1181,6 @@ export default function ESLManagement() {
                 <div className="esl-device-info-item">
                   <span>Son Senkron</span>
                   <strong>{hasSelectedDevice ? formatDate(selectedDevice.lastSyncAt) : '-'}</strong>
-                </div>
-                <div className="esl-device-info-item">
-                  <span>Güncelleme Durumu</span>
-                  <strong>{hasSelectedDevice ? selectedDeviceRenderState.label : '-'}</strong>
                 </div>
               </div>
 

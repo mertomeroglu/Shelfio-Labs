@@ -38,6 +38,7 @@ const buildRequestUser = (user) => {
     username: user.username,
     role: unlimitedAccess ? 'admin' : user.role,
     name: user.name,
+    email: user.email || user.username || null,
     isActive: user.isActive,
     assignedDeskCode: user.assignedDeskCode || null,
     storeId: user.storeId || 'store-main',

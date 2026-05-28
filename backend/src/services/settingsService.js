@@ -1,6 +1,7 @@
 import { settingsRepo } from '../repositories/settingsRepository.js';
 import { productRepo } from '../repositories/productRepository.js';
 import { userRepo } from '../repositories/userRepository.js';
+import { loginActivityRepo } from '../repositories/loginActivityRepository.js';
 import { config } from '../config/config.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 import { sanitizeSettingsInput, validateSettingsPayload } from '../utils/validators.js';
@@ -9,6 +10,7 @@ import { logisticsTariffService } from './logisticsTariffService.js';
 import { eslService } from './eslService.js';
 import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from './campaignPricingService.js';
 import { clearPricingAnalysisCache } from './analysis/pricingAnalysisService.js';
+import { auditLogService } from './auditLogService.js';
 
 const DEFAULT_DESK_PINS = {
   B1: '1234',
@@ -27,6 +29,7 @@ const normalizePin = (value) => String(value || '').trim();
 
 const MAX_AUDIT_LOGS = 500;
 const MAX_LOGIN_ACTIVITIES = 200;
+const MAX_LOGIN_ACTIVITY_QUERY_LIMIT = 1000;
 const MAX_DEVELOPER_LOGS = 3000;
 const DEVELOPER_LOG_DUPLICATE_WINDOW_MS = 60 * 1000;
 const UTF8_BOM = '\uFEFF';
@@ -147,6 +150,61 @@ const appendLoginActivity = (settings, entry) => {
   const current = Array.isArray(settings.loginActivities) ? settings.loginActivities : [];
   const next = [entry, ...current].slice(0, MAX_LOGIN_ACTIVITIES);
   return next;
+};
+
+const parseLoginUserAgent = (value = '') => {
+  const ua = String(value || '').toLowerCase();
+  let os = 'Bilinmiyor';
+  if (ua.includes('windows')) os = 'Windows';
+  else if (ua.includes('mac os') || ua.includes('macintosh')) os = 'macOS';
+  else if (ua.includes('android')) os = 'Android';
+  else if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ios')) os = 'iOS';
+  else if (ua.includes('linux')) os = 'Linux';
+
+  let browser = 'Bilinmiyor';
+  if (ua.includes('edg/')) browser = 'Edge';
+  else if (ua.includes('chrome/') && !ua.includes('edg/')) browser = 'Chrome';
+  else if (ua.includes('firefox/')) browser = 'Firefox';
+  else if (ua.includes('safari/') && !ua.includes('chrome/')) browser = 'Safari';
+  else if (ua.includes('opr/') || ua.includes('opera')) browser = 'Opera';
+
+  return { os, browser };
+};
+
+const normalizeLoginSource = (value, userType = 'staff') => {
+  const source = String(value || '').trim().toLowerCase();
+  if (['admin_web', 'personnel_mobile', 'customer_mobile'].includes(source)) return source;
+  return userType === 'customer' ? 'customer_mobile' : 'admin_web';
+};
+
+const normalizeLoginStatus = (eventType = '') => (
+  String(eventType).includes('failed') ? 'failed' : 'success'
+);
+
+const normalizeLegacyLoginActivity = (row = {}) => {
+  const parsed = parseLoginUserAgent(row.userAgent || row.browserInfo || row.device || '');
+  return {
+    ...row,
+    id: String(row.id || `legacy-login-${row.at || Date.now()}`),
+    userType: row.userType || 'staff',
+    name: row.name || row.userName || row.username || null,
+    userName: row.userName || row.name || row.username || null,
+    email: row.email || null,
+    role: row.role || null,
+    department: row.department || null,
+    eventType: row.eventType || 'login_success',
+    source: row.source || 'admin_web',
+    status: row.status || 'success',
+    ip: row.ip || row.ipAddress || null,
+    ipAddress: row.ipAddress || row.ip || null,
+    browser: row.browser || parsed.browser,
+    os: row.os || parsed.os,
+    requestId: row.requestId || null,
+    failureReason: row.failureReason || null,
+    createdAt: row.createdAt || row.at || row.loginAt || row.timestamp || null,
+    at: row.at || row.createdAt || row.loginAt || row.timestamp || null,
+    isLegacy: true,
+  };
 };
 
 const appendDeveloperLog = (settings, entry) => {
@@ -541,69 +599,75 @@ export const settingsService = {
   },
 
   async recordLoginActivity(user, meta = {}) {
-    const settings = await settingsRepo.getSettings();
+    const userType = String(meta.userType || 'staff').trim().toLowerCase();
+    const eventType = String(meta.eventType || 'login_success').trim();
+    const userAgent = String(meta.userAgent || meta.device || '');
+    const parsed = parseLoginUserAgent(userAgent);
 
     const entry = {
-      id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-      userId: String(user?.id || ''),
-      userName: String(user?.name || user?.username || 'Bilinmeyen Kullanıcı'),
-      at: new Date().toISOString(),
-      ipAddress: String(meta.ipAddress || ''),
-      userAgent: String(meta.userAgent || ''),
-      device: String(meta.device || ''),
+      userId: user?.id ? String(user.id) : null,
+      userType,
+      name: String(user?.name || user?.username || meta.identity || 'Bilinmeyen Kullanıcı'),
+      email: String(user?.email || (String(meta.identity || '').includes('@') ? meta.identity : '') || ''),
+      username: String(user?.username || meta.identity || ''),
+      role: String(user?.role || meta.role || (userType === 'customer' ? 'customer' : '') || ''),
+      department: String(user?.department || meta.department || ''),
+      eventType,
+      source: normalizeLoginSource(meta.source, userType),
+      status: String(meta.status || normalizeLoginStatus(eventType)),
+      ip: String(meta.ip || meta.ipAddress || ''),
+      userAgent,
+      browser: String(meta.browser || parsed.browser),
+      os: String(meta.os || parsed.os),
+      requestId: String(meta.requestId || ''),
+      failureReason: String(meta.failureReason || ''),
+      createdAt: meta.createdAt || new Date().toISOString(),
     };
 
-    const nextSettings = {
-      ...settings,
-      loginActivities: appendLoginActivity(settings, entry),
-      updatedAt: new Date().toISOString(),
-    };
-
-    await settingsRepo.updateSettings(nextSettings);
-    return entry;
+    return loginActivityRepo.create(entry);
   },
 
   async getLoginActivities(currentUser, query = {}) {
-    const settings = await settingsRepo.getSettings();
-    const all = Array.isArray(settings.loginActivities) ? settings.loginActivities : [];
-
-    const users = await userRepo.getAll();
-    const usersById = new Map((Array.isArray(users) ? users : []).map((item) => [String(item.id || ''), item]));
-
-    const enrich = (item) => {
-      const user = usersById.get(String(item.userId || ''));
-      return {
-        ...item,
-        username: user?.username || '',
-        registerPin: user?.registerPin || '',
-      };
-    };
-
-    const active = currentUser?.role === 'admin'
-      ? all
-      : all.filter((item) => item.userId === currentUser?.id);
-
     const filters = {
       user: String(query.user || '').trim(),
-      browser: String(query.browser || '').trim(),
+      eventType: String(query.eventType || '').trim(),
+      source: String(query.source || '').trim(),
+      status: String(query.status || '').trim(),
       ip: String(query.ip || '').trim().toLocaleLowerCase('tr-TR'),
       search: String(query.search || '').trim().toLocaleLowerCase('tr-TR'),
       fromDate: parseDateBoundary(query.from, 'T00:00:00.000Z'),
       toDate: parseDateBoundary(query.to, 'T23:59:59.999Z'),
     };
+    if (currentUser?.role !== 'admin') {
+      filters.userId = currentUser?.id;
+    }
 
-    const rows = active
-      .map(enrich)
+    let central = { items: [], total: 0, limit: 100, page: 1 };
+    const limit = normalizeListLimit(query.limit, 100, MAX_LOGIN_ACTIVITY_QUERY_LIMIT);
+    try {
+      central = await loginActivityRepo.list({
+        filters,
+        limit,
+        page: Math.max(1, Number(query.page) || 1),
+      });
+    } catch (error) {
+      console.warn('[login-activity:central-list-skipped]', error?.message || error);
+    }
+
+    const settings = await settingsRepo.getSettings();
+    const legacy = (Array.isArray(settings.loginActivities) ? settings.loginActivities : [])
+      .map(normalizeLegacyLoginActivity)
       .filter((item) => {
         const loginDate = new Date(item.createdAt || item.loginAt || item.loggedInAt || item.timestamp || item.at || 0);
         if (filters.fromDate && (!Number.isFinite(loginDate.getTime()) || loginDate < filters.fromDate)) return false;
         if (filters.toDate && (!Number.isFinite(loginDate.getTime()) || loginDate > filters.toDate)) return false;
+        if (currentUser?.role !== 'admin' && item.userId !== currentUser?.id) return false;
 
         const userName = String(item.userName || item.username || '').trim();
-        if (filters.user && userName !== filters.user) return false;
-
-        const userAgent = String(item.userAgent || item.browserInfo || item.device || '').toLowerCase();
-        if (filters.browser && !userAgent.includes(filters.browser.toLocaleLowerCase('tr-TR'))) return false;
+        if (filters.user && userName !== filters.user && item.email !== filters.user) return false;
+        if (filters.eventType && item.eventType !== filters.eventType) return false;
+        if (filters.source && item.source !== filters.source) return false;
+        if (filters.status && item.status !== filters.status) return false;
 
         const ipValue = String(item.ipAddress || item.ip || '').toLocaleLowerCase('tr-TR');
         if (filters.ip && !ipValue.includes(filters.ip)) return false;
@@ -629,10 +693,14 @@ export const settingsService = {
         return true;
       });
 
-    const limit = normalizeListLimit(query.limit, 30, MAX_LOGIN_ACTIVITIES);
+    const rows = [...central.items, ...legacy]
+      .sort((left, right) => new Date(right.createdAt || right.at || 0).getTime() - new Date(left.createdAt || left.at || 0).getTime());
+
     return {
       items: rows.slice(0, limit),
-      total: rows.length,
+      total: central.total + legacy.length,
+      centralTotal: central.total,
+      legacyTotal: legacy.length,
       limit,
     };
   },
@@ -642,50 +710,10 @@ export const settingsService = {
       throw new AppError(403, 'Audit log erişimi için yönetici yetkisi gereklidir');
     }
 
-    const settings = await settingsRepo.getSettings();
-    const all = Array.isArray(settings.auditLogs) ? settings.auditLogs : [];
-    const action = String(query.action || '').trim();
-    const user = String(query.user || '').trim();
-    const search = String(query.search || '').trim().toLocaleLowerCase('tr-TR');
-    const fromDate = parseDateBoundary(query.from, 'T00:00:00.000Z');
-    const toDate = parseDateBoundary(query.to, 'T23:59:59.999Z');
-
-    const rows = all.filter((item) => {
-      const createdAt = new Date(item.createdAt || item.at || 0);
-      if (fromDate && (!Number.isFinite(createdAt.getTime()) || createdAt < fromDate)) return false;
-      if (toDate && (!Number.isFinite(createdAt.getTime()) || createdAt > toDate)) return false;
-
-      const rowAction = String(item.actionLabel || item.action || '').trim();
-      if (action && rowAction !== action) return false;
-
-      const actorName = String(item.actorName || item.actor || item.userName || '').trim();
-      if (user && actorName !== user) return false;
-
-      if (search) {
-        const haystack = [
-          rowAction,
-          actorName,
-          item.details,
-          item.detail,
-          item.summary,
-          item.note,
-          item.id,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLocaleLowerCase('tr-TR');
-        if (!haystack.includes(search)) return false;
-      }
-
-      return true;
+    return auditLogService.list({
+      ...query,
+      limit: normalizeListLimit(query.limit, 100, MAX_AUDIT_LOGS),
     });
-
-    const limit = normalizeListLimit(query.limit, 100, MAX_AUDIT_LOGS);
-    return {
-      items: rows.slice(0, limit),
-      total: rows.length,
-      limit,
-    };
   },
 
   async recordDeveloperLog(payload = {}, currentUser, requestMeta = {}) {
@@ -807,6 +835,10 @@ export const settingsService = {
     }
 
     const key = String(type || '').trim().toLowerCase();
+    if (key === 'audit') {
+      throw new AppError(400, 'Merkezi audit log kayıtları bu ekrandan temizlenemez');
+    }
+
     const field = LOG_GROUP_FIELDS[key];
     if (!field) {
       throw new AppError(400, 'Temizlenecek log tipi geçersiz');
@@ -815,6 +847,9 @@ export const settingsService = {
     const settings = await settingsRepo.getSettings();
     const previousCount = Array.isArray(settings[field]) ? settings[field].length : 0;
     const now = new Date().toISOString();
+    const archivedCount = key === 'activity' || key === 'login'
+      ? await loginActivityRepo.archiveAll()
+      : 0;
 
     const nextSettings = {
       ...settings,
@@ -823,7 +858,7 @@ export const settingsService = {
     };
 
     await settingsRepo.updateSettings(nextSettings);
-    return { type: key, field, clearedCount: previousCount };
+    return { type: key, field, clearedCount: previousCount + archivedCount, archivedCount };
   },
 
   async exportDeveloperLogsCsv(currentUser, query = {}) {
@@ -871,18 +906,28 @@ export const settingsService = {
       return source;
     };
 
-    const header = ['id', 'actorId', 'actorName', 'action', 'changedKeys', 'details', 'at'];
+    const header = ['id', 'createdAt', 'actorUserId', 'actorName', 'actorRole', 'action', 'module', 'entityType', 'entityId', 'entityLabel', 'method', 'endpoint', 'statusCode', 'ip', 'source', 'severity', 'summary'];
     const lines = [header.join(',')];
 
     rows.forEach((item) => {
       const line = [
         item.id,
-        item.actorId,
+        item.createdAt || item.at,
+        item.actorUserId || item.actorId,
         item.actorName,
+        item.actorRole,
         item.action,
-        Array.isArray(item.changedKeys) ? item.changedKeys.join('|') : '',
-        item.details || '',
-        item.at,
+        item.module,
+        item.entityType,
+        item.entityId,
+        item.entityLabel,
+        item.method,
+        item.endpoint,
+        item.statusCode,
+        item.ip,
+        item.source,
+        item.severity,
+        item.summary || item.details || '',
       ].map(escape).join(',');
       lines.push(line);
     });

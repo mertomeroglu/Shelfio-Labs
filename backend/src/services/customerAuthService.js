@@ -8,6 +8,7 @@ import { customerService } from './customerService.js';
 import { storeMapService } from './storeMapService.js';
 import { customerCatalogService } from './customerCatalogService.js';
 import { mailService } from './mailService.js';
+import { settingsService } from './settingsService.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 
 const normalize = (v) => String(v || '').trim();
@@ -60,6 +61,26 @@ const isIpRateLimited = (ip) => {
   passwordResetIpHits.set(key, hits);
   return hits.length > PASSWORD_RESET_IP_LIMIT;
 };
+
+const recordCustomerLoginActivity = async (customer, meta = {}) => {
+  try {
+    await settingsService.recordLoginActivity(customer, {
+      userType: 'customer',
+      source: 'customer_mobile',
+      eventType: meta.eventType || 'login_success',
+      status: meta.status,
+      failureReason: meta.failureReason,
+      identity: meta.identity,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      device: meta.device,
+      requestId: meta.requestId,
+    });
+  } catch {
+    // Müşteri oturum akışı log hatası yüzünden kesilmemeli.
+  }
+};
+
 const isEmailCoolingDown = (email) => {
   const now = Date.now();
   const last = Number(passwordResetEmailCooldown.get(email) || 0);
@@ -87,14 +108,24 @@ export const customerAuthService = {
       customer: mapCustomer(row),
     };
   },
-  async login(payload) {
+  async login(payload, meta = {}) {
     const identity = normalize(payload.identity).toLowerCase(); const password = String(payload.password || '');
     if (!identity || !password) throw new AppError(400, 'Telefon/email ve sifre zorunludur');
     const phone = normalizePhone(identity);
     const row = (await customerRepo.getAll()).find((x) => String(x.email || '').toLowerCase() === identity || normalizePhone(x.phone) === phone);
-    if (!row) throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
-    if (row.isActive === false) throw new AppError(403, 'Hesabiniz pasif durumda');
-    if (!await comparePassword(password, row.passwordHash || '')) throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
+    if (!row) {
+      await recordCustomerLoginActivity(null, { ...meta, identity, eventType: 'login_failed', status: 'failed', failureReason: 'Kullanıcı bulunamadı' });
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
+    }
+    if (row.isActive === false) {
+      await recordCustomerLoginActivity(row, { ...meta, identity, eventType: 'login_failed', status: 'failed', failureReason: 'Kullanıcı pasif' });
+      throw new AppError(403, 'Hesabiniz pasif durumda');
+    }
+    if (!await comparePassword(password, row.passwordHash || '')) {
+      await recordCustomerLoginActivity(row, { ...meta, identity, eventType: 'login_failed', status: 'failed', failureReason: 'Şifre hatalı' });
+      throw new AppError(401, 'Kullanıcı bilgileri hatalı.');
+    }
+    await recordCustomerLoginActivity(row, { ...meta, identity, eventType: 'login_success', status: 'success' });
     return {
       token: signToken({ sub: row.id, type: 'customer', email: row.email }),
       refreshToken: signCustomerRefreshToken({ sub: row.id, type: 'customer-refresh', email: row.email }),
@@ -190,7 +221,7 @@ export const customerAuthService = {
 
     return { message: 'Şifreniz güncellendi. Giriş yapabilirsiniz.' };
   },
-  async refreshSession(payload) {
+  async refreshSession(payload, meta = {}) {
     const refreshToken = String(payload?.refreshToken || '').trim();
     if (!refreshToken) throw new AppError(401, 'Oturum yenileme bilgisi bulunamadı');
     let tokenPayload;
@@ -202,11 +233,19 @@ export const customerAuthService = {
     if (tokenPayload?.type !== 'customer-refresh') throw new AppError(401, 'Geçersiz oturum yenileme isteği');
     const row = await customerRepo.findById(tokenPayload.sub);
     if (!row || row.isActive === false) throw new AppError(401, 'Müşteri oturumu bulunamadı');
+    await recordCustomerLoginActivity(row, { ...meta, eventType: 'token_refresh', status: 'success' });
     return {
       token: signToken({ sub: row.id, type: 'customer', email: row.email }),
       refreshToken: signCustomerRefreshToken({ sub: row.id, type: 'customer-refresh', email: row.email }),
       customer: mapCustomer(row),
     };
+  },
+  async logout(id, meta = {}) {
+    const row = await customerRepo.findById(id);
+    if (row) {
+      await recordCustomerLoginActivity(row, { ...meta, eventType: 'logout', status: 'success' });
+    }
+    return { ok: true };
   },
   async updateProfile(id, payload) {
     const row = await customerRepo.findById(id);

@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { config } from './config/config.js';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler.js';
 import { loggerMiddleware } from './middlewares/loggerMiddleware.js';
+import { auditLogMiddleware } from './middlewares/auditLogMiddleware.js';
 import { startGrantExpiryJob } from './jobs/grantExpiryJob.js';
 import { startDailyClosingJob } from './jobs/dailyClosingJob.js';
 import { startExpiredBatchNotificationJob } from './jobs/expiredBatchNotificationJob.js';
@@ -109,6 +110,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(loggerMiddleware);
+app.use(auditLogMiddleware);
 
 app.get('/', (req, res) => {
   res.json({

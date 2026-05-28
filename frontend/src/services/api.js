@@ -330,6 +330,12 @@ const notifyAuthRefreshed = (data) => {
   window.dispatchEvent(new CustomEvent(AUTH_SESSION_REFRESHED_EVENT, { detail: data }));
 };
 
+const resolveStaffLoginSource = () => {
+  if (typeof window === 'undefined') return 'admin_web';
+  const path = String(window.location?.pathname || '').toLowerCase();
+  return path.includes('personel') || path.includes('personnel') ? 'personnel_mobile' : 'admin_web';
+};
+
 export async function refreshStaffSession() {
   if (pendingStaffRefreshPromise) {
     return pendingStaffRefreshPromise;
@@ -348,7 +354,7 @@ export async function refreshStaffSession() {
       'Content-Type': 'application/json; charset=utf-8',
       Accept: 'application/json; charset=utf-8',
     },
-    body: JSON.stringify({ refreshToken }),
+    body: JSON.stringify({ refreshToken, source: resolveStaffLoginSource() }),
   })
     .then(async (response) => {
       const contentType = response.headers.get('content-type') || '';
