@@ -2,6 +2,7 @@
 
 #if SHELFIO_BLE_BEACON_COMPILED
 
+#include <string>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
@@ -19,21 +20,11 @@ static int hexNibble(char c) {
   return -1;
 }
 
-static void appendByte(String& target, uint8_t value) {
-  const char byteValue = static_cast<char>(value);
-  target.concat(&byteValue, 1);
-}
-
-static void appendUint16(String& target, uint16_t value) {
-  appendByte(target, static_cast<uint8_t>((value >> 8) & 0xFF));
-  appendByte(target, static_cast<uint8_t>(value & 0xFF));
-}
-
-static void appendUuidBytes(String& target, const char* uuid) {
+static bool parseUuidBytes(const char* uuidStr, uint8_t* output) {
   int highNibble = -1;
   uint8_t appended = 0;
 
-  for (const char* cursor = uuid; *cursor && appended < 16; cursor++) {
+  for (const char* cursor = uuidStr; *cursor && appended < 16; cursor++) {
     if (*cursor == '-') continue;
     const int nibble = hexNibble(*cursor);
     if (nibble < 0) continue;
@@ -43,28 +34,30 @@ static void appendUuidBytes(String& target, const char* uuid) {
       continue;
     }
 
-    appendByte(target, static_cast<uint8_t>((highNibble << 4) | nibble));
+    output[appended] = static_cast<uint8_t>((highNibble << 4) | nibble);
     highNibble = -1;
     appended++;
   }
+  return (appended == 16);
 }
 
-static String buildShelfioManufacturerData() {
-  String data;
+static std::string buildShelfioManufacturerData(uint8_t* outBuffer) {
+  outBuffer[0] = 0x53; // 'S'
+  outBuffer[1] = 0x48; // 'H'
+  outBuffer[2] = 0x46; // 'F' (0x46)
 
-  // Android parser guide:
-  // bytes 0-2  : ASCII "SHF" Shelfio signature
-  // bytes 3-18 : beacon UUID, 16 raw bytes, same value as SHELFIO_BEACON_UUID
-  // bytes 19-20: major, big-endian uint16
-  // bytes 21-22: minor, big-endian uint16
-  // Device ID is exposed through SHELFIO_BLE_DEVICE_NAME or Android-side mapping.
-  data.reserve(23);
-  data.concat("SHF");
-  appendUuidBytes(data, SHELFIO_BEACON_UUID);
-  appendUint16(data, SHELFIO_MAJOR);
-  appendUint16(data, SHELFIO_MINOR);
+  bool uuidOk = parseUuidBytes(SHELFIO_BEACON_UUID, &outBuffer[3]);
+  if (!uuidOk) {
+    Serial.println("Shelfio BLE: invalid UUID parse");
+    memset(&outBuffer[3], 0, 16);
+  }
 
-  return data;
+  outBuffer[19] = static_cast<uint8_t>((SHELFIO_MAJOR >> 8) & 0xFF);
+  outBuffer[20] = static_cast<uint8_t>(SHELFIO_MAJOR & 0xFF);
+  outBuffer[21] = static_cast<uint8_t>((SHELFIO_MINOR >> 8) & 0xFF);
+  outBuffer[22] = static_cast<uint8_t>(SHELFIO_MINOR & 0xFF);
+
+  return std::string(reinterpret_cast<const char*>(outBuffer), 23);
 }
 
 static uint16_t advertisingIntervalUnits() {
@@ -79,6 +72,12 @@ void initShelfioBleBeacon() {
   if (!ENABLE_SHELFIO_BLE_BEACON) return;
 
   Serial.println("Shelfio BLE Beacon enabled");
+
+  // Free heap before BLE initialization
+  uint32_t heapBefore = ESP.getFreeHeap();
+  Serial.print("Shelfio BLE: free heap before BLE init = ");
+  Serial.println(heapBefore);
+
   Serial.print("Beacon UUID: ");
   Serial.println(SHELFIO_BEACON_UUID);
   Serial.print("Device ID: ");
@@ -92,15 +91,30 @@ void initShelfioBleBeacon() {
   Serial.print("Minor: ");
   Serial.println(SHELFIO_MINOR);
 
+  // Initialize BLE Device
   BLEDevice::init(SHELFIO_BLE_DEVICE_NAME);
   BLEDevice::setPower(ESP_PWR_LVL_P7);
 
   BLEServer* server = BLEDevice::createServer();
   (void)server;
 
+  uint8_t mfgBuffer[23];
+  std::string mfgData = buildShelfioManufacturerData(mfgBuffer);
+
+  // Print exact manufacturer logs
+  Serial.println("Shelfio BLE manufacturerId=0x4853");
+  Serial.println("Shelfio BLE manufacturerData length=21");
+  Serial.print("Shelfio BLE manufacturerData hex=");
+  for (int i = 2; i < 23; i++) {
+    char hexStr[3];
+    sprintf(hexStr, "%02x", mfgBuffer[i]);
+    Serial.print(hexStr);
+  }
+  Serial.println();
+
   BLEAdvertisementData advertisementData;
   advertisementData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
-  advertisementData.setManufacturerData(buildShelfioManufacturerData());
+  advertisementData.setManufacturerData(mfgData);
 
   BLEAdvertisementData scanResponseData;
   scanResponseData.setName(SHELFIO_BLE_DEVICE_NAME);
@@ -108,7 +122,7 @@ void initShelfioBleBeacon() {
   shelfioBleAdvertising = BLEDevice::getAdvertising();
   if (shelfioBleAdvertising == nullptr) {
     shelfioBleBeaconStarted = false;
-    Serial.println("Shelfio BLE Beacon failed to start: advertising handle is null");
+    Serial.println("Shelfio BLE init failed: advertising handle is null");
     return;
   }
 
@@ -123,7 +137,13 @@ void initShelfioBleBeacon() {
   BLEDevice::startAdvertising();
   shelfioBleBeaconStarted = true;
   lastShelfioBleHealthLogAt = millis();
-  Serial.println("BLE advertising started");
+  
+  Serial.println("Shelfio BLE advertising started");
+
+  // Free heap after BLE initialization
+  uint32_t heapAfter = ESP.getFreeHeap();
+  Serial.print("Shelfio BLE: free heap after BLE init = ");
+  Serial.println(heapAfter);
 }
 
 void maintainShelfioBleBeacon() {
