@@ -260,9 +260,7 @@ const resolveAssignmentRequestedAt = (device = {}) => toOptionalString(
   device.assignmentRequestedAt
   || device.pendingAssignmentRequestedAt
   || device.pendingAssignment?.requestedAt
-  || device.pendingAssignment?.assignmentRequestedAt
-  || device.lastSyncAt
-  || device.updatedAt,
+  || device.pendingAssignment?.assignmentRequestedAt,
   80
 );
 
@@ -296,6 +294,38 @@ const buildAssignmentHashInput = ({
   assignmentRequestedAt: assignmentRequestedAt || null,
   label: pickAssignmentLabelHashFields(label),
 });
+
+const buildLabelVersionMetadata = ({
+  device = {},
+  label = {},
+  assignedProductId = null,
+  template = 'standard',
+  assignmentRequestedAt = null,
+} = {}) => {
+  const resolvedTemplate = template || label.template || device.template || 'standard';
+  const resolvedAssignedProductId = assignedProductId || label.productId || label.assignedProductId || device.assignedProductId || null;
+  const resolvedRequestedAt = assignmentRequestedAt || resolveAssignmentRequestedAt(device) || null;
+  const assignmentHash = createAssignmentHash(buildAssignmentHashInput({
+    deviceId: device.id || label.deviceId || '',
+    assignedProductId: resolvedAssignedProductId,
+    template: resolvedTemplate,
+    clearLabel: Boolean(label.clearLabel),
+    label: {
+      ...label,
+      productId: resolvedAssignedProductId || label.productId || label.assignedProductId || '',
+      assignedProductId: resolvedAssignedProductId || label.assignedProductId || label.productId || '',
+      template: resolvedTemplate,
+    },
+    assignmentRequestedAt: resolvedRequestedAt,
+  }));
+
+  return {
+    assignmentHash,
+    labelVersion: assignmentHash,
+    assignmentRequestedAt: resolvedRequestedAt,
+    updatedAt: device.updatedAt || null,
+  };
+};
 
 const shouldUseBridgeAssignedLabel = ({ device = {}, label = {}, assignedProduct = null }) => {
   if (!label || typeof label !== 'object') {
@@ -506,9 +536,17 @@ const enrichDevice = async (device, activeCampaigns = null) => {
     pendingAssignmentHash,
     assignmentRequestedAt,
     lastConfirmedAt: device.bridgeAssignmentSyncedAt || device.bridgeReportedAt || null,
+    displayRenderedAt: device.displayRenderedAt || null,
+    renderedAssignmentHash: device.renderedAssignmentHash || null,
+    renderedProductId: device.renderedProductId || null,
+    renderedBarcode: device.renderedBarcode || null,
+    renderStatus: device.renderStatus || null,
+    renderError: device.renderError || null,
     isPending: Boolean(device.assignedProductId && (
       String(device.assignedProductId) !== String(confirmedProductId || '')
       || (pendingAssignmentHash && pendingAssignmentHash !== confirmedAssignmentHash)
+      || (pendingAssignmentHash && pendingAssignmentHash !== device.renderedAssignmentHash)
+      || device.renderStatus === 'FAILED'
     )),
   };
 
@@ -604,8 +642,16 @@ export const eslService = {
         assignedProduct,
       });
       if (bridgeDecision.useBridgeLabel) {
+        const bridgeMetadata = buildLabelVersionMetadata({
+          device: heartbeatedDevice,
+          label: cachedLabel,
+          assignedProductId: heartbeatedDevice.assignedProductId || cachedLabel.assignedProductId || cachedLabel.productId || null,
+          template: cachedLabel.template || heartbeatedDevice.bridgeAssignedTemplate || 'standard',
+          assignmentRequestedAt: heartbeatedDevice.bridgeAssignment?.assignmentRequestedAt || resolveAssignmentRequestedAt(heartbeatedDevice),
+        });
         const bridgeResult = {
           ...cachedLabel,
+          ...bridgeMetadata,
           currentLabelSource: 'bridge-confirmed',
           assignedProductId: heartbeatedDevice.assignedProductId || cachedLabel.assignedProductId || null,
           bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, cachedLabel) || null,
@@ -641,9 +687,28 @@ export const eslService = {
         productName: 'Ürün Seçilmedi',
         barcode: '0000000000000',
         price: '0.00',
+        regularPrice: 0,
+        displayPrice: 0,
+        campaignPrice: null,
         previousPrice: '0.00',
         origin: 'Turkiye',
         expiryDate: '',
+        ...buildLabelVersionMetadata({
+          device: heartbeatedDevice,
+          label: {
+            productName: 'Ürün Seçilmedi',
+            barcode: '0000000000000',
+            price: '0.00',
+            regularPrice: 0,
+            displayPrice: 0,
+            campaignPrice: null,
+            previousPrice: '0.00',
+            template: heartbeatedDevice.template || 'standard',
+            clearLabel: true,
+          },
+          assignedProductId: null,
+          template: heartbeatedDevice.template || 'standard',
+        }),
         currentLabelSource: 'clear-label',
         assignedProductId: null,
         bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
@@ -659,9 +724,28 @@ export const eslService = {
         productName: 'Ürün Seçilmedi',
         barcode: '0000000000000',
         price: '0.00',
+        regularPrice: 0,
+        displayPrice: 0,
+        campaignPrice: null,
         previousPrice: '0.00',
         origin: 'Turkiye',
         expiryDate: '',
+        ...buildLabelVersionMetadata({
+          device: heartbeatedDevice,
+          label: {
+            productName: 'Ürün Seçilmedi',
+            barcode: '0000000000000',
+            price: '0.00',
+            regularPrice: 0,
+            displayPrice: 0,
+            campaignPrice: null,
+            previousPrice: '0.00',
+            template: heartbeatedDevice.template || 'standard',
+            clearLabel: true,
+          },
+          assignedProductId: heartbeatedDevice.assignedProductId || null,
+          template: heartbeatedDevice.template || 'standard',
+        }),
         currentLabelSource: 'assignedProductMissing',
         assignedProductId: heartbeatedDevice.assignedProductId || null,
         bridgeAssignedProductId: resolveBridgeAssignedProductId(heartbeatedDevice, heartbeatedDevice.bridgeAssignedLabel || {}) || null,
@@ -705,6 +789,26 @@ export const eslService = {
       origin: product.origin || 'Turkiye',
       expiryDate: fdtDate,
       lastPriceChangeDate: fdtDate,
+      ...buildLabelVersionMetadata({
+        device: heartbeatedDevice,
+        label: {
+          productId: product.id,
+          assignedProductId: product.id,
+          productName: product.name || 'Bilinmeyen Urun',
+          barcode: product.barcode || '0000000000000',
+          price: formatEslPrice(eslPricing.displayPrice),
+          regularPrice: eslPricing.regularPrice,
+          displayPrice: eslPricing.displayPrice,
+          campaignPrice: eslPricing.campaignPrice,
+          hasActiveCampaign: eslPricing.hasActiveCampaign,
+          campaignName: eslPricing.campaignName,
+          previousPrice: eslPricing.hasActiveCampaign ? formatEslPrice(previousDisplayPrice) : '',
+          template: effectiveTemplate,
+          clearLabel: false,
+        },
+        assignedProductId: product.id,
+        template: effectiveTemplate,
+      }),
       currentLabelSource: isPendingAssignment ? 'pending-assignment' : 'assigned-product',
       staleBridgeLabelIgnored: Boolean(heartbeatedDevice.bridgeAssignedLabel),
     };
@@ -850,6 +954,12 @@ export const eslService = {
       confirmedAssignmentHash: confirmedHash,
       isPending,
       lastConfirmedAt,
+      displayRenderedAt: device.displayRenderedAt || null,
+      renderedAssignmentHash: device.renderedAssignmentHash || null,
+      renderedProductId: device.renderedProductId || null,
+      renderedBarcode: device.renderedBarcode || null,
+      renderStatus: device.renderStatus || null,
+      renderError: device.renderError || null,
       timestamp: new Date().toISOString(),
     };
   },
@@ -1005,6 +1115,8 @@ export const eslService = {
         clearLabel: false,
         label,
       },
+      renderStatus: 'PENDING',
+      renderError: null,
       updatedAt: now,
     };
     await eslDeviceRepo.updateById(deviceId, updatedDevice);
@@ -1103,6 +1215,8 @@ export const eslService = {
         clearLabel: true,
         label: clearLabelPayload,
       },
+      renderStatus: 'PENDING',
+      renderError: null,
       updatedAt: now,
     };
 
@@ -1279,18 +1393,27 @@ export const eslService = {
 
     const currentHash = device.bridgeAssignmentHash || device.bridgeAssignmentVersion || '';
     if (currentHash && currentHash === assignmentHash) {
-      console.info('[ESL DEBUG] bridgeLabelSync unchanged assignment', {
+      console.info('[ESL DEBUG] bridgeLabelSync unchanged local state', {
         deviceId,
+        assignedProductId: payload.assignedProductId || null,
+        productName: label.productName || null,
+        barcode: label.barcode || null,
+        template: payload.template || label.template,
         assignmentHash,
         previousHash: currentHash,
-        assignedProductId: payload.assignedProductId || null,
         bridgeAssignedProductId: device.bridgeAssignedProductId || device.bridgeAssignment?.assignedProductId || null,
+        localStateSynced: false,
+        displayConfirmed: Boolean(device.renderedAssignmentHash && device.renderedAssignmentHash === assignmentHash && device.renderStatus === 'SUCCESS'),
       });
       return {
         deviceId,
         synced: false,
+        localStateSynced: false,
+        displayConfirmed: Boolean(device.renderedAssignmentHash && device.renderedAssignmentHash === assignmentHash && device.renderStatus === 'SUCCESS'),
+        physicalRendered: Boolean(device.renderedAssignmentHash && device.renderedAssignmentHash === assignmentHash && device.renderStatus === 'SUCCESS'),
         reason: 'unchanged',
         assignmentHash,
+        labelVersion: assignmentHash,
         bridgeAssignmentSyncedAt: device.bridgeAssignmentSyncedAt || null,
       };
     }
@@ -1319,12 +1442,82 @@ export const eslService = {
     };
 
     await eslDeviceRepo.updateById(deviceId, updated);
+    console.info('[ESL DEBUG] bridgeLabelSync local state synced', {
+      deviceId,
+      assignedProductId: payload.assignedProductId || null,
+      productName: label.productName || null,
+      barcode: label.barcode || null,
+      template: payload.template || label.template,
+      assignmentHash,
+      labelVersion: assignmentHash,
+      localStateSynced: true,
+      displayConfirmed: false,
+    });
     return {
       deviceId,
       synced: true,
+      localStateSynced: true,
+      displayConfirmed: false,
+      physicalRendered: false,
       assignmentHash,
+      labelVersion: assignmentHash,
       bridgeAssignmentSyncedAt: now,
       clearLabel: label.clearLabel,
+    };
+  },
+
+  async confirmRender(deviceId, payload = {}) {
+    const device = await eslDeviceRepo.findById(deviceId);
+    if (!device || isDeletedDevice(device)) throw createNotFoundError('ESL cihazı bulunamadı');
+
+    const incomingDeviceId = toOptionalString(payload.deviceId || deviceId, 120);
+    if (incomingDeviceId && incomingDeviceId !== deviceId) {
+      throw new AppError(400, 'Cihaz kimliği route ile eşleşmiyor');
+    }
+
+    const status = String(payload.renderStatus || payload.status || '').trim().toUpperCase() === 'FAILED'
+      ? 'FAILED'
+      : 'SUCCESS';
+    const now = new Date().toISOString();
+    const assignmentHash = toOptionalString(payload.assignmentHash || payload.labelVersion, 128);
+    const renderedAt = toIsoDateValue(payload.renderedAt) || now;
+    const productId = toOptionalString(payload.productId || payload.assignedProductId, 120);
+    const barcode = toOptionalString(payload.barcode, 80);
+    const error = status === 'FAILED' ? toOptionalString(payload.error || payload.message, 500) : null;
+
+    const updated = {
+      ...device,
+      displayRenderedAt: renderedAt,
+      renderedAssignmentHash: assignmentHash || device.pendingAssignmentHash || device.bridgeAssignmentHash || null,
+      renderedLabelVersion: assignmentHash || device.pendingAssignmentHash || device.bridgeAssignmentHash || null,
+      renderedProductId: productId || device.assignedProductId || null,
+      renderedBarcode: barcode || device.bridgeAssignedLabel?.barcode || null,
+      renderStatus: status,
+      renderError: error,
+      lastRenderConfirmedAt: now,
+      updatedAt: now,
+    };
+
+    await eslDeviceRepo.updateById(deviceId, updated);
+    console.info('[ESL DEBUG] display render confirmed', {
+      deviceId,
+      assignmentHash: updated.renderedAssignmentHash,
+      productId: updated.renderedProductId,
+      barcode: updated.renderedBarcode,
+      renderStatus: status,
+      displayRenderedAt: renderedAt,
+      error,
+    });
+
+    return {
+      deviceId,
+      displayConfirmed: status === 'SUCCESS',
+      physicalRendered: status === 'SUCCESS',
+      assignmentHash: updated.renderedAssignmentHash,
+      labelVersion: updated.renderedLabelVersion,
+      renderStatus: status,
+      displayRenderedAt: renderedAt,
+      renderError: error,
     };
   },
 

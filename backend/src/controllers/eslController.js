@@ -83,6 +83,15 @@ export const eslController = {
     }
   },
 
+  async confirmRender(req, res, next) {
+    try {
+      const data = await eslService.confirmRender(req.params.id, req.body);
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async createDevice(req, res, next) {
     try {
       const data = await eslService.createDevice(req.body);

@@ -543,14 +543,25 @@
   font-weight: 600;
 }
 
-.esl-device-pending-sync {
+.esl-device-render-state {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   margin-top: 0.25rem;
   font-size: 0.675rem;
   font-weight: 600;
+}
+
+.esl-device-render-state.pending {
   color: #92400e;
+}
+
+.esl-device-render-state.success {
+  color: #047857;
+}
+
+.esl-device-render-state.failed {
+  color: #b91c1c;
 }
 
 /*  Template Grid  */

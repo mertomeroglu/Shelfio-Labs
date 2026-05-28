@@ -15,6 +15,7 @@
 // Etiket Verisi (struct en başta olmalı)
 // =========================
 struct LabelData {
+  String productId;
   String product;
   String fdt;
   String origin;
@@ -25,6 +26,8 @@ struct LabelData {
   String oldMinor;
   String lastPriceUpdate;
   String templateType;
+  String assignmentHash;
+  String labelVersion;
   bool clearMode;
 };
 
@@ -79,6 +82,7 @@ static bool isZeroPriceString(String value)
 String wifiSsid = "";
 String wifiPass = "";
 String backendIp = "";
+String eslDeviceToken = "";
 int backendPort = 4000;
 String deviceId = "esl-dev-3";
 
@@ -89,6 +93,7 @@ const char* LEGACY_DEFAULT_BACKEND_IP = "192.168.1.101";
 String labelUrl;
 String batteryUrl;
 String scheduleUrl;
+String renderConfirmUrl;
 
 // =========================
 // Shelfio BLE Beacon Ayarlari
@@ -126,6 +131,7 @@ GxEPD2_BW<GxEPD2_290_T94, GxEPD2_290_T94::HEIGHT> display(
 
 LabelData currentLabel;
 bool labelReady = false;
+String lastRenderedAssignmentHash = "";
 
 // Guncelleme araligi (ms) - 60 saniye
 const unsigned long POLL_INTERVAL = 60000;
@@ -208,6 +214,7 @@ static void buildApiUrls()
   labelUrl = "http://" + backendIp + ":" + String(backendPort) + "/api/esl/devices/" + deviceId + "/current-label";
   batteryUrl = "http://" + backendIp + ":" + String(backendPort) + "/api/esl/devices/" + deviceId + "/battery";
   scheduleUrl = "http://" + backendIp + ":" + String(backendPort) + "/api/esl/devices/" + deviceId + "/schedule-status";
+  renderConfirmUrl = "http://" + backendIp + ":" + String(backendPort) + "/api/esl/devices/" + deviceId + "/render-confirm";
 }
 
 static String promptSavedConfigValue(const String& label, const String& savedValue)
@@ -239,6 +246,24 @@ static String promptSavedConfigValue(const String& label, const String& savedVal
   return selected;
 }
 
+static String promptOptionalConfigValue(const String& label, const String& savedValue)
+{
+  String selected = savedValue;
+  Serial.print(label);
+  if (savedValue.length() > 0) {
+    Serial.print(" girin (son kayitli deger kullanmak icin bos birak)");
+  } else {
+    Serial.print(" girin (opsiyonel)");
+  }
+  Serial.println();
+  Serial.print("> ");
+  String input = readLineFromSerial();
+  if (input.length() > 0) {
+    selected = input;
+  }
+  return selected;
+}
+
 static void askNetworkConfigFromSerial()
 {
   Preferences preferences;
@@ -248,6 +273,7 @@ static void askNetworkConfigFromSerial()
   String savedBackendIp = preferences.getString("ip", "");
   String savedWifiSsid = preferences.getString("ssid", "");
   String savedWifiPass = preferences.getString("pass", "");
+  String savedDeviceToken = preferences.getString("token", "");
   bool configInitialized = preferences.getBool("initialized", false);
 
   // Eski firmware'deki hardcoded varsayilanlar ilk geciste "son kayitli" sayilmasin.
@@ -267,10 +293,12 @@ static void askNetworkConfigFromSerial()
   backendIp = promptSavedConfigValue("Backend IP", savedBackendIp);
   wifiSsid = promptSavedConfigValue("WiFi SSID", savedWifiSsid);
   wifiPass = promptSavedConfigValue("WiFi sifre", savedWifiPass);
+  eslDeviceToken = promptOptionalConfigValue("ESL device token", savedDeviceToken);
 
   preferences.putString("ip", backendIp);
   preferences.putString("ssid", wifiSsid);
   preferences.putString("pass", wifiPass);
+  preferences.putString("token", eslDeviceToken);
   preferences.putBool("initialized", true);
 
   preferences.end();
@@ -281,9 +309,11 @@ static void askNetworkConfigFromSerial()
   Serial.print("- Backend Port: "); Serial.println(backendPort);
   Serial.print("- WiFi SSID: "); Serial.println(wifiSsid);
   Serial.print("- Device ID: "); Serial.println(deviceId);
+  Serial.print("- Token: "); Serial.println(eslDeviceToken.length() > 0 ? "ayarlı" : "yok");
   Serial.print("- Label URL: "); Serial.println(labelUrl);
   Serial.print("- Battery URL: "); Serial.println(batteryUrl);
   Serial.print("- Schedule URL: "); Serial.println(scheduleUrl);
+  Serial.print("- Render Confirm URL: "); Serial.println(renderConfirmUrl);
 }
 
 static bool checkBackendHealth()
@@ -1033,7 +1063,7 @@ bool fetchLabel()
   Serial.println(response);
   http.end();
 
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<1536> doc;
   DeserializationError error = deserializeJson(doc, response);
 
   if (error) {
@@ -1042,10 +1072,16 @@ bool fetchLabel()
     return false;
   }
 
+  currentLabel.productId = doc["assignedProductId"] | "";
+  if (currentLabel.productId.length() == 0) currentLabel.productId = doc["productId"] | "";
   currentLabel.product = doc["productName"] | "Bilinmeyen Urun";
   currentLabel.barcode = doc["barcode"]     | "0000000000000";
   currentLabel.origin  = doc["origin"]      | "Turkiye";
   currentLabel.templateType = doc["template"]   | "standard";
+  currentLabel.assignmentHash = doc["assignmentHash"] | "";
+  currentLabel.labelVersion = doc["labelVersion"] | "";
+  if (currentLabel.assignmentHash.length() == 0) currentLabel.assignmentHash = currentLabel.labelVersion;
+  if (currentLabel.labelVersion.length() == 0) currentLabel.labelVersion = currentLabel.assignmentHash;
 
 
   // FDT: önce gerçek fiyat değişim tarihi alanları, sonra legacy expiryDate
@@ -1127,6 +1163,9 @@ bool fetchLabel()
   }
 
   Serial.println("--- Parse Edilen Veriler ---");
+  Serial.print("ProductId: ");           Serial.println(currentLabel.productId);
+  Serial.print("AssignmentHash: ");      Serial.println(currentLabel.assignmentHash);
+  Serial.print("LabelVersion: ");        Serial.println(currentLabel.labelVersion);
   Serial.print("Urun: ");               Serial.println(currentLabel.product);
   Serial.print("Barkod: ");              Serial.println(currentLabel.barcode);
   Serial.print("Fiyat: ");               Serial.println(price);
@@ -1192,8 +1231,70 @@ bool fetchStoreScheduleStatus()
 // =========================
 // Ekrani guncelle
 // =========================
-void updateDisplay()
+bool sendRenderConfirm(const String& status, const String& errorMessage)
 {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Render confirm gonderilemedi: WiFi bagli degil.");
+    return false;
+  }
+  if (eslDeviceToken.length() == 0) {
+    Serial.println("Render confirm gonderilemedi: ESL device token yok.");
+    return false;
+  }
+
+  StaticJsonDocument<512> doc;
+  doc["assignmentHash"] = currentLabel.assignmentHash;
+  doc["labelVersion"] = currentLabel.labelVersion;
+  doc["productId"] = currentLabel.productId;
+  doc["barcode"] = currentLabel.barcode;
+  doc["renderStatus"] = status;
+  doc["renderedAt"] = "";
+  if (errorMessage.length() > 0) {
+    doc["error"] = errorMessage;
+  } else {
+    doc["error"] = nullptr;
+  }
+
+  String body;
+  serializeJson(doc, body);
+
+  HTTPClient http;
+  http.begin(renderConfirmUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-esl-device-token", eslDeviceToken);
+  http.setTimeout(10000);
+
+  int httpCode = http.POST(body);
+  Serial.print("Render confirm POST status: ");
+  Serial.println(httpCode);
+  if (httpCode != 200) {
+    Serial.print("Render confirm hatasi: ");
+    if (httpCode <= 0) {
+      Serial.println(http.errorToString(httpCode));
+    } else {
+      Serial.println(http.getString());
+    }
+    http.end();
+    return false;
+  }
+
+  Serial.println("Render confirm basariyla gonderildi.");
+  http.end();
+  return true;
+}
+
+bool updateDisplay()
+{
+  Serial.println("Ekran guncelleme basladi.");
+  Serial.print("Current assignmentHash: ");
+  Serial.println(currentLabel.assignmentHash);
+  Serial.print("Previous rendered assignmentHash: ");
+  Serial.println(lastRenderedAssignmentHash);
+  Serial.print("Product: ");
+  Serial.println(currentLabel.product);
+  Serial.print("Barcode: ");
+  Serial.println(currentLabel.barcode);
+
   display.setFullWindow();
   display.firstPage();
   do {
@@ -1201,6 +1302,10 @@ void updateDisplay()
   } while (display.nextPage());
   // E-paper paneli güncellemeden sonra düşük tüketime al (görüntü korunur)
   display.powerOff();
+  lastRenderedAssignmentHash = currentLabel.assignmentHash;
+  Serial.println("Ekran guncelleme tamamlandi.");
+  sendRenderConfirm("SUCCESS", "");
+  return true;
 }
 
 // =========================
@@ -1370,18 +1475,30 @@ void loop()
     LabelData prev = currentLabel;
 
     if (fetchLabel()) {
-      // Urun degismisse ekrani guncelle
-      if (prev.product != currentLabel.product ||
-          prev.barcode != currentLabel.barcode ||
-          prev.major   != currentLabel.major   ||
-          prev.minor   != currentLabel.minor   ||
-          prev.oldMajor != currentLabel.oldMajor ||
-          prev.oldMinor != currentLabel.oldMinor ||
-          prev.origin  != currentLabel.origin  ||
-          prev.fdt     != currentLabel.fdt     ||
-          prev.clearMode != currentLabel.clearMode ||
-          prev.templateType != currentLabel.templateType) {
+      bool hashChanged = currentLabel.assignmentHash.length() > 0
+                         && currentLabel.assignmentHash != lastRenderedAssignmentHash;
+      bool visibleChanged = prev.product != currentLabel.product ||
+                            prev.barcode != currentLabel.barcode ||
+                            prev.major   != currentLabel.major   ||
+                            prev.minor   != currentLabel.minor   ||
+                            prev.oldMajor != currentLabel.oldMajor ||
+                            prev.oldMinor != currentLabel.oldMinor ||
+                            prev.origin  != currentLabel.origin  ||
+                            prev.fdt     != currentLabel.fdt     ||
+                            prev.clearMode != currentLabel.clearMode ||
+                            prev.templateType != currentLabel.templateType;
+
+      Serial.print("Onceki assignmentHash: ");
+      Serial.println(lastRenderedAssignmentHash);
+      Serial.print("Yeni assignmentHash: ");
+      Serial.println(currentLabel.assignmentHash);
+
+      // Hash degistiyse gorunur alanlar ayni olsa bile assignment render edilir.
+      if (hashChanged || visibleChanged) {
         Serial.println("Etiket degisti, ekran guncelleniyor...");
+        if (hashChanged) {
+          Serial.println("Guncelleme nedeni: assignmentHash degisti.");
+        }
         updateDisplay();
       } else {
     

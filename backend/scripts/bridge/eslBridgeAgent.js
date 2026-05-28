@@ -200,9 +200,11 @@ const syncLabelOnce = async () => {
   if (assignmentHash) {
     lastSyncedAssignmentHash = assignmentHash;
   }
-  log('info', 'label update synced', {
+  log('info', 'local label state synced; display render pending', {
     deviceId: config.deviceId,
-    synced: result?.synced !== false,
+    localStateSynced: result?.localStateSynced ?? result?.synced !== false,
+    displayConfirmed: Boolean(result?.displayConfirmed),
+    physicalRendered: Boolean(result?.physicalRendered),
     assignmentHash: assignmentHash || result?.assignmentHash || null,
   });
 };

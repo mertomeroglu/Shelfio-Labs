@@ -17,6 +17,7 @@ router.get('/settings/schedule-state', requireEslDeviceToken, eslController.getS
 router.post('/settings/bridge-schedule-sync', requireEslDeviceToken, eslController.bridgeScheduleSync);
 router.get('/devices/:id/assignment-state', requireEslDeviceToken, eslController.getAssignmentState);
 router.post('/devices/:id/bridge-label-sync', requireEslDeviceToken, eslController.bridgeLabelSync);
+router.post('/devices/:id/render-confirm', requireEslDeviceToken, eslController.confirmRender);
 router.get('/devices/:id/heartbeat-state', requireEslDeviceToken, eslController.getHeartbeatState);
 router.post('/devices/:id/heartbeat', requireEslDeviceToken, eslController.updateHeartbeat);
 
