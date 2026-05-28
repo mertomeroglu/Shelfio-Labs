@@ -124,6 +124,35 @@ const sendLocalBridgeLabelSync = async (assignmentState) => {
   });
 };
 
+const readLocalCurrentLabel = async () => {
+  const url = `${config.localApiBaseUrl}/esl/devices/${encodeURIComponent(config.deviceId)}/current-label`;
+  return fetchJson(url);
+};
+
+const normalizeText = (value) => String(value || '').trim();
+
+const verifyLocalCurrentLabel = (assignmentState = {}, currentLabel = {}) => {
+  const expectedProductId = normalizeText(assignmentState?.assignedProductId || assignmentState?.label?.assignedProductId || assignmentState?.label?.productId);
+  const actualProductId = normalizeText(currentLabel?.assignedProductId || currentLabel?.productId || currentLabel?.bridgeAssignedProductId);
+  const expectedAssignmentHash = normalizeText(assignmentState?.assignmentHash || assignmentState?.assignmentVersion);
+  const actualAssignmentHash = normalizeText(currentLabel?.assignmentHash || currentLabel?.labelVersion);
+  const expectedBarcode = normalizeText(assignmentState?.label?.barcode);
+  const actualBarcode = normalizeText(currentLabel?.barcode);
+  const barcodeMatches = !expectedBarcode || expectedBarcode === '0000000000000' || actualBarcode === expectedBarcode;
+
+  return {
+    matches: (!expectedProductId || actualProductId === expectedProductId)
+      && (!expectedAssignmentHash || actualAssignmentHash === expectedAssignmentHash)
+      && barcodeMatches,
+    expectedProductId: expectedProductId || null,
+    actualProductId: actualProductId || null,
+    expectedAssignmentHash: expectedAssignmentHash || null,
+    actualAssignmentHash: actualAssignmentHash || null,
+    expectedBarcode: expectedBarcode || null,
+    actualBarcode: actualBarcode || null,
+  };
+};
+
 const readProductionScheduleState = async () => {
   const url = `${config.productionApiBaseUrl}/esl/settings/schedule-state`;
   return fetchJson(url);
@@ -197,15 +226,39 @@ const syncLabelOnce = async () => {
   }
 
   const result = await sendLocalBridgeLabelSync(assignmentState);
-  if (assignmentHash) {
+  const currentLabel = await readLocalCurrentLabel();
+  const verification = verifyLocalCurrentLabel(assignmentState, currentLabel);
+  const localStateSynced = result?.localStateSynced !== false && verification.matches;
+
+  if (assignmentHash && localStateSynced) {
     lastSyncedAssignmentHash = assignmentHash;
+  }
+  if (!verification.matches) {
+    log('warn', 'local current-label mismatch after bridge-label-sync', {
+      deviceId: config.deviceId,
+      localStateSynced: false,
+      reason: 'current_label_mismatch',
+      expectedProductId: verification.expectedProductId,
+      actualProductId: verification.actualProductId,
+      expectedAssignmentHash: verification.expectedAssignmentHash,
+      actualAssignmentHash: verification.actualAssignmentHash,
+      expectedBarcode: verification.expectedBarcode,
+      actualBarcode: verification.actualBarcode,
+    });
   }
   log('info', 'local label state synced; display render pending', {
     deviceId: config.deviceId,
-    localStateSynced: result?.localStateSynced ?? result?.synced !== false,
+    localStateSynced,
+    reason: localStateSynced ? (result?.reason || null) : 'current_label_mismatch',
     displayConfirmed: Boolean(result?.displayConfirmed),
     physicalRendered: Boolean(result?.physicalRendered),
     assignmentHash: assignmentHash || result?.assignmentHash || null,
+    expectedProductId: verification.expectedProductId,
+    actualProductId: verification.actualProductId,
+    expectedAssignmentHash: verification.expectedAssignmentHash,
+    actualAssignmentHash: verification.actualAssignmentHash,
+    expectedBarcode: verification.expectedBarcode,
+    actualBarcode: verification.actualBarcode,
   });
 };
 

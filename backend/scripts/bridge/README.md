@@ -18,6 +18,9 @@ ESL_BRIDGE_REQUEST_TIMEOUT_MS=10000
 ```
 
 Production backend ve local backend aynı `ESL_DEVICE_TOKEN` değerini bilmeli. Token loglanmaz.
+ESP firmware setup sırasında aynı token kaydedilmelidir; aksi halde `render-confirm` 401 alır ve panel cihaz güncellemesini beklemeye devam eder.
+
+Label sync akışında bridge, production assignment'ı local API'ye yazdıktan sonra local `current-label` endpointini tekrar okur. `productId`, `assignmentHash` veya barkod beklenen değerle eşleşmezse `localStateSynced:false` ve `reason:"current_label_mismatch"` loglanır; aynı assignment hash tamamlandı sayılmaz ve sonraki turda tekrar denenir.
 
 ## Run
 

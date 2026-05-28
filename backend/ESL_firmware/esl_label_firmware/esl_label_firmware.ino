@@ -299,15 +299,16 @@ static void askNetworkConfigFromSerial()
 
   Serial.println();
   Serial.println("=== Ag Ayari ===");
-  Serial.println("Sadece backend IP, WiFi SSID ve WiFi sifre sorulur.");
+  Serial.println("Backend IP, WiFi SSID, WiFi sifre ve ESL device token sorulur.");
   Serial.println("Bos birakirsan son kaydedilen deger kullanilir.");
   Serial.println("Kayit yoksa deger girmen zorunludur; eski varsayilanlar kullanilmaz.");
+  Serial.println("Token yoksa render-confirm calismaz ve panel cihaz guncellemesini bekler.");
   Serial.println();
 
   backendIp = promptSavedConfigValue("Backend IP", savedBackendIp);
   wifiSsid = promptSavedConfigValue("WiFi SSID", savedWifiSsid);
   wifiPass = promptSavedConfigValue("WiFi sifre", savedWifiPass);
-  eslDeviceToken = promptOptionalConfigValue("ESL device token", savedDeviceToken);
+  eslDeviceToken = promptSavedConfigValue("ESL device token", savedDeviceToken);
 
   preferences.putString("ip", backendIp);
   preferences.putString("ssid", wifiSsid);
