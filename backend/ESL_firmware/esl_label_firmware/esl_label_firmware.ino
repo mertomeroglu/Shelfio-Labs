@@ -1522,5 +1522,11 @@ void loop()
       } else {
         Serial.println("Etiket ayni, ekran guncellenmiyor.");
       }
+
+      if (!labelReady) {
+        labelReady = true;
+        updateDisplay();
+      }
+    }
   }
 }
