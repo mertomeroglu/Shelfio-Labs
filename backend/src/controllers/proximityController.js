@@ -30,7 +30,7 @@ const parseProductDedupeIdentity = (dedupeKey = '') => {
   const text = normalizeText(dedupeKey);
   if (!text.startsWith(PRODUCT_DISCOUNT_DEDUPE_PREFIX)) return null;
   const parts = text.split(':');
-  return normalizeText(parts.slice(3).join(':')) || null;
+  return normalizeText(parts.slice(2).join(':')) || null;
 };
 
 const productDiagnosticsFromNotification = (notification = null) => {
@@ -75,6 +75,57 @@ const resolveDeliveryDedupeUntil = (row = {}, rule = null) => {
   const createdAt = new Date(row.createdAt);
   if (Number.isNaN(createdAt.getTime())) return null;
   return new Date(createdAt.getTime() + (getRuleProductDedupeSeconds(rule) * 1000)).toISOString();
+};
+
+const buildDynamicDeliveryPayload = ({ row = {}, delivery = null, notification = null, productById = new Map(), productByBarcode = new Map(), rule = null } = {}) => {
+  const nPayload = notification?.payload && typeof notification.payload === 'object' ? notification.payload : {};
+  
+  const fromNotificationProductId = normalizeText(nPayload.productId) || null;
+  const fromNotificationBarcode = normalizeText(nPayload.barcode) || null;
+  const dedupeKey = normalizeText(row.dedupeKey || delivery?.dedupeKey) || null;
+  const dedupeIdentity = parseProductDedupeIdentity(dedupeKey);
+  
+  const product = (fromNotificationProductId ? productById.get(fromNotificationProductId) : null)
+    || (fromNotificationBarcode ? productByBarcode.get(fromNotificationBarcode) : null)
+    || (dedupeIdentity ? productById.get(dedupeIdentity) || productByBarcode.get(dedupeIdentity) : null)
+    || null;
+
+  const productId = fromNotificationProductId || product?.id || dedupeIdentity || null;
+  const productName = normalizeText(nPayload.productName) || product?.name || null;
+  const barcode = fromNotificationBarcode || product?.barcode || null;
+  const sku = normalizeText(nPayload.sku) || product?.sku || null;
+  
+  const offerSource = normalizeText(nPayload.offerSource) || null;
+  const eslDeviceId = normalizeText(nPayload.eslDeviceId) || null;
+  const currentLabelSource = normalizeText(nPayload.currentLabelSource) || null;
+  const labelBarcode = normalizeText(nPayload.labelBarcode) || null;
+  const labelProductId = normalizeText(nPayload.labelProductId) || null;
+  const assignedProductId = normalizeText(nPayload.assignedProductId) || null;
+  const bridgeAssignedProductId = normalizeText(nPayload.bridgeAssignedProductId) || null;
+  const resolvedProductId = normalizeText(nPayload.resolvedProductId) || product?.id || null;
+  const resolvedBarcode = normalizeText(nPayload.resolvedBarcode) || product?.barcode || null;
+  const staleBridgeLabelIgnored = nPayload.staleBridgeLabelIgnored === true || String(nPayload.staleBridgeLabelIgnored) === 'true';
+  
+  const dedupeUntil = nPayload.dedupeUntil || (delivery ? resolveDeliveryDedupeUntil(delivery, rule) : null) || null;
+
+  return {
+    productId,
+    productName,
+    barcode,
+    sku,
+    offerSource,
+    eslDeviceId,
+    currentLabelSource,
+    labelBarcode,
+    labelProductId,
+    assignedProductId,
+    bridgeAssignedProductId,
+    resolvedProductId,
+    resolvedBarcode,
+    staleBridgeLabelIgnored,
+    dedupeKey,
+    dedupeUntil,
+  };
 };
 
 const listResponse = (res, { items, total, page, limit, filters = {} }) => res.json({
@@ -427,7 +478,7 @@ export const proximityController = {
         ...(req.query.eventType ? { eventType: normalizeUpper(req.query.eventType) } : {}),
         ...(req.query.source ? { source: normalizeUpper(req.query.source) } : {}),
       };
-      const [total, rows, beacons, zones, deliveries, rules, users, customers, products] = await Promise.all([
+      const [total, rows, beacons, zones, deliveries, rules, users, customers, products, notifications] = await Promise.all([
         prisma.proximityEvent.count({ where }),
         prisma.proximityEvent.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take: limit }),
         prisma.beaconDevice.findMany({ select: { id: true, name: true, deviceCode: true } }),
@@ -436,7 +487,8 @@ export const proximityController = {
         prisma.notificationRule.findMany({ select: { id: true, name: true, payload: true } }),
         prisma.user.findMany({ select: { id: true, name: true, email: true, username: true } }),
         prisma.customer.findMany({ select: { id: true, name: true, email: true, phone: true, customerNo: true } }),
-        prisma.product.findMany({ select: { id: true, name: true, barcode: true } }),
+        prisma.product.findMany({ select: { id: true, name: true, barcode: true, sku: true } }),
+        prisma.notification.findMany({ select: { id: true, title: true, type: true, payload: true } }),
       ]);
       const beaconMap = new Map(beacons.map((item) => [item.id, item]));
       const zoneMap = new Map(zones.map((item) => [item.id, item]));
@@ -446,10 +498,19 @@ export const proximityController = {
       const customerMap = new Map(customers.map((item) => [item.id, item]));
       const productById = new Map(products.map((item) => [item.id, item]));
       const productByBarcode = new Map(products.map((item) => [normalizeText(item.barcode), item]).filter(([barcode]) => barcode));
+      const notificationMap = new Map(notifications.map((item) => [item.id, item]));
       const items = rows.map((row) => {
         const delivery = deliveryByEvent.get(row.id);
         const deliveryRule = delivery?.notificationRuleId ? ruleMap.get(delivery.notificationRuleId) || null : null;
-        const diagnostics = productDiagnosticsFromMaps({ row: delivery || {}, productById, productByBarcode });
+        const notification = delivery?.notificationId ? notificationMap.get(delivery.notificationId) || null : null;
+        const deliveryPayload = buildDynamicDeliveryPayload({
+          row: delivery || {},
+          delivery: delivery || null,
+          notification,
+          productById,
+          productByBarcode,
+          rule: deliveryRule,
+        });
         const isAnonymous = !row.userId || row.userId === 'anonymous' || row.userType === 'anonymous';
         const isNonCustomer = !isAnonymous && row.userType && row.userType !== 'customer';
         const actor = isAnonymous
@@ -473,12 +534,13 @@ export const proximityController = {
           delivery: delivery || null,
           result: delivery?.status || 'LOGGED',
           reason: inferredReason,
-          productId: diagnostics.productId,
-          barcode: diagnostics.barcode,
-          productName: diagnostics.productName,
-          offerSource: diagnostics.offerSource,
-          dedupeKey: diagnostics.dedupeKey,
-          dedupeUntil: delivery ? resolveDeliveryDedupeUntil(delivery, deliveryRule) : null,
+          productId: deliveryPayload.productId,
+          barcode: deliveryPayload.barcode,
+          productName: deliveryPayload.productName,
+          offerSource: deliveryPayload.offerSource,
+          dedupeKey: deliveryPayload.dedupeKey,
+          dedupeUntil: deliveryPayload.dedupeUntil,
+          deliveryPayload,
         };
       });
       listResponse(res, { items, total, page, limit, filters: req.query });
@@ -505,7 +567,7 @@ export const proximityController = {
         prisma.user.findMany({ select: { id: true, name: true, email: true, username: true } }),
         prisma.customer.findMany({ select: { id: true, name: true, email: true, phone: true, customerNo: true } }),
         prisma.proximityEvent.findMany({ select: { id: true, userId: true, userType: true } }),
-        prisma.product.findMany({ select: { id: true, name: true, barcode: true } }),
+        prisma.product.findMany({ select: { id: true, name: true, barcode: true, sku: true } }),
       ]);
       const ruleMap = new Map(rules.map((item) => [item.id, item]));
       const beaconMap = new Map(beacons.map((item) => [item.id, item]));
@@ -520,7 +582,14 @@ export const proximityController = {
         const event = row.proximityEventId ? eventMap.get(row.proximityEventId) || null : null;
         const notification = row.notificationId ? notificationMap.get(row.notificationId) || null : null;
         const rule = row.notificationRuleId ? ruleMap.get(row.notificationRuleId) || null : null;
-        const diagnostics = productDiagnosticsFromMaps({ notification, row, productById, productByBarcode });
+        const deliveryPayload = buildDynamicDeliveryPayload({
+          row,
+          delivery: row,
+          notification,
+          productById,
+          productByBarcode,
+          rule,
+        });
         const actorType = event?.userType || null;
         const actor = actorType === 'customer'
           ? customerMap.get(row.userId)
@@ -535,12 +604,13 @@ export const proximityController = {
           locationZone: row.locationZoneId ? zoneMap.get(row.locationZoneId) || null : null,
           notification,
           reason: row.skipReason || null,
-          productId: diagnostics.productId,
-          barcode: diagnostics.barcode,
-          productName: diagnostics.productName,
-          offerSource: diagnostics.offerSource,
-          dedupeKey: diagnostics.dedupeKey,
-          dedupeUntil: resolveDeliveryDedupeUntil(row, rule),
+          productId: deliveryPayload.productId,
+          barcode: deliveryPayload.barcode,
+          productName: deliveryPayload.productName,
+          offerSource: deliveryPayload.offerSource,
+          dedupeKey: deliveryPayload.dedupeKey,
+          dedupeUntil: deliveryPayload.dedupeUntil,
+          deliveryPayload,
           zoneName: notification?.payload?.zoneName || zoneMap.get(row.locationZoneId)?.name || null,
           proximityEvent: event,
           user: row.userId ? actor || null : null,

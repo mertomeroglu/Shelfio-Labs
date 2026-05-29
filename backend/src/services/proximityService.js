@@ -159,6 +159,7 @@ const toResponse = ({
   barcode = null,
   productName = null,
   dedupeKey = null,
+  offerSource = null,
 }) => {
   const response = {
     success: true,
@@ -173,6 +174,7 @@ const toResponse = ({
   if (barcode) response.barcode = barcode;
   if (productName) response.productName = productName;
   if (dedupeKey) response.dedupeKey = dedupeKey;
+  if (offerSource) response.offerSource = offerSource;
   return response;
 };
 
@@ -243,6 +245,7 @@ export const proximityService = {
       barcode: evaluation.barcode || null,
       productName: evaluation.productName || null,
       dedupeKey: evaluation.dedupeKey || null,
+      offerSource: evaluation.offerSource || null,
     });
   },
 };

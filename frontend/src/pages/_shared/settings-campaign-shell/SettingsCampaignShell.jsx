@@ -19,7 +19,7 @@ import { procurementService } from '../../../services/procurementService.js';
 import { posService } from '../../../services/posService.js';
 import { userService } from '../../../services/userService.js';
 import { buildCampaignCreatedNotificationPayload, notificationService } from '../../../services/notificationService.js';
-import { playNotificationTone } from '../../../utils/notificationSound.js';
+import { playNotificationTone, preloadNotificationTone } from '../../../utils/notificationSound.js';
 import { normalizeTurkishText as normalizeMojibakeText } from '../../../utils/turkishText.js';
 import { SUPPORT_CONTACT } from '../../../constants/contact.js';
 import {
@@ -1784,6 +1784,23 @@ const formatAutoSaleRemainingTime = (milliseconds) => {
 
 const NOTIFICATION_SOUND_ENABLED_KEY = 'shelfio.toast.sound.enabled';
 const NOTIFICATION_SOUND_VOLUME_KEY = 'shelfio.toast.sound.volume';
+const NOTIFICATION_SOUND_FILE_KEY = 'shelfio.toast.sound.file';
+
+const NOTIFICATION_SOUNDS = [
+  { value: 'dragon-studio-clean-minimal-pop-467466.mp3', label: 'Bildirim 1' },
+  { value: 'dragon-studio-new-notification-3-398649.mp3', label: 'Bildirim 2' },
+  { value: 'dragon-studio-new-notification-444814.mp3', label: 'Bildirim 3' },
+  { value: 'dragon-studio-notification-click-sound-455421.mp3', label: 'Bildirim 4' },
+  { value: 'dragon-studio-notification-sound-effect-372475.mp3', label: 'Bildirim 5' },
+  { value: 'dragon-studio-pop-402322.mp3', label: 'Bildirim 6' },
+  { value: 'soundshelfstudio-ui-app-notification-524745.mp3', label: 'Bildirim 7' },
+  { value: 'universfield-new-notification-010-352755.mp3', label: 'Bildirim 8' },
+  { value: 'universfield-new-notification-016-350210.mp3', label: 'Bildirim 9' },
+  { value: 'universfield-new-notification-038-487899 (1).mp3', label: 'Bildirim 10' },
+  { value: 'universfield-new-notification-038-487899.mp3', label: 'Bildirim 11' },
+  { value: 'universfield-new-notification-051-494246.mp3', label: 'Bildirim 12' },
+  { value: 'universfield-new-notification-062-494544.mp3', label: 'Bildirim 13' },
+];
 
 const clampSoundVolume = (value) => {
   const numeric = Number(value);
@@ -2370,6 +2387,14 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       return 40;
     }
   });
+  const [notificationSound, setNotificationSound] = useState(() => {
+    if (typeof window === 'undefined') return 'dragon-studio-clean-minimal-pop-467466.mp3';
+    try {
+      return window.localStorage.getItem(NOTIFICATION_SOUND_FILE_KEY) || 'dragon-studio-clean-minimal-pop-467466.mp3';
+    } catch {
+      return 'dragon-studio-clean-minimal-pop-467466.mp3';
+    }
+  });
 
   const [securityUnlocked, setSecurityUnlocked] = useState(false);
   const [securityEditMode, setSecurityEditMode] = useState(false);
@@ -2789,10 +2814,21 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
     try {
       window.localStorage.setItem(NOTIFICATION_SOUND_ENABLED_KEY, notificationSoundEnabled ? 'true' : 'false');
       window.localStorage.setItem(NOTIFICATION_SOUND_VOLUME_KEY, String(clampSoundVolume(notificationSoundVolume)));
+      if (notificationSound) {
+        window.localStorage.setItem(NOTIFICATION_SOUND_FILE_KEY, notificationSound);
+      }
     } catch {
       // Local storage erisim hatası kritik değil.
     }
-  }, [notificationSoundEnabled, notificationSoundVolume]);
+  }, [notificationSoundEnabled, notificationSoundVolume, notificationSound]);
+
+  useEffect(() => {
+    try {
+      preloadNotificationTone();
+    } catch {
+      // ignore
+    }
+  }, [notificationSound]);
 
   useEffect(() => {
     if (!isCampaignPage) return;
@@ -8566,6 +8602,20 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                     <button type="button" className="s-audit-btn s-sound-test-btn" onClick={handlePreviewNotificationSound}>
                       <Settings2 size={14} /> Bildirimi Test Et
                     </button>
+                  </div>
+                  <div className="s-sound-file-control" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', paddingTop: '10px', borderTop: '1px solid rgba(139, 92, 246, 0.1)', width: '100%', gap: '10px' }}>
+                    <span className="s-config-label" style={{ fontSize: '0.8rem' }}>Bildirim Sesi</span>
+                    <select
+                      value={notificationSound}
+                      onChange={(event) => setNotificationSound(event.target.value)}
+                      disabled={!notificationSoundEnabled}
+                      className="s-config-select"
+                      style={{ padding: '6px 10px', fontSize: '0.82rem', height: '34px', minWidth: '150px' }}
+                    >
+                      {NOTIFICATION_SOUNDS.map((sound) => (
+                        <option key={sound.value} value={sound.value}>{sound.label}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>

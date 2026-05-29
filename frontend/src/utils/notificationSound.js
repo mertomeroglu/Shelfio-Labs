@@ -1,8 +1,8 @@
-﻿import notificationToneUrl from '../assets/notify.wav';
+import notificationToneUrl from '../assets/notify.wav';
 
-let preloadPromise = null;
+let cachedAudio = null;
+let currentAudioPath = null;
 let unlockHandlersBound = false;
-let activeAudio = null;
 let lastTriggerAtMs = 0;
 
 const DEBOUNCE_MS = 220;
@@ -10,26 +10,45 @@ const NOTIFICATION_SOUND_PATH = notificationToneUrl;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-const clearActivePlayback = () => {
-  if (activeAudio) {
-    try {
-      activeAudio.pause();
-      activeAudio.currentTime = 0;
-    } catch {
-      // Sessiz fallback.
-    }
-  }
-  activeAudio = null;
-};
-
-const createAudioElement = () => {
+const getOrInitializeAudio = () => {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') {
     return null;
   }
 
-  const audio = new window.Audio(NOTIFICATION_SOUND_PATH);
-  audio.preload = 'auto';
-  return audio;
+  let path = NOTIFICATION_SOUND_PATH;
+  try {
+    const storedSound = window.localStorage.getItem('shelfio.toast.sound.file');
+    if (storedSound) {
+      path = `/sounds/notifications/${storedSound}`;
+    }
+  } catch {
+    // Sessiz fallback.
+  }
+
+  if (!cachedAudio || currentAudioPath !== path) {
+    if (cachedAudio) {
+      try {
+        cachedAudio.pause();
+        cachedAudio.src = '';
+        cachedAudio.load();
+      } catch {
+        // ignore
+      }
+    }
+
+    cachedAudio = new window.Audio(path);
+    cachedAudio.preload = 'auto';
+    currentAudioPath = path;
+
+    // Start preloading immediately
+    try {
+      cachedAudio.load();
+    } catch {
+      // ignore
+    }
+  }
+
+  return cachedAudio;
 };
 
 const bindUnlockHandlers = () => {
@@ -40,26 +59,32 @@ const bindUnlockHandlers = () => {
   unlockHandlersBound = true;
 
   const unlock = () => {
-    const probe = createAudioElement();
-    if (!probe) {
+    const audio = getOrInitializeAudio();
+    if (!audio) {
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('touchstart', unlock);
       window.removeEventListener('keydown', unlock);
       return;
     }
 
-    probe.volume = 0;
-    probe.play().catch(() => {}).finally(() => {
-      try {
-        probe.pause();
-        probe.currentTime = 0;
-      } catch {
-        // Sessiz fallback.
-      }
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('touchstart', unlock);
-      window.removeEventListener('keydown', unlock);
-    });
+    const originalVolume = audio.volume;
+    audio.volume = 0;
+    audio.play()
+      .then(() => {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        audio.volume = originalVolume;
+        window.removeEventListener('pointerdown', unlock);
+        window.removeEventListener('touchstart', unlock);
+        window.removeEventListener('keydown', unlock);
+      });
   };
 
   window.addEventListener('pointerdown', unlock, { once: true, passive: true });
@@ -70,29 +95,16 @@ const bindUnlockHandlers = () => {
 export function preloadNotificationTone() {
   bindUnlockHandlers();
 
-  if (!preloadPromise) {
-    preloadPromise = Promise.resolve().then(() => {
-      const probe = createAudioElement();
-      if (!probe) return;
+  const audio = getOrInitializeAudio();
+  if (!audio) return Promise.resolve();
 
-      probe.volume = 0;
-      return new Promise((resolve) => {
-        const done = () => resolve();
-        probe.addEventListener('canplaythrough', done, { once: true });
-        probe.addEventListener('error', done, { once: true });
-
-        try {
-          probe.load();
-        } catch {
-          resolve();
-        }
-      });
-    }).catch(() => {
-      // Sessiz fallback.
-    });
+  try {
+    audio.load();
+  } catch {
+    // ignore
   }
 
-  return preloadPromise;
+  return Promise.resolve(audio);
 }
 
 export async function playNotificationTone(volumePercent = 40) {
@@ -103,37 +115,22 @@ export async function playNotificationTone(volumePercent = 40) {
   lastTriggerAtMs = nowMs;
 
   bindUnlockHandlers();
-  await preloadNotificationTone();
 
-  const audio = createAudioElement();
+  const audio = getOrInitializeAudio();
   if (!audio) return;
 
-  clearActivePlayback();
-
-  audio.volume = clamp(Number(volumePercent) / 100, 0, 1);
-  activeAudio = audio;
-
   try {
+    audio.currentTime = 0;
+    audio.volume = clamp(Number(volumePercent) / 100, 0, 1);
     await audio.play();
-  } catch {
-    if (activeAudio === audio) {
-      activeAudio = null;
-    }
-    return;
+  } catch (error) {
+    console.warn('Notification audio playback failed:', error);
   }
-
-  audio.onended = () => {
-    if (activeAudio === audio) {
-      activeAudio = null;
-    }
-  };
-  audio.onerror = () => {
-    if (activeAudio === audio) {
-      activeAudio = null;
-    }
-  };
 }
 
-void preloadNotificationTone();
-
-
+// Initial preloading on script load
+try {
+  preloadNotificationTone();
+} catch {
+  // ignore
+}

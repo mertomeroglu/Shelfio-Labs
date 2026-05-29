@@ -84,6 +84,54 @@ const empty = (value) => {
   return value;
 };
 
+const getProductDedupeId = (dedupeKey) => {
+  const text = String(dedupeKey || '').trim();
+  if (!text.startsWith('proximity-product-discount:')) return '';
+  const parts = text.split(':');
+  return parts[parts.length - 1] || '';
+};
+
+const resolveProductFieldName = (row) => {
+  const dPayload = row.deliveryPayload || {};
+  const nPayload = row.notificationPayload || row.notification?.payload || {};
+  const rPayload = row.rawPayload || {};
+  return row.productName
+    || dPayload.productName
+    || nPayload.productName
+    || rPayload.productName
+    || '';
+};
+
+const resolveProductIdField = (row) => {
+  const dPayload = row.deliveryPayload || {};
+  const dedupeKey = row.dedupeKey || dPayload.dedupeKey || '';
+  const dedupeId = getProductDedupeId(dedupeKey);
+  return row.productId
+    || dPayload.productId
+    || dedupeId
+    || '';
+};
+
+const resolveBarcodeField = (row) => {
+  const dPayload = row.deliveryPayload || {};
+  const nPayload = row.notificationPayload || row.notification?.payload || {};
+  const rPayload = row.rawPayload || {};
+  return row.barcode
+    || dPayload.barcode
+    || nPayload.barcode
+    || rPayload.barcode
+    || '';
+};
+
+const resolveOfferSourceField = (row) => {
+  const dPayload = row.deliveryPayload || {};
+  const nPayload = row.notificationPayload || row.notification?.payload || {};
+  return row.offerSource
+    || dPayload.offerSource
+    || nPayload.offerSource
+    || '';
+};
+
 const formatReason = (value) => {
   const code = String(value || '').trim();
   if (!code) return '-';
@@ -880,10 +928,10 @@ function EventLogTab({ rows, filters, setFilters, onRefresh, loading, beacons, z
               <td>{empty(row.source)}</td>
               <td>{row.delivery?.status ? <StatusPill value={row.delivery.status} /> : '-'}</td>
               <td>{formatReason(row.delivery?.skipReason || row.reason)}</td>
-              <td>{empty(row.productName || row.productId)}</td>
-              <td className="pm-mono">{empty(row.productId)}</td>
-              <td className="pm-mono">{empty(row.barcode)}</td>
-              <td>{empty(row.offerSource)}</td>
+              <td>{empty(resolveProductFieldName(row))}</td>
+              <td className="pm-mono">{empty(resolveProductIdField(row))}</td>
+              <td className="pm-mono">{empty(resolveBarcodeField(row))}</td>
+              <td>{empty(resolveOfferSourceField(row))}</td>
               <td className="pm-mono">{empty(row.dedupeKey)}</td>
               <td>{formatDate(row.dedupeUntil)}</td>
             </tr>
@@ -931,10 +979,10 @@ function DeliveryLogTab({ rows, filters, setFilters, onRefresh, loading, beacons
               <td>{empty(row.notification?.title || row.notificationId)}</td>
               <td><StatusPill value={row.status} /></td>
               <td>{formatReason(row.skipReason || row.reason)}</td>
-              <td>{empty(row.productName || row.productId)}</td>
-              <td className="pm-mono">{empty(row.productId)}</td>
-              <td className="pm-mono">{empty(row.barcode)}</td>
-              <td>{empty(row.offerSource)}</td>
+              <td>{empty(resolveProductFieldName(row))}</td>
+              <td className="pm-mono">{empty(resolveProductIdField(row))}</td>
+              <td className="pm-mono">{empty(resolveBarcodeField(row))}</td>
+              <td>{empty(resolveOfferSourceField(row))}</td>
               <td>{empty(row.zoneName || row.locationZone?.name || row.locationZoneId)}</td>
               <td>{empty(row.beaconDevice?.name || row.beaconDevice?.deviceCode || row.beaconDeviceId)}</td>
               <td className="pm-mono">{empty(row.dedupeKey)}</td>

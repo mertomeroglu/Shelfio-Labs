@@ -1,4 +1,4 @@
-﻿import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { notificationRepo } from '../../repositories/notificationRepository.js';
 import { getPrisma } from '../../providers/postgresProvider.js';
 import { listActiveCampaignDefinitions } from '../campaignPricingService.js';
@@ -399,6 +399,17 @@ const deliverNotification = async ({
         productId: productDiagnostic?.productId || null,
         barcode: productDiagnostic?.barcode || null,
         productName: productDiagnostic?.productName || null,
+        sku: productDiagnostic?.sku || null,
+        offerSource: productDiagnostic?.offerSource || null,
+        eslDeviceId: productDiagnostic?.eslDeviceId || null,
+        currentLabelSource: productDiagnostic?.currentLabelSource || null,
+        labelBarcode: productDiagnostic?.labelBarcode || null,
+        labelProductId: productDiagnostic?.labelProductId || null,
+        assignedProductId: productDiagnostic?.assignedProductId || null,
+        bridgeAssignedProductId: productDiagnostic?.bridgeAssignedProductId || null,
+        resolvedProductId: productDiagnostic?.resolvedProductId || null,
+        resolvedBarcode: productDiagnostic?.resolvedBarcode || null,
+        staleBridgeLabelIgnored: productDiagnostic?.staleBridgeLabelIgnored === true,
         dedupeKey: productDedupeKey,
       };
     }
@@ -592,6 +603,7 @@ const findLabelProduct = async ({ label = {}, eslDevice = {} }) => {
     id: true,
     name: true,
     barcode: true,
+    sku: true,
     salePrice: true,
     payload: true,
     lastPriceChangeSource: true,
@@ -899,21 +911,6 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
 
   const productName = normalizeText(label.productName || product.name) || 'Bu ürün';
   const barcode = normalizeText(label.barcode || product.barcode);
-  const productDiagnostic = {
-    productId: product.id,
-    barcode: barcode || null,
-    productName,
-    eslDeviceId,
-    currentLabelSource: normalizeText(label.currentLabelSource) || null,
-    assignedProductId: normalizeText(label.assignedProductId || eslDeviceContext.assignedProductId) || null,
-    bridgeAssignedProductId: normalizeText(label.bridgeAssignedProductId || eslDeviceContext.bridgeAssignedProductId) || null,
-    labelProductId: normalizeText(label.productId || label.assignedProductId) || null,
-    labelBarcode: normalizeText(label.barcode) || null,
-    resolvedProductId: product.id,
-    resolvedBarcode: product.barcode || barcode || null,
-    staleBridgeLabelIgnored: label.staleBridgeLabelIgnored === true,
-  };
-  console.info('[proximity] product discount label resolution', productDiagnostic);
   const productAisle = resolveProductAisle({ product, label, context });
   const displaySectionName = normalizeText(productAisle.displaySectionName || productAisle.sectionName) || 'Yakındaki Reyon';
   const productDedupeKey = buildProductDiscountDedupeKey({ userId, productId: product.id, barcode });
@@ -926,6 +923,32 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
   const displayPrice = signalPrices.displayPrice ?? toPriceNumberOrNull(product.salePrice);
   const campaignPrice = signalPrices.campaignPrice;
   const effectivePrice = signalPrices.effectivePrice ?? displayPrice ?? campaignPrice;
+
+  const ruleConfig = await findCustomerProximityRuleConfig({ context, eventType });
+  const rulePayload = isObject(ruleConfig?.payload) ? ruleConfig.payload : {};
+  const productDedupeSeconds = resolveProductDedupeSeconds(rulePayload.productDedupeSeconds ?? rulePayload.testCooldownSeconds);
+
+  const productDiagnostic = {
+    productId: product.id,
+    barcode: barcode || null,
+    productName,
+    sku: product.sku || null,
+    offerSource: offerSignal.offerSource || 'UNKNOWN_DISCOUNT_SIGNAL',
+    eslDeviceId,
+    currentLabelSource: normalizeText(label.currentLabelSource) || null,
+    assignedProductId: normalizeText(label.assignedProductId || eslDeviceContext.assignedProductId) || null,
+    bridgeAssignedProductId: normalizeText(label.bridgeAssignedProductId || eslDeviceContext.bridgeAssignedProductId) || null,
+    labelProductId: normalizeText(label.productId || label.assignedProductId) || null,
+    labelBarcode: normalizeText(label.barcode) || null,
+    resolvedProductId: product.id,
+    resolvedBarcode: product.barcode || barcode || null,
+    staleBridgeLabelIgnored: label.staleBridgeLabelIgnored === true,
+    dedupeKey: productDedupeKey,
+    dedupeUntil: new Date(Date.now() + productDedupeSeconds * 1000).toISOString(),
+  };
+
+  console.info('[proximity] product discount label resolution', productDiagnostic);
+
   if (effectivePrice === null || effectivePrice === undefined) {
     return {
       candidate: null,
@@ -944,9 +967,6 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
     };
   }
 
-  const ruleConfig = await findCustomerProximityRuleConfig({ context, eventType });
-  const rulePayload = isObject(ruleConfig?.payload) ? ruleConfig.payload : {};
-  const productDedupeSeconds = resolveProductDedupeSeconds(rulePayload.productDedupeSeconds ?? rulePayload.testCooldownSeconds);
   return {
     candidate: {
       ruleId: ruleConfig?.id || `domain:proximity-product-discount:${beaconDevice.id}:${eslDeviceId}:${product.id}`,
@@ -971,6 +991,7 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           productId: product.id,
           barcode: barcode || null,
           productName,
+          sku: product.sku || null,
           regularPrice,
           displayPrice,
           campaignPrice,
@@ -984,6 +1005,8 @@ const buildCustomerProductDiscountCandidate = async ({ userId, beaconDevice, con
           resolvedProductId: productDiagnostic.resolvedProductId,
           resolvedBarcode: productDiagnostic.resolvedBarcode,
           staleBridgeLabelIgnored: productDiagnostic.staleBridgeLabelIgnored,
+          dedupeKey: productDedupeKey,
+          dedupeUntil: productDiagnostic.dedupeUntil,
           zoneId: context.locationZoneId,
           zoneCode: context.zoneCode,
           zoneName: context.zoneName,
@@ -1128,7 +1151,19 @@ export const notificationRuleEngine = {
         productId: productDiscount.productDiagnostic?.productId || null,
         barcode: productDiscount.productDiagnostic?.barcode || null,
         productName: productDiscount.productDiagnostic?.productName || null,
+        sku: productDiscount.productDiagnostic?.sku || null,
+        offerSource: productDiscount.productDiagnostic?.offerSource || null,
+        eslDeviceId: productDiscount.productDiagnostic?.eslDeviceId || null,
+        currentLabelSource: productDiscount.productDiagnostic?.currentLabelSource || null,
+        labelBarcode: productDiscount.productDiagnostic?.labelBarcode || null,
+        labelProductId: productDiscount.productDiagnostic?.labelProductId || null,
+        assignedProductId: productDiscount.productDiagnostic?.assignedProductId || null,
+        bridgeAssignedProductId: productDiscount.productDiagnostic?.bridgeAssignedProductId || null,
+        resolvedProductId: productDiscount.productDiagnostic?.resolvedProductId || null,
+        resolvedBarcode: productDiscount.productDiagnostic?.resolvedBarcode || null,
+        staleBridgeLabelIgnored: productDiscount.productDiagnostic?.staleBridgeLabelIgnored === true,
         dedupeKey: productDiscount.dedupeKey || null,
+        dedupeUntil: productDiscount.productDiagnostic?.dedupeUntil || null,
       };
     }
 
