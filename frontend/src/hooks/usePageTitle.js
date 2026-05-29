@@ -33,6 +33,7 @@ export const ROUTE_TITLES = {
   '/pos-kasa': 'POS / Kasa',
   '/giris': 'Giriş',
   '/login': 'Giriş',
+  '/gizlilik-politikasi': 'Shelfio Gizlilik Politikası',
   '/musteri': 'Shelfio Müşteri Mobil',
   '/musteri/login': 'Müşteri Giriş',
   '/musteri/sepet': 'Sepet',

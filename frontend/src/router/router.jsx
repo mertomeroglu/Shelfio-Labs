@@ -51,6 +51,7 @@ const PersonnelLocation = lazy(() => import('../pages/personnel-mobile/Personnel
 const PersonnelRequest = lazy(() => import('../pages/personnel-mobile/PersonnelRequest.jsx'));
 const PersonnelCount = lazy(() => import('../pages/personnel-mobile/PersonnelCount.jsx'));
 const PersonnelNotifications = lazy(() => import('../pages/personnel-mobile/PersonnelNotifications.jsx'));
+const PrivacyPolicy = lazy(() => import('../pages/privacy-policy/PrivacyPolicy.jsx'));
 
 const withRouteSuspense = (node) => (
   <Suspense fallback={<PageLoading />}>
@@ -73,6 +74,11 @@ export const router = createBrowserRouter([
       {
         path: '/giris',
         element: <Login />,
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/gizlilik-politikasi',
+        element: withRouteSuspense(<PrivacyPolicy />),
         errorElement: <RouteError />,
       },
       {
