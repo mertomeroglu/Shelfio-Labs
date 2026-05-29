@@ -89,6 +89,11 @@ export const router = createBrowserRouter([
       },
       {
         path: '/hesap-sil',
+        element: <Navigate to="/musteri/hesap-sil" replace />,
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/musteri/hesap-sil',
         element: withRouteSuspense(<DeleteAccount />),
         errorElement: <RouteError />,
       },

@@ -34,7 +34,7 @@ export const ROUTE_TITLES = {
   '/giris': 'Giriş',
   '/login': 'Giriş',
   '/musteri/gizlilik-politikasi': 'Shelfio Gizlilik Politikası',
-  '/hesap-sil': 'Hesap Silme',
+  '/musteri/hesap-sil': 'Hesap Silme',
   '/musteri': 'Shelfio Müşteri Mobil',
   '/musteri/login': 'Müşteri Giriş',
   '/musteri/sepet': 'Sepet',

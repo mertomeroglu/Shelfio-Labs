@@ -3334,7 +3334,7 @@ export default function CustomerPortal() {
           </div>
 
           <div className="customer-settings-child-card" style={{ marginTop: '12px', padding: '12px', background: 'transparent', border: '1px dashed #f87171', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
-            <button type="button" style={{ width: '100%', padding: '10px', background: 'transparent', color: '#dc2626', border: '1px solid #dc2626', borderRadius: '12px', fontWeight: 600, fontSize: '0.9rem', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate('/hesap-sil')}>
+            <button type="button" style={{ width: '100%', padding: '10px', background: 'transparent', color: '#dc2626', border: '1px solid #dc2626', borderRadius: '12px', fontWeight: 600, fontSize: '0.9rem', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer' }} onClick={() => navigate('/musteri/hesap-sil')}>
               Hesabımı Sil
             </button>
             <span style={{ fontSize: '0.78rem', color: '#ef4444', textAlign: 'center' }}>Müşteri hesabınızı kalıcı olarak silin.</span>
