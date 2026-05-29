@@ -221,6 +221,33 @@ export const customerAuthService = {
 
     return { message: 'Şifreniz güncellendi. Giriş yapabilirsiniz.' };
   },
+  async deleteAccount(payload) {
+    const identifier = normalize(payload.identifier);
+    const password = String(payload.password || '');
+
+    if (!identifier || !password) {
+      throw new AppError(400, 'Kullanıcı adı/e-posta ve şifre zorunludur.');
+    }
+
+    const phone = normalizePhone(identifier);
+    const row = (await customerRepo.getAll()).find((x) => 
+      String(x.email || '').toLowerCase() === identifier.toLowerCase() || 
+      normalizePhone(x.phone) === phone ||
+      normalize(x.name).toLowerCase() === identifier.toLowerCase() ||
+      normalize(x.customerNo) === identifier
+    );
+
+    if (!row) {
+      throw new AppError(401, 'Kullanıcı bilgileri veya şifre hatalı.');
+    }
+
+    if (!await comparePassword(password, row.passwordHash || '')) {
+      throw new AppError(401, 'Kullanıcı bilgileri veya şifre hatalı.');
+    }
+
+    await customerRepo.deleteById(row.id);
+    return { message: 'Müşteri hesabınız ve ilişkili tüm kişisel verileriniz kalıcı olarak silinmiştir.' };
+  },
   async refreshSession(payload, meta = {}) {
     const refreshToken = String(payload?.refreshToken || '').trim();
     if (!refreshToken) throw new AppError(401, 'Oturum yenileme bilgisi bulunamadı');

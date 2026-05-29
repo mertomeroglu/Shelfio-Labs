@@ -52,6 +52,7 @@ const PersonnelRequest = lazy(() => import('../pages/personnel-mobile/PersonnelR
 const PersonnelCount = lazy(() => import('../pages/personnel-mobile/PersonnelCount.jsx'));
 const PersonnelNotifications = lazy(() => import('../pages/personnel-mobile/PersonnelNotifications.jsx'));
 const PrivacyPolicy = lazy(() => import('../pages/privacy-policy/PrivacyPolicy.jsx'));
+const DeleteAccount = lazy(() => import('../pages/customer-portal/DeleteAccount.jsx'));
 
 const withRouteSuspense = (node) => (
   <Suspense fallback={<PageLoading />}>
@@ -78,7 +79,17 @@ export const router = createBrowserRouter([
       },
       {
         path: '/gizlilik-politikasi',
+        element: <Navigate to="/musteri/gizlilik-politikasi" replace />,
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/musteri/gizlilik-politikasi',
         element: withRouteSuspense(<PrivacyPolicy />),
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/hesap-sil',
+        element: withRouteSuspense(<DeleteAccount />),
         errorElement: <RouteError />,
       },
       {

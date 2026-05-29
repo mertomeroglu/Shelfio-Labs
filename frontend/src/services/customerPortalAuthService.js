@@ -1,4 +1,4 @@
-﻿const CUSTOMER_TOKEN_KEY = 'shelfio_customer_token';
+const CUSTOMER_TOKEN_KEY = 'shelfio_customer_token';
 const CUSTOMER_REFRESH_TOKEN_KEY = 'shelfio_customer_refresh_token';
 const CUSTOMER_USER_KEY = 'shelfio_customer_user';
 export const CUSTOMER_AUTH_UPDATED_EVENT = 'shelfio:customer-auth-updated';
@@ -160,4 +160,12 @@ export const customerPortalAuthService = {
   notifications: (limit = 40) => request(`/customer-auth/notifications?limit=${Number(limit) || 40}`),
   markNotificationsAsRead: () => request('/customer-auth/notifications/read-all', { method: 'PATCH' }),
   clearNotifications: () => request('/customer-auth/notifications', { method: 'DELETE' }),
+  async deleteAccount(identifier, password) {
+    const res = await request('/customer-auth/delete-account', {
+      method: 'POST',
+      body: JSON.stringify({ identifier, password }),
+    });
+    clear();
+    return res;
+  },
 };
