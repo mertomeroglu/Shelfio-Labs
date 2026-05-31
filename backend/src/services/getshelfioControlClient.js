@@ -21,6 +21,13 @@ const sanitizeForLog = (value, depth = 0) => {
   ]));
 };
 
+const controlFailure = (errorCode, status = 0) => ({
+  ok: false,
+  reachable: false,
+  errorCode,
+  status,
+});
+
 const buildUrl = (path, query = {}) => {
   const base = String(config.getshelfioControlApiUrl || '').replace(/\/+$/, '');
   const url = new URL(`${base}${path.startsWith('/') ? path : `/${path}`}`);
@@ -35,35 +42,33 @@ const buildUrl = (path, query = {}) => {
 const readJsonResponse = async (response) => {
   const text = await response.text();
   if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
+  return JSON.parse(text);
 };
 
 const normalizeControlResponse = (payload) => {
-  const data = payload?.data ?? payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return controlFailure('control_invalid_response');
+  }
+
   return {
-    ok: payload?.success !== false,
-    data,
-    meta: payload?.meta || null,
+    ok: true,
+    reachable: true,
+    data: payload.data ?? payload,
+    meta: payload.meta || null,
   };
 };
 
 const requestControl = async (path, options = {}) => {
-  if (!isLicenseControlConfigured()) {
-    const error = new Error('GETSHELFIO_CONTROL_API_URL veya GETSHELFIO_CONTROL_SECRET eksik.');
-    error.code = 'control_not_configured';
-    throw error;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.licenseControlTimeoutMs);
-  const url = buildUrl(path, options.query);
+  let timeout;
 
   try {
-    const response = await fetch(url, {
+    if (!isLicenseControlConfigured()) {
+      return controlFailure('control_not_configured');
+    }
+
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), config.licenseControlTimeoutMs);
+    const response = await fetch(buildUrl(path, options.query), {
       method: options.method || 'GET',
       headers: {
         Accept: 'application/json',
@@ -73,44 +78,58 @@ const requestControl = async (path, options = {}) => {
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
-    const payload = await readJsonResponse(response);
-    if (!response.ok || payload?.success === false) {
-      const error = new Error(payload?.message || `getshelfio Control API ${response.status}`);
-      error.status = response.status;
-      error.payload = sanitizeForLog(payload);
-      throw error;
+    if (response.status === 401 || response.status === 403) {
+      return controlFailure('control_unauthorized', response.status);
     }
+
+    if (!response.ok) {
+      return controlFailure('control_unreachable', response.status);
+    }
+
+    const payload = await readJsonResponse(response);
+    if (payload?.success === false) {
+      return controlFailure('control_invalid_response', response.status);
+    }
+
     return normalizeControlResponse(payload);
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return controlFailure('control_timeout');
+    }
+
+    if (error instanceof SyntaxError) {
+      return controlFailure('control_invalid_response');
+    }
+
+    return controlFailure('control_unreachable');
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 };
 
 const cached = async (key, loader) => {
-  const now = Date.now();
-  const current = CONTROL_CACHE.get(key);
-  if (current && current.expiresAt > now) return current.value;
-  const value = await loader();
-  CONTROL_CACHE.set(key, {
-    value,
-    expiresAt: now + config.licenseControlCacheTtlSeconds * 1000,
-  });
-  return value;
+  try {
+    const now = Date.now();
+    const current = CONTROL_CACHE.get(key);
+    if (current && current.expiresAt > now) return current.value;
+    const value = await loader();
+    if (value.ok) {
+      CONTROL_CACHE.set(key, {
+        value,
+        expiresAt: now + config.licenseControlCacheTtlSeconds * 1000,
+      });
+    }
+    return value;
+  } catch {
+    return controlFailure('control_unreachable');
+  }
 };
 
-const safeCall = async (action, loader) => {
+const callPublic = async (loader) => {
   try {
-    return { success: true, ...(await loader()) };
-  } catch (error) {
-    return {
-      success: false,
-      error: {
-        message: error?.name === 'AbortError' ? 'getshelfio Control API timeout' : (error?.message || 'Control API hatası'),
-        code: error?.code || '',
-        status: error?.status || 0,
-        action,
-      },
-    };
+    return await loader();
+  } catch {
+    return controlFailure('control_unreachable');
   }
 };
 
@@ -118,67 +137,80 @@ export const getshelfioControlClient = {
   sanitizeForLog,
 
   controlHealth() {
-    return requestControl('/health');
+    return callPublic(() => requestControl('/health'));
   },
 
   getUserByEmail(email) {
-    return requestControl('/users/by-email', { query: { email } });
+    return callPublic(() => requestControl('/users/by-email', { query: { email } }));
   },
 
   getTenantEntitlements(tenantId) {
-    return cached(`entitlements:${tenantId}`, () => requestControl(`/tenants/${encodeURIComponent(tenantId)}/entitlements`));
+    return callPublic(() =>
+      cached(`entitlements:${tenantId}`, () => requestControl(`/tenants/${encodeURIComponent(tenantId)}/entitlements`)));
   },
 
   getLicenseStatus({ email, tenantId } = {}) {
-    return cached(`license:${email || ''}:${tenantId || ''}`, () =>
-      requestControl('/licenses/status', { query: { email, tenantId } }));
+    return callPublic(() =>
+      cached(`license:${email || ''}:${tenantId || ''}`, () =>
+        requestControl('/licenses/status', { query: { email, tenantId } })));
   },
 
   exchangeSsoCode(code) {
-    return requestControl('/sso/exchange', {
+    return callPublic(() => requestControl('/sso/exchange', {
       method: 'POST',
       body: { code },
-    });
+    }));
   },
 
-  async writeControlAudit(payload = {}) {
-    try {
-      return await requestControl('/audit', {
-        method: 'POST',
-        body: sanitizeForLog(payload),
-      });
-    } catch {
-      return { ok: false, data: null };
-    }
+  writeControlAudit(payload = {}) {
+    return callPublic(() => requestControl('/audit', {
+      method: 'POST',
+      body: sanitizeForLog(payload),
+    }));
   },
 
   async safeShadowCheck(context = {}) {
-    if (!isShadowMode()) {
-      return { success: true, skipped: true, reason: 'not_shadow_mode', ...getLicenseControlPublicState() };
-    }
+    try {
+      if (!isShadowMode()) {
+        return { success: true, skipped: true, reason: 'not_shadow_mode', ...getLicenseControlPublicState() };
+      }
 
-    return safeCall('safeShadowCheck', async () => {
       const result = await this.getLicenseStatus({
         email: context.email,
         tenantId: context.tenantId,
       });
+      if (!result.ok) {
+        return { success: true, skipped: false, reachable: false, errorCode: result.errorCode, ...getLicenseControlPublicState() };
+      }
+
       await this.writeControlAudit({
         action: 'main_app_shadow_license_check',
         tenantId: context.tenantId || '',
         email: context.email || '',
         result: sanitizeForLog(result.data),
       });
-      return { skipped: false, data: result.data, ...getLicenseControlPublicState() };
-    });
+      return { success: true, skipped: false, reachable: true, data: result.data, ...getLicenseControlPublicState() };
+    } catch {
+      return { success: true, skipped: false, reachable: false, errorCode: 'control_unreachable', ...getLicenseControlPublicState() };
+    }
   },
 
   async safeHealth() {
-    if (!isLicenseControlEnabled()) {
-      return { success: true, skipped: true, reachable: null, ...getLicenseControlPublicState() };
-    }
-    return safeCall('controlHealth', async () => {
+    try {
+      if (!isLicenseControlEnabled()) {
+        return { success: true, skipped: true, reachable: null, ...getLicenseControlPublicState() };
+      }
+
       const result = await this.controlHealth();
-      return { skipped: false, reachable: true, data: result.data, ...getLicenseControlPublicState() };
-    });
+      return {
+        success: true,
+        skipped: false,
+        reachable: result.ok,
+        ...(result.ok ? { data: result.data } : { errorCode: result.errorCode }),
+        ...getLicenseControlPublicState(),
+      };
+    } catch {
+      return { success: true, skipped: false, reachable: false, errorCode: 'control_unreachable', ...getLicenseControlPublicState() };
+    }
   },
 };

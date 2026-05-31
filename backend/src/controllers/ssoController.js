@@ -23,6 +23,24 @@ const extractExchangeData = (result) => {
 const extractSsoUser = (payload) =>
   payload?.user || payload?.account || payload?.customer || payload?.member || null;
 
+const toControlAppError = (result) => {
+  if (result?.errorCode === 'control_not_configured') {
+    return new AppError(503, 'SSO bağlantısı şu anda yapılandırılmamış.', { errorCode: result.errorCode });
+  }
+
+  if (result?.errorCode === 'control_unauthorized') {
+    return new AppError(502, 'SSO bağlantısı doğrulanamadı.', { errorCode: result.errorCode });
+  }
+
+  return new AppError(503, 'SSO bağlantısına şu anda ulaşılamıyor.', {
+    errorCode: result?.errorCode || 'control_unreachable',
+  });
+};
+
+const writeAuditSafely = (payload) => {
+  void getshelfioControlClient.writeControlAudit(payload).catch(() => {});
+};
+
 export const ssoController = {
   async exchange(req, res, next) {
     const code = String(req.body?.code || '').trim();
@@ -43,6 +61,11 @@ export const ssoController = {
       }
 
       const exchangeResult = await getshelfioControlClient.exchangeSsoCode(code);
+      if (!exchangeResult.ok) {
+        auditPayload.reason = exchangeResult.errorCode;
+        throw toControlAppError(exchangeResult);
+      }
+
       const exchangeData = extractExchangeData(exchangeResult);
       const ssoUser = extractSsoUser(exchangeData);
 
@@ -58,10 +81,10 @@ export const ssoController = {
         tenantId: exchangeData?.tenant?.id || exchangeData?.tenantId || '',
         licenseStatus: exchangeData?.license?.status || exchangeData?.licenseStatus || '',
       };
-      void getshelfioControlClient.writeControlAudit(auditPayload);
+      writeAuditSafely(auditPayload);
       res.json({ success: true, data: session });
     } catch (error) {
-      void getshelfioControlClient.writeControlAudit({
+      writeAuditSafely({
         ...auditPayload,
         statusCode: error?.statusCode || error?.status || 500,
         message: error?.message || 'SSO exchange failed',

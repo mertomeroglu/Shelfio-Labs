@@ -35,6 +35,8 @@ const parseBoolean = (value, fallback = false) => {
   return fallback;
 };
 
+const parseStrictTrue = (value) => String(value || '').trim().toLowerCase() === 'true';
+
 const parseOptionalBoolean = (value) => {
   const normalized = String(value || '').trim();
   if (!normalized) {
@@ -169,9 +171,9 @@ export const config = {
   eslDeviceTokens: process.env.ESL_DEVICE_TOKENS || '',
   eslHeartbeatRateLimitPerMinute: parsePort(process.env.ESL_HEARTBEAT_RATE_LIMIT_PER_MINUTE, 20),
   supportUploadDir,
-  getshelfioControlApiUrl: normalizeUrl(process.env.GETSHELFIO_CONTROL_API_URL, 'https://getshelfio.com/api/control'),
+  getshelfioControlApiUrl: normalizeUrl(process.env.GETSHELFIO_CONTROL_API_URL, ''),
   getshelfioControlSecret: process.env.GETSHELFIO_CONTROL_SECRET || '',
-  licenseControlEnabled: parseBoolean(process.env.LICENSE_CONTROL_ENABLED, false),
+  licenseControlEnabled: parseStrictTrue(process.env.LICENSE_CONTROL_ENABLED),
   licenseEnforcementMode: normalizeLicenseMode(process.env.LICENSE_ENFORCEMENT_MODE),
   licenseControlTimeoutMs: parsePositiveMilliseconds(process.env.LICENSE_CONTROL_TIMEOUT_MS, 1500),
   licenseControlCacheTtlSeconds: parsePositiveSeconds(process.env.LICENSE_CONTROL_CACHE_TTL_SECONDS, 300),
