@@ -6,8 +6,99 @@ datasource db {
   provider = "postgresql"
 }
 
+model Tenant {
+  id        String    @id
+  name      String
+  slug      String    @unique
+  status    String    @default("active")
+  payload   Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  stores    Store[]
+  licenses  License[]
+  sessions  LicenseSession[]
+
+  @@map("tenants")
+}
+
+model Store {
+  id        String    @id
+  tenantId  String    @map("tenant_id")
+  name      String
+  code      String?
+  status    String    @default("active")
+  payload   Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions  LicenseSession[]
+
+  @@index([tenantId])
+  @@map("stores")
+}
+
+model Plan {
+  id             String    @id
+  code           String    @unique
+  name           String
+  enabledModules Json?     @map("enabled_modules")
+  storeLimit     Int?      @map("store_limit")
+  userLimit      Int?      @map("user_limit")
+  payload        Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  licenses       License[]
+
+  @@map("plans")
+}
+
+model License {
+  id             String    @id
+  tenantId       String    @map("tenant_id")
+  planId         String?   @map("plan_id")
+  planCode       String?   @map("plan_code")
+  licenseKeyHash String    @unique @map("license_key_hash")
+  status         String    @default("pending")
+  enabledModules Json?     @map("enabled_modules")
+  storeLimit     Int?      @map("store_limit")
+  userLimit      Int?      @map("user_limit")
+  expiresAt      DateTime? @map("expires_at")
+  activatedAt    DateTime? @map("activated_at")
+  payload        Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan           Plan?     @relation(fields: [planId], references: [id], onDelete: SetNull)
+  sessions       LicenseSession[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("licenses")
+}
+
+model LicenseSession {
+  id        String    @id
+  tenantId  String    @map("tenant_id")
+  licenseId String    @map("license_id")
+  storeId   String?   @map("store_id")
+  tokenHash String    @map("token_hash")
+  status    String    @default("active")
+  expiresAt DateTime  @map("expires_at")
+  payload   Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  license   License   @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  store     Store?    @relation(fields: [storeId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([licenseId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("license_sessions")
+}
 model User {
   id                   String                     @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   username             String                     @unique
   passwordHash         String?                    @map("password_hash")
   role                 String?
@@ -47,6 +138,7 @@ model User {
 
 model Category {
   id                 String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   name               String
   code               String?   @unique
   description        String?
@@ -67,6 +159,7 @@ model Category {
 
 model Section {
   id          String                 @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   number      Int?                   @unique
   name        String?
   description String?
@@ -84,6 +177,7 @@ model Section {
 
 model Supplier {
   id                   String              @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   supplierCode         String?             @map("supplier_code")
   code                 String?
   name                 String
@@ -115,6 +209,7 @@ model Supplier {
 
 model Product {
   id                                String                 @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   sku                               String                 @unique
   barcode                           String?                @unique
   name                              String
@@ -188,6 +283,7 @@ model Product {
 
 model TemporaryPriceAction {
   id                      String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId               String    @map("product_id")
   oldPrice                Decimal?  @map("old_price") @db.Decimal(14, 4)
   appliedPrice            Decimal   @map("applied_price") @db.Decimal(14, 4)
@@ -221,6 +317,7 @@ model TemporaryPriceAction {
 
 model ProductPriceEvent {
   id                String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId         String    @map("product_id")
   previousSalePrice Decimal?  @map("previous_sale_price") @db.Decimal(14, 4)
   salePrice         Decimal?  @map("sale_price") @db.Decimal(14, 4)
@@ -235,6 +332,7 @@ model ProductPriceEvent {
 
 model Stock {
   id                String       @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId         String       @unique @map("product_id")
   warehouseQuantity Int?         @map("warehouse_quantity")
   shelfQuantity     Int?         @map("shelf_quantity")
@@ -257,6 +355,7 @@ model Stock {
 
 model StockBatch {
   id                String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   stockId           String    @map("stock_id")
   productId         String    @map("product_id")
   batchNo           String    @map("batch_no")
@@ -275,6 +374,7 @@ model StockBatch {
 
 model StockMovement {
   id                    String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId             String?   @map("product_id")
   supplierId            String?   @map("supplier_id")
   productName           String?   @map("product_name")
@@ -312,6 +412,7 @@ model StockMovement {
 
 model WarehouseLocation {
   id             String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   rowNo          Int?      @map("row_no")
   side           String?
   shelfNo        Int?      @map("shelf_no")
@@ -345,6 +446,7 @@ model WarehouseLocation {
 
 model WarehouseMovement {
   id            String             @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId     String?            @map("product_id")
   productName   String?            @map("product_name")
   sku           String?
@@ -372,6 +474,7 @@ model WarehouseMovement {
 
 model SupplierProduct {
   id                  String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId           String?   @map("product_id")
   supplierId          String?   @map("supplier_id")
   supplierProductCode String?   @map("supplier_product_code")
@@ -403,6 +506,7 @@ model SupplierProduct {
 
 model PurchaseSuggestion {
   id             String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId      String?   @map("product_id")
   categoryId     String?   @map("category_id")
   supplierId     String?   @map("supplier_id")
@@ -426,6 +530,7 @@ model PurchaseSuggestion {
 
 model PurchaseOrder {
   id                  String              @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   orderNumber         String?             @unique @map("order_number")
   supplierId          String?             @map("supplier_id")
   source              String?
@@ -471,6 +576,7 @@ model PurchaseOrder {
 
 model PurchaseOrderStatusHistory {
   id        String        @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   orderId   String        @map("order_id")
   status    String?
   at        DateTime?
@@ -488,6 +594,7 @@ model PurchaseOrderStatusHistory {
 
 model PurchaseOrderActivityLog {
   id        String        @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   orderId   String        @map("order_id")
   type      String?
   status    String?
@@ -507,6 +614,7 @@ model PurchaseOrderActivityLog {
 
 model PurchaseOrderItem {
   id          String         @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   orderId     String?        @map("order_id")
   productId   String?        @map("product_id")
   quantity    Int?
@@ -527,6 +635,7 @@ model PurchaseOrderItem {
 
 model Sale {
   id             String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   referenceNo    String?   @unique @map("reference_no")
   type           String?
   deskCode       String?   @map("desk_code")
@@ -554,6 +663,7 @@ model Sale {
 
 model SaleItem {
   id          String   @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   saleId      String   @map("sale_id")
   productId   String?  @map("product_id")
   barcode     String?
@@ -574,6 +684,7 @@ model SaleItem {
 
 model DailyStoreClosing {
   id               String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   storeId          String    @map("store_id")
   businessDate     DateTime  @map("business_date") @db.Date
   closingType      String    @default("official_daily_close") @map("closing_type")
@@ -601,6 +712,7 @@ model DailyStoreClosing {
 
 model Customer {
   id          String          @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   customerNo  String?         @unique @map("customer_no")
   name        String?
   phone       String?
@@ -624,6 +736,7 @@ model Customer {
 
 model CustomerPasswordResetToken {
   id          String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   customerId  String    @map("customer_id")
   tokenHash   String    @unique @map("token_hash")
   expiresAt   DateTime  @map("expires_at")
@@ -640,6 +753,7 @@ model CustomerPasswordResetToken {
 
 model CustomerOrder {
   id          String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   customerId  String?   @map("customer_id")
   totalAmount Decimal?  @map("total_amount") @db.Decimal(14, 4)
   items       Json?
@@ -654,6 +768,7 @@ model CustomerOrder {
 
 model Task {
   id          String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   taskNo      String?   @unique @map("task_no")
   title       String?
   description String?
@@ -675,6 +790,7 @@ model Task {
 
 model TaskComment {
   id         String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   taskId     String    @map("task_id")
   text       String?
   authorId   String?   @map("author_id")
@@ -691,6 +807,7 @@ model TaskComment {
 
 model Notification {
   id            String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId        String?   @map("user_id")
   type          String?
   title         String?
@@ -714,6 +831,7 @@ model Notification {
 
 model StockTransferRequest {
   id                    String          @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   productId             String?         @map("product_id")
   productName           String?         @map("product_name")
   sku                   String?
@@ -755,6 +873,7 @@ model StockTransferRequest {
 
 model TransferAudit {
   id                String                @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   transferRequestId String?               @map("transfer_request_id")
   fromStatus        String?               @map("from_status")
   toStatus          String?               @map("to_status")
@@ -773,6 +892,7 @@ model TransferAudit {
 
 model EslDevice {
   id                String       @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   name              String?
   macAddress        String?      @unique @map("mac_address")
   model             String?
@@ -796,6 +916,7 @@ model EslDevice {
 
 model EslHistory {
   id             String     @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   deviceId       String?    @map("device_id")
   deviceName     String?    @map("device_name")
   productId      String?    @map("product_id")
@@ -816,6 +937,7 @@ model EslHistory {
 
 model BeaconDevice {
   id             String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   name           String?
   deviceCode     String    @unique @map("device_code")
   uuid           String?
@@ -846,6 +968,7 @@ model BeaconDevice {
 
 model LocationZone {
   id          String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   name        String
   code        String    @unique
   type        String
@@ -870,6 +993,7 @@ model LocationZone {
 
 model ProximityEvent {
   id             String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId         String    @map("user_id")
   userType       String    @map("user_type")
   beaconDeviceId String?   @map("beacon_device_id")
@@ -897,6 +1021,7 @@ model ProximityEvent {
 
 model NotificationRule {
   id             String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   name           String
   targetType     String    @map("target_type")
   trigger        String
@@ -925,6 +1050,7 @@ model NotificationRule {
 
 model NotificationDelivery {
   id                 String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId             String    @map("user_id")
   notificationRuleId String?   @map("notification_rule_id")
   proximityEventId   String?   @map("proximity_event_id")
@@ -949,6 +1075,7 @@ model NotificationDelivery {
 
 model Setting {
   id          String    @id @default("default")
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   systemName  String?   @map("system_name")
   companyName String?   @map("company_name")
   currency    String?
@@ -961,6 +1088,7 @@ model Setting {
 
 model AccessRequest {
   id                       String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId                   String?   @map("user_id")
   storeId                  String?   @map("store_id")
   permission               String?
@@ -985,6 +1113,7 @@ model AccessRequest {
 
 model TemporaryPermissionGrant {
   id          String         @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId      String?        @map("user_id")
   permission  String?
   storeId     String?        @map("store_id")
@@ -1008,6 +1137,7 @@ model TemporaryPermissionGrant {
 
 model AccessAuditLog {
   id         String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   action     String?
   userId     String?   @map("user_id")
   permission String?
@@ -1024,6 +1154,7 @@ model AccessAuditLog {
 
 model AuditLog {
   id            String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   createdAt     DateTime  @default(now()) @map("created_at")
   actorUserId   String?   @map("actor_user_id")
   actorName     String?   @map("actor_name")
@@ -1058,6 +1189,7 @@ model AuditLog {
 
 model LoginActivityLog {
   id            String    @id @default(uuid())
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   userId        String?   @map("user_id")
   userType      String?   @map("user_type")
   name          String?
@@ -1089,6 +1221,7 @@ model LoginActivityLog {
 
 model CatalogImport {
   id               String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   supplierId       String?   @map("supplier_id")
   supplierName     String?   @map("supplier_name")
   fileName         String?   @map("file_name")
@@ -1109,6 +1242,7 @@ model CatalogImport {
 
 model SupplierCatalogVersion {
   id         String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   supplierId String?   @map("supplier_id")
   status     String?
   rows       Json?
@@ -1121,6 +1255,7 @@ model SupplierCatalogVersion {
 
 model SupportTicket {
   id          String    @id
+  tenantId             String    @default("tenant_main_shelfio") @map("tenant_id")
   subject     String?
   description String?
   userId      String?   @map("user_id")
@@ -1136,3 +1271,4 @@ model SupportTicket {
 
   @@map("support_tickets")
 }
+

@@ -36,7 +36,7 @@ const UTF8_BOM = '\uFEFF';
 
 const safeObject = (value) => (value && typeof value === 'object' ? value : {});
 
-const SENSITIVE_KEY_PATTERN = /(password|pass|token|secret|authorization|cookie|pin)/i;
+const SENSITIVE_KEY_PATTERN = /(password|pass|token|secret|authorization|cookie|pin|code|license)/i;
 
 const parseDateBoundary = (value, suffix = 'T00:00:00.000Z') => {
   const normalized = String(value || '').trim();

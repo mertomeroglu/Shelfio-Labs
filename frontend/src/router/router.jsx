@@ -53,6 +53,7 @@ const PersonnelCount = lazy(() => import('../pages/personnel-mobile/PersonnelCou
 const PersonnelNotifications = lazy(() => import('../pages/personnel-mobile/PersonnelNotifications.jsx'));
 const PrivacyPolicy = lazy(() => import('../pages/privacy-policy/PrivacyPolicy.jsx'));
 const DeleteAccount = lazy(() => import('../pages/customer-portal/DeleteAccount.jsx'));
+const SsoCallback = lazy(() => import('../pages/sso-callback/SsoCallback.jsx'));
 
 const withRouteSuspense = (node) => (
   <Suspense fallback={<PageLoading />}>
@@ -75,6 +76,11 @@ export const router = createBrowserRouter([
       {
         path: '/giris',
         element: <Login />,
+        errorElement: <RouteError />,
+      },
+      {
+        path: '/sso/callback',
+        element: withRouteSuspense(<SsoCallback />),
         errorElement: <RouteError />,
       },
       {

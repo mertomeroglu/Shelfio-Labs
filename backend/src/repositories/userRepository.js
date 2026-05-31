@@ -17,4 +17,12 @@ export const userRepo = {
 
     return repository.findOne((user) => String(user?.username || '').trim().toLowerCase() === normalizedUsername);
   },
+  async findByEmail(email) {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      return null;
+    }
+
+    return repository.findOne((user) => String(user?.email || '').trim().toLowerCase() === normalizedEmail);
+  },
 };

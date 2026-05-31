@@ -1,4 +1,5 @@
 import { config } from '../config/config.js';
+import { getActiveTenantId, isTenantScopedRequest, MAIN_TENANT_ID } from '../tenant/tenantContext.js';
 
 let prismaPromise = null;
 let lastConnectionStatus = {
@@ -7,6 +8,72 @@ let lastConnectionStatus = {
   message: 'not_checked',
   database: config.databaseInfo.database || '',
   provider: config.databaseInfo.provider || 'postgresql',
+};
+
+const TENANT_SCOPED_PRISMA_MODELS = new Set([
+  'AccessAuditLog',
+  'AccessRequest',
+  'AuditLog',
+  'BeaconDevice',
+  'CatalogImport',
+  'Category',
+  'Customer',
+  'CustomerOrder',
+  'CustomerPasswordResetToken',
+  'DailyStoreClosing',
+  'EslDevice',
+  'EslHistory',
+  'LocationZone',
+  'LoginActivityLog',
+  'Notification',
+  'NotificationDelivery',
+  'NotificationRule',
+  'Product',
+  'ProductPriceEvent',
+  'ProximityEvent',
+  'PurchaseOrder',
+  'PurchaseOrderActivityLog',
+  'PurchaseOrderItem',
+  'PurchaseOrderStatusHistory',
+  'PurchaseSuggestion',
+  'Sale',
+  'SaleItem',
+  'Section',
+  'Setting',
+  'Stock',
+  'StockBatch',
+  'StockMovement',
+  'StockTransferRequest',
+  'Supplier',
+  'SupplierCatalogVersion',
+  'SupplierProduct',
+  'SupportTicket',
+  'Task',
+  'TaskComment',
+  'TemporaryPermissionGrant',
+  'TemporaryPriceAction',
+  'TransferAudit',
+  'User',
+  'WarehouseLocation',
+  'WarehouseMovement',
+]);
+
+const READ_OPERATIONS = new Set(['findFirst', 'findMany', 'count', 'aggregate', 'groupBy']);
+const WRITE_MANY_OPERATIONS = new Set(['updateMany', 'deleteMany']);
+const CREATE_OPERATIONS = new Set(['create', 'createMany']);
+
+const mergeTenantWhere = (where, tenantId) => {
+  if (!where || Object.keys(where).length === 0) return { tenantId };
+  if (where.tenantId) return where;
+  return { AND: [where, { tenantId }] };
+};
+
+const addTenantToData = (data, tenantId) => {
+  if (Array.isArray(data)) {
+    return data.map((item) => ({ ...item, tenantId: item?.tenantId || tenantId }));
+  }
+  if (!data || typeof data !== 'object') return data;
+  return { ...data, tenantId: data.tenantId || tenantId };
 };
 
 export const isPostgresEnabled = () => config.dataStore === 'postgres';
@@ -25,9 +92,34 @@ export const getPrisma = async () => {
         connectionString: config.databaseUrl || process.env.DATABASE_URL,
       });
 
-      return new PrismaClient({
+      const prisma = new PrismaClient({
         adapter,
         log: config.prismaLogQueries ? ['query', 'warn', 'error'] : ['warn', 'error'],
+      });
+
+      return prisma.$extends({
+        query: {
+          $allModels: {
+            async $allOperations({ model, operation, args, query }) {
+              if (!TENANT_SCOPED_PRISMA_MODELS.has(model)) {
+                return query(args);
+              }
+
+              const tenantId = isTenantScopedRequest() ? getActiveTenantId() : MAIN_TENANT_ID;
+              const nextArgs = { ...(args || {}) };
+
+              if (READ_OPERATIONS.has(operation) || WRITE_MANY_OPERATIONS.has(operation)) {
+                nextArgs.where = mergeTenantWhere(nextArgs.where, tenantId);
+              }
+
+              if (CREATE_OPERATIONS.has(operation)) {
+                nextArgs.data = addTenantToData(nextArgs.data, tenantId);
+              }
+
+              return query(nextArgs);
+            },
+          },
+        },
       });
     });
   }

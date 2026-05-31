@@ -1378,8 +1378,8 @@ export default function PurchaseSuggestions() {
       const archiveRows = archiveData.status === 'fulfilled' && Array.isArray(archiveData.value) ? archiveData.value : [];
       const guardedActiveRows = activeRows.filter((item) => isActiveSuggestionStatus(item.status));
       const guardedArchiveRows = archiveRows.filter((item) => isArchivedSuggestionStatus(item.status));
-      const activeMetaSummary = activeData.status === 'fulfilled' ? (activeData.value.meta.summary || null) : null;
-      const archiveMetaSummary = archiveData.status === 'fulfilled' ? (archiveData.value.meta.summary || null) : null;
+      const activeMetaSummary = activeData.status === 'fulfilled' ? (activeData.value?.meta?.summary || null) : null;
+      const archiveMetaSummary = archiveData.status === 'fulfilled' ? (archiveData.value?.meta?.summary || null) : null;
       const summaryValue = summaryData.status === 'fulfilled' && summaryData.value ? summaryData.value : null;
       const suggestionRows = [...guardedActiveRows, ...guardedArchiveRows];
       setRows((currentRows) => {
@@ -1387,13 +1387,13 @@ export default function PurchaseSuggestions() {
         return [...guardedActiveRows, ...(loadArchive ? guardedArchiveRows : retainedArchiveRows)];
       });
       setGeneratorSummary(summaryValue || activeMetaSummary || archiveMetaSummary);
-      setFilteredSummary(summaryValue.active || getFilteredSummary(activeMetaSummary));
-      setArchiveFilteredSummary(summaryValue.archive || getFilteredSummary(archiveMetaSummary));
+      setFilteredSummary(summaryValue?.active || getFilteredSummary(activeMetaSummary));
+      setArchiveFilteredSummary(summaryValue?.archive || getFilteredSummary(archiveMetaSummary));
       setListPagination(loadActive ? getResponsePagination(activeData.value, requestedListPage) : { page: requestedListPage, limit: TABLE_PAGE_SIZE, total: 0, totalPages: 1 });
       if (loadArchive) {
         setArchivePagination(getResponsePagination(archiveData.value, requestedArchivePage));
         setArchiveLoaded(true);
-      } else if (summaryValue.archive) {
+      } else if (summaryValue?.archive) {
         setArchivePagination((current) => ({
           ...current,
           page: requestedArchivePage,
@@ -1669,10 +1669,10 @@ export default function PurchaseSuggestions() {
   }, [activeFilteredRows]);
 
   const emptyBreakdown = useMemo(() => ({
-    missingMinStock: Number(generatorSummary.missingMinStockCount || 0),
-    missingLeadTime: Number(generatorSummary.missingLeadTimeCount || 0),
-    noRecentSales: Number(generatorSummary.noRecentSalesCount || 0),
-    sufficientStock: Number(generatorSummary.sufficientStockCount || 0),
+    missingMinStock: Number(generatorSummary?.missingMinStockCount || 0),
+    missingLeadTime: Number(generatorSummary?.missingLeadTimeCount || 0),
+    noRecentSales: Number(generatorSummary?.noRecentSalesCount || 0),
+    sufficientStock: Number(generatorSummary?.sufficientStockCount || 0),
     lookbackDays: 30,
   }), [generatorSummary]);
 
@@ -1853,7 +1853,7 @@ export default function PurchaseSuggestions() {
         },
       };
     } catch (error) {
-      const message = String(error.message || '');
+      const message = String(error?.message || '');
       if (/zaten mevcut|already exists|409/i.test(message)) {
         const retryTarget = await findDraftTarget(item);
         if (retryTarget) {
@@ -2818,7 +2818,7 @@ export default function PurchaseSuggestions() {
       <ConfirmModal
         isOpen={Boolean(draftCreateTarget)}
         title="Tedarikçi Eşleşmesi Oluştur"
-        description={draftCreateTarget.message || 'Bu öneri için tedarikçi eşleşmesi oluşturulacak ve ardından taslak açılacak.'}
+        description={draftCreateTarget?.message || 'Bu öneri için tedarikçi eşleşmesi oluşturulacak ve ardından taslak açılacak.'}
         onCancel={() => setDraftCreateTarget(null)}
         onConfirm={handleConfirmDraftCreate}
         confirmText="Oluştur ve Aç"

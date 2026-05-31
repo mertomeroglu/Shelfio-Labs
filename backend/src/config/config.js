@@ -54,6 +54,11 @@ const parsePositiveSeconds = (value, fallback) => {
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
 };
 
+const parsePositiveMilliseconds = (value, fallback) => {
+  const parsed = Number(String(value || '').trim());
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback;
+};
+
 const toList = (value) => String(value || '')
   .split(',')
   .map((item) => item.trim())
@@ -124,6 +129,11 @@ const supportUploadDir = path.resolve(
   process.env.SUPPORT_UPLOAD_DIR || process.env.UPLOAD_DIR || path.join(backendRootDir, 'storage', 'support-uploads')
 );
 const publicAppBaseUrl = String(process.env.PUBLIC_APP_BASE_URL || process.env.FRONTEND_BASE_URL || 'https://shelfiolabs.com').replace(/\/+$/, '');
+const normalizeUrl = (value, fallback) => String(value || fallback || '').trim().replace(/\/+$/, '');
+const normalizeLicenseMode = (value) => {
+  const mode = String(value || 'off').trim().toLowerCase();
+  return ['off', 'shadow', 'enforce'].includes(mode) ? mode : 'off';
+};
 
 export const config = {
   port: parsePort(process.env.PORT, 4000),
@@ -159,6 +169,15 @@ export const config = {
   eslDeviceTokens: process.env.ESL_DEVICE_TOKENS || '',
   eslHeartbeatRateLimitPerMinute: parsePort(process.env.ESL_HEARTBEAT_RATE_LIMIT_PER_MINUTE, 20),
   supportUploadDir,
+  getshelfioControlApiUrl: normalizeUrl(process.env.GETSHELFIO_CONTROL_API_URL, 'https://getshelfio.com/api/control'),
+  getshelfioControlSecret: process.env.GETSHELFIO_CONTROL_SECRET || '',
+  licenseControlEnabled: parseBoolean(process.env.LICENSE_CONTROL_ENABLED, false),
+  licenseEnforcementMode: normalizeLicenseMode(process.env.LICENSE_ENFORCEMENT_MODE),
+  licenseControlTimeoutMs: parsePositiveMilliseconds(process.env.LICENSE_CONTROL_TIMEOUT_MS, 1500),
+  licenseControlCacheTtlSeconds: parsePositiveSeconds(process.env.LICENSE_CONTROL_CACHE_TTL_SECONDS, 300),
+  licenseControlFailOpen: parseBoolean(process.env.LICENSE_CONTROL_FAIL_OPEN, true),
+  shelfioPublicSiteUrl: normalizeUrl(process.env.SHELFIO_PUBLIC_SITE_URL, 'https://getshelfio.com'),
+  mainAppUrl: normalizeUrl(process.env.MAIN_APP_URL, 'https://shelfiolabs.com'),
 };
 
 console.info('SMTP config loaded:', {

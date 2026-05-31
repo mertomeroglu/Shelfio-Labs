@@ -2209,8 +2209,9 @@ export default function CustomerPortal() {
     window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }, [setCategories]);
 
-  const submitCustomerSearch = useCallback(() => {
-    const query = searchQuery.trim();
+  const runCustomerSearch = useCallback((rawQuery) => {
+    const query = String(rawQuery || '').trim();
+    setSearchQuery(query);
     setSelectedCategoryId('');
     setSelectedTag('');
     setDebouncedSearchQuery(query);
@@ -2219,7 +2220,15 @@ export default function CustomerPortal() {
       preserveSearch: true,
       preserveSearchFocus: true,
     });
-  }, [navigateTo, searchQuery]);
+
+    if (query.length >= 2) {
+      void ensureProductsLoaded({ search: query, categoryId: '' });
+    }
+  }, [ensureProductsLoaded, navigateTo]);
+
+  const submitCustomerSearch = useCallback(() => {
+    runCustomerSearch(searchQuery);
+  }, [runCustomerSearch, searchQuery]);
 
   const updateCartQuantity = (productId, quantity) => {
     const nextProductId = String(productId || '');
@@ -2651,7 +2660,7 @@ export default function CustomerPortal() {
             <h4 style={{ fontSize: '0.86rem', color: '#64748b', marginBottom: '2px' }}>Popüler Aramalar</h4>
             <div className="customer-popular-chip-grid">
               {['süt', 'yumurta', 'ekmek', 'su', 'çikolata', 'kahve', 'makarna', 'peynir', 'yoğurt', 'deterjan'].map((term) => (
-                <button key={term} type="button" className="customer-popular-chip" onClick={() => setSearchQuery(term)}>{term}</button>
+                <button key={term} type="button" className="customer-popular-chip" onClick={() => runCustomerSearch(term)}>{term}</button>
               ))}
             </div>
           </div>

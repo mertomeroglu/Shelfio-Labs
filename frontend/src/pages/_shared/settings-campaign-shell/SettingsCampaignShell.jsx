@@ -1769,6 +1769,115 @@ const AUTO_SALE_PAYMENT_LABELS = {
   giftcard: 'Hediye Kartı',
 };
 
+const LICENSE_STATUS_META = {
+  active: { label: 'Aktif', tone: 'active' },
+  activated: { label: 'Aktif', tone: 'active' },
+  expired: { label: 'Süresi dolmuş', tone: 'expired' },
+  suspended: { label: 'Askıya alınmış', tone: 'suspended' },
+  revoked: { label: 'İptal edilmiş', tone: 'revoked' },
+  canceled: { label: 'İptal edilmiş', tone: 'revoked' },
+  cancelled: { label: 'İptal edilmiş', tone: 'revoked' },
+  pending: { label: 'Beklemede', tone: 'pending' },
+};
+
+const LICENSE_PLAN_LABELS = {
+  starter: 'Başlangıç',
+  basic: 'Başlangıç',
+  professional: 'Profesyonel',
+  pro: 'Profesyonel',
+  enterprise: 'Kurumsal',
+};
+
+const LICENSE_MODULE_LABELS = {
+  stock: 'Stok',
+  stock_batches: 'Stok',
+  stock_movements: 'Stok',
+  pos: 'POS',
+  campaigns: 'Kampanya',
+  campaign: 'Kampanya',
+  esl: 'ESL',
+  reports: 'Raporlar',
+  report: 'Raporlar',
+  customers: 'Müşteri mobil',
+  customer_mobile: 'Müşteri mobil',
+  personnel_mobile: 'Personel mobil',
+  tasks: 'Personel mobil',
+};
+
+const formatLicenseDate = (value) => {
+  if (!value) return '-';
+  return formatDate(value) || '-';
+};
+
+const maskLicenseKeyForDisplay = (value) => {
+  const normalized = String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!normalized) return '-';
+  if (normalized.includes('****')) return normalized;
+
+  const parts = normalized.split('-').filter(Boolean);
+  if (parts.length >= 3) {
+    return [parts[0], ...parts.slice(1, -1).map(() => '****'), parts[parts.length - 1]].join('-');
+  }
+
+  if (normalized.length <= 8) return '****';
+  return `${normalized.slice(0, 4)}-****-${normalized.slice(-4)}`;
+};
+
+const getLicenseStatusMeta = (status) => {
+  const key = String(status || '').trim().toLowerCase();
+  return LICENSE_STATUS_META[key] || { label: status || 'Beklemede', tone: 'pending' };
+};
+
+const getLicensePlanLabel = (license = {}, plan = {}) => {
+  const name = plan?.name || license?.planName || license?.planLabel;
+  if (name) return name;
+  const code = String(plan?.code || license?.plan || license?.planCode || '').trim().toLowerCase();
+  return LICENSE_PLAN_LABELS[code] || code || '-';
+};
+
+const getLicenseModuleLabel = (value) => {
+  const key = String(value || '').trim().toLowerCase();
+  return LICENSE_MODULE_LABELS[key] || normalizeMojibakeText(String(value || '').replace(/_/g, ' '));
+};
+
+const uniqueLicenseModules = (modules = []) => {
+  const seen = new Set();
+  return (Array.isArray(modules) ? modules : [])
+    .map(getLicenseModuleLabel)
+    .filter(Boolean)
+    .filter((label) => {
+      const key = normalizeSearchText(label);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const buildLicenseOverview = (user = {}, form = {}) => {
+  const license = user?.license || {};
+  const plan = user?.plan || {};
+  const tenant = user?.tenant || {};
+  const activeStore = user?.activeStore || {};
+  const limits = license?.limits || {};
+  const enabledModules = uniqueLicenseModules(license.enabledModules || user?.enabledModules || []);
+
+  return {
+    status: getLicenseStatusMeta(license.status),
+    maskedKey: maskLicenseKeyForDisplay(license.maskedKey || license.licenseKey),
+    plan: getLicensePlanLabel(license, plan),
+    tenantName: tenant.name || license.tenantName || '-',
+    storeName: activeStore.name || form.storeName || license.storeName || '-',
+    startsAt: formatLicenseDate(license.startsAt || license.activatedAt || license.createdAt),
+    expiresAt: formatLicenseDate(license.expiresAt || license.renewalAt),
+    enabledModules,
+    limits: [
+      { key: 'stores', label: 'Mağaza limiti', value: limits.stores ?? license.storeLimit },
+      { key: 'users', label: 'Kullanıcı limiti', value: limits.users ?? license.userLimit },
+      { key: 'eslDevices', label: 'ESL / cihaz limiti', value: limits.eslDevices ?? license.eslDeviceLimit },
+    ].filter((item) => item.value !== null && item.value !== undefined && item.value !== ''),
+  };
+};
+
 const AUTO_SALE_TRANSACTION_TYPE_LABELS = {
   sale: 'Satış',
   return: 'Iade',
@@ -7099,6 +7208,7 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
       <Eraser size={15} />
     </button>
   );
+  const licenseOverview = useMemo(() => buildLicenseOverview(user, form), [form, user]);
 
   return (
     <div ref={pageRootRef} className={`page-stack ${isCampaignPage ? 'campaign-management-page' : ''}`}>
@@ -8431,6 +8541,62 @@ export default function SettingsCampaignShell({ pageMode } = {}) {
                   <input type="text" value={form.storeAddress} placeholder="Istanbul / Türkiye" readOnly className="s-field-readonly" />
                 </label>
               </div>
+
+              <section className="s-license-card" aria-label="Lisans bilgileri">
+                <div className="s-license-card-head">
+                  <div className="s-license-title-wrap">
+                    <span className="s-license-icon"><KeyRound size={17} /></span>
+                    <div>
+                      <h4>Lisansım</h4>
+                      <p>Shelfio erişiminiz için kullanılan lisans bilgilerini görüntüleyin.</p>
+                    </div>
+                  </div>
+                  <span className={`s-license-status s-license-status--${licenseOverview.status.tone}`}>
+                    {licenseOverview.status.label}
+                  </span>
+                </div>
+
+                <div className="s-license-info-grid">
+                  {[
+                    ['Lisans anahtarı', licenseOverview.maskedKey],
+                    ['Paket / Plan', licenseOverview.plan],
+                    ['İşletme / Tenant', licenseOverview.tenantName],
+                    ['Mağaza', licenseOverview.storeName],
+                    ['Başlangıç tarihi', licenseOverview.startsAt],
+                    ['Bitiş / yenileme tarihi', licenseOverview.expiresAt],
+                  ].map(([label, value]) => (
+                    <div className="s-license-info-row" key={label}>
+                      <span>{label}</span>
+                      <strong>{value || '-'}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="s-license-subsection">
+                  <span className="s-license-subtitle">Aktif modüller</span>
+                  <div className="s-license-chip-list">
+                    {licenseOverview.enabledModules.length ? licenseOverview.enabledModules.map((moduleLabel) => (
+                      <span className="s-license-module-chip" key={moduleLabel}>{moduleLabel}</span>
+                    )) : (
+                      <span className="s-license-muted">Modül bilgisi bulunmuyor.</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="s-license-limit-grid">
+                  {licenseOverview.limits.length ? licenseOverview.limits.map((item) => (
+                    <div className="s-license-limit-box" key={item.key}>
+                      <span>{item.label}</span>
+                      <strong>{formatNumber(item.value)}</strong>
+                    </div>
+                  )) : (
+                    <div className="s-license-limit-box s-license-limit-box--empty">
+                      <span>Limit bilgisi</span>
+                      <strong>-</strong>
+                    </div>
+                  )}
+                </div>
+              </section>
 
               <h4 className="s-category-subtitle s-hours-subtitle">Çalisma Saatleri</h4>
               <div className="s-work-hours-compact s-work-hours-minimal">

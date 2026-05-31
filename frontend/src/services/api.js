@@ -49,7 +49,7 @@ const maskSensitive = (value, depth = 0) => {
 
   const next = {};
   Object.entries(value).forEach(([key, raw]) => {
-    if (/(password|pass|token|secret|authorization|cookie|pin)/i.test(key)) {
+    if (/(password|pass|token|secret|authorization|cookie|pin|code|license)/i.test(key)) {
       next[key] = '***';
       return;
     }

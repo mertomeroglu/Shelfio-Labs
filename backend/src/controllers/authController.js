@@ -25,7 +25,7 @@ export const authController = {
 
   async me(req, res, next) {
     try {
-      const data = await authService.getCurrentUser(req.user.id);
+      const data = await authService.getCurrentUser(req.user.id, req.tenant || {});
       res.json({ success: true, data });
     } catch (error) {
       next(error);

@@ -22,10 +22,16 @@ import customerRoutes from './customerRoutes.js';
 import customerAuthRoutes from './customerAuthRoutes.js';
 import campaignAnalysisRoutes from './campaignAnalysisRoutes.js';
 import proximityRoutes from './proximityRoutes.js';
+import licenseRoutes from './licenseRoutes.js';
+import licenseControlRoutes from './licenseControlRoutes.js';
+import ssoRoutes from './ssoRoutes.js';
 
 const router = Router();
 
 router.use('/auth', authRoutes);
+router.use('/licenses', licenseRoutes);
+router.use('/license-control', licenseControlRoutes);
+router.use('/sso', ssoRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/suppliers', supplierRoutes);
 router.use('/products', productRoutes);

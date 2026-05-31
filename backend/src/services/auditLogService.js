@@ -4,7 +4,7 @@ import { settingsRepo } from '../repositories/settingsRepository.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 
 const MAX_AUDIT_LIMIT = 500;
-const SENSITIVE_KEY_PATTERN = /(password|pass|token|secret|authorization|cookie|pin|card|cvv|iban|phone|email|tc|identity|file|base64|image|attachment)/i;
+const SENSITIVE_KEY_PATTERN = /(password|pass|token|secret|authorization|cookie|pin|code|license|card|cvv|iban|phone|email|tc|identity|file|base64|image|attachment)/i;
 
 const cleanText = (value, max = 500) => {
   const text = String(value ?? '').trim();

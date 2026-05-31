@@ -1,4 +1,5 @@
-import { getPrisma } from '../providers/postgresProvider.js';
+﻿import { getPrisma } from '../providers/postgresProvider.js';
+import { getActiveStoreId, getActiveTenantId, MAIN_TENANT_ID } from '../tenant/tenantContext.js';
 
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -68,25 +69,25 @@ const MODEL_BY_FILE = {
 
 const FIELD_CONFIG = {
   user: {
-    string: ['id', 'username', 'passwordHash', 'role', 'assignedDeskCode', 'name', 'email', 'registerPin', 'storeId', 'department'],
+    string: ['id', 'tenantId', 'username', 'passwordHash', 'role', 'assignedDeskCode', 'name', 'email', 'registerPin', 'storeId', 'department'],
     bool: ['isActive'],
     json: ['permissions'],
     date: ['lastLoginAt', 'createdAt', 'updatedAt'],
   },
   category: {
-    string: ['id', 'name', 'code', 'description', 'mainSectionName', 'mainStorageType'],
+    string: ['id', 'tenantId', 'name', 'code', 'description', 'mainSectionName', 'mainStorageType'],
     int: ['mainSectionNo'],
     bool: ['requiresColdChain', 'requiresFreezer', 'isActive'],
     date: ['createdAt', 'updatedAt'],
   },
   section: {
-    string: ['id', 'name', 'description'],
+    string: ['id', 'tenantId', 'name', 'description'],
     int: ['number'],
     bool: ['isActive'],
     date: ['createdAt', 'updatedAt'],
   },
   supplier: {
-    string: ['id', 'supplierCode', 'code', 'name', 'type', 'tedarikciTuru', 'website', 'delayStatus'],
+    string: ['id', 'tenantId', 'supplierCode', 'code', 'name', 'type', 'tedarikciTuru', 'website', 'delayStatus'],
     int: ['minimumOrderQty', 'minimumOrderCaseQty', 'linkedProductCount', 'productCount'],
     bool: ['isActive'],
     json: ['coveredCategories', 'categories'],
@@ -94,7 +95,7 @@ const FIELD_CONFIG = {
   },
   product: {
     string: [
-      'id', 'sku', 'barcode', 'name', 'brand', 'categoryId', 'supplierId', 'sectionId', 'shelfSide', 'shelfCode',
+      'id', 'tenantId', 'sku', 'barcode', 'name', 'brand', 'categoryId', 'supplierId', 'sectionId', 'shelfSide', 'shelfCode',
       'requiredStorageType', 'unit', 'etiket', 'placementPriority', 'catalogVisibility', 'orderActivatedStatus',
       'sourceSheet', 'depotAssignmentType', 'depotLocationCode', 'depotZoneCode', 'capacityMode', 'stockingStrategy',
       'depotLocationLabel', 'defaultWarehouseLocationCode', 'lastPriceChangeSource',
@@ -106,61 +107,61 @@ const FIELD_CONFIG = {
     date: ['createdAt', 'updatedAt', 'priceUpdatedAt', 'lastPriceChangeDate', 'lastPriceChangeAt'],
   },
   stockMovement: {
-    string: ['id', 'productId', 'supplierId', 'productName', 'sku', 'type', 'location', 'fromLocation', 'toLocation', 'reasonCode', 'reasonLabel', 'referenceNo', 'transferRequestId', 'userId', 'userName', 'batchNo', 'skt'],
+    string: ['id', 'tenantId', 'productId', 'supplierId', 'productName', 'sku', 'type', 'location', 'fromLocation', 'toLocation', 'reasonCode', 'reasonLabel', 'referenceNo', 'transferRequestId', 'userId', 'userName', 'batchNo', 'skt'],
     int: ['qty', 'previousQuantity', 'nextQuantity', 'previousTotalQuantity', 'nextTotalQuantity'],
     date: ['createdAt', 'updatedAt'],
   },
   warehouseLocation: {
-    string: ['id', 'side', 'locationCode', 'storageType', 'status', 'productId', 'productName', 'sku', 'barcode', 'supplierId', 'supplierName', 'batchNo', 'skt'],
+    string: ['id', 'tenantId', 'side', 'locationCode', 'storageType', 'status', 'productId', 'productName', 'sku', 'barcode', 'supplierId', 'supplierName', 'batchNo', 'skt'],
     int: ['rowNo', 'shelfNo', 'levelNo', 'palletCount', 'palletCapacity', 'warehouseStock'],
     decimal: ['occupancy'],
     bool: ['isReserved', 'isBlocked'],
     date: ['createdAt', 'updatedAt'],
   },
   warehouseMovement: {
-    string: ['id', 'productId', 'productName', 'sku', 'barcode', 'supplierId', 'supplierName', 'locationId', 'locationCode', 'batchNo', 'skt', 'movementType', 'createdBy', 'createdByName', 'description'],
+    string: ['id', 'tenantId', 'productId', 'productName', 'sku', 'barcode', 'supplierId', 'supplierName', 'locationId', 'locationCode', 'batchNo', 'skt', 'movementType', 'createdBy', 'createdByName', 'description'],
     int: ['qty'],
     date: ['createdAt'],
   },
   supplierProduct: {
-    string: ['id', 'productId', 'supplierId', 'supplierProductCode', 'supplierProductName', 'supplierSku', 'barcode', 'currency', 'source', 'priceUnit', 'minOrderUnit', 'defaultOrderUnit'],
+    string: ['id', 'tenantId', 'productId', 'supplierId', 'supplierProductCode', 'supplierProductName', 'supplierSku', 'barcode', 'currency', 'source', 'priceUnit', 'minOrderUnit', 'defaultOrderUnit'],
     int: ['minimumOrderQty', 'minOrderQty', 'leadTimeDays', 'unitsPerCase', 'casesPerPallet'],
     decimal: ['purchasePrice'],
     bool: ['isDefault', 'isActive'],
     date: ['createdAt', 'updatedAt'],
   },
   purchaseSuggestion: {
-    string: ['id', 'productId', 'categoryId', 'supplierId', 'status', 'reason', 'riskLevel'],
+    string: ['id', 'tenantId', 'productId', 'categoryId', 'supplierId', 'status', 'reason', 'riskLevel'],
     int: ['currentStock', 'criticalStock', 'suggestedQty'],
     decimal: ['unitPrice', 'totalPrice'],
     date: ['createdAt', 'updatedAt'],
   },
   purchaseOrder: {
-    string: ['id', 'orderNumber', 'supplierId', 'source', 'status', 'currentStatus', 'currency', 'deliveryStatus', 'stockEntryMode', 'createdBy', 'warehouseCity', 'deliveryLocation', 'orderReason', 'priority', 'logisticsProvider', 'trackingNo', 'estimatedDeliveryDate'],
+    string: ['id', 'tenantId', 'orderNumber', 'supplierId', 'source', 'status', 'currentStatus', 'currency', 'deliveryStatus', 'stockEntryMode', 'createdBy', 'warehouseCity', 'deliveryLocation', 'orderReason', 'priority', 'logisticsProvider', 'trackingNo', 'estimatedDeliveryDate'],
     decimal: ['subtotalAmount', 'taxAmount', 'shippingFee', 'discountAmount', 'grandTotal', 'totalAmount'],
     bool: ['goodsReceiptCompleted', 'stockEntryCompleted', 'archived'],
     date: ['createdAt', 'updatedAt', 'approvedAt', 'deliveredAt', 'completedAt', 'archivedAt'],
   },
   purchaseOrderItem: {
-    string: ['id', 'orderId', 'productId', 'unit'],
+    string: ['id', 'tenantId', 'orderId', 'productId', 'unit'],
     int: ['quantity'],
     decimal: ['unitPrice', 'totalPrice', 'taxRate', 'taxAmount'],
     date: ['createdAt', 'updatedAt'],
   },
   sale: {
-    string: ['id', 'referenceNo', 'type', 'deskCode', 'cashierId', 'cashierName', 'paymentMethod', 'originalSaleRef', 'status'],
+    string: ['id', 'tenantId', 'referenceNo', 'type', 'deskCode', 'cashierId', 'cashierName', 'paymentMethod', 'originalSaleRef', 'status'],
     decimal: ['subtotal', 'discount', 'totalAmount'],
     json: ['items', 'payments', 'customer'],
     date: ['createdAt', 'updatedAt'],
   },
   dailyStoreClosing: {
-    string: ['id', 'storeId', 'timezone', 'source', 'closingType'],
+    string: ['id', 'tenantId', 'storeId', 'timezone', 'source', 'closingType'],
     int: ['salesCount', 'returnCount', 'transactionCount', 'itemCount'],
     decimal: ['grossSalesAmount', 'returnAmount', 'netRevenue'],
     date: ['businessDate', 'closedAt', 'createdAt', 'updatedAt'],
   },
   customer: {
-    string: ['id', 'customerNo', 'name', 'phone', 'email', 'passwordHash', 'city', 'district'],
+    string: ['id', 'tenantId', 'customerNo', 'name', 'phone', 'email', 'passwordHash', 'city', 'district'],
     int: ['totalOrders'],
     decimal: ['totalSpent'],
     bool: ['isActive'],
@@ -168,70 +169,70 @@ const FIELD_CONFIG = {
     date: ['createdAt', 'updatedAt'],
   },
   customerOrder: {
-    string: ['id', 'customerId', 'status'],
+    string: ['id', 'tenantId', 'customerId', 'status'],
     decimal: ['totalAmount'],
     json: ['items'],
     date: ['createdAt', 'updatedAt'],
   },
   task: {
-    string: ['id', 'taskNo', 'title', 'description', 'assignedTo', 'priority', 'dueDate', 'status', 'createdBy'],
+    string: ['id', 'tenantId', 'taskNo', 'title', 'description', 'assignedTo', 'priority', 'dueDate', 'status', 'createdBy'],
     json: ['comments'],
     date: ['createdAt', 'updatedAt'],
   },
   notification: {
-    string: ['id', 'userId', 'type', 'title', 'message', 'severity', 'relatedTaskId', 'dedupeKey', 'actionUrl', 'actionType', 'createdBy'],
+    string: ['id', 'tenantId', 'userId', 'type', 'title', 'message', 'severity', 'relatedTaskId', 'dedupeKey', 'actionUrl', 'actionType', 'createdBy'],
     bool: ['isRead'],
     json: ['audience', 'delivery', 'payload'],
     date: ['createdAt'],
   },
   stockTransferRequest: {
-    string: ['id', 'productId', 'productName', 'sku', 'barcode', 'sectionId', 'sectionName', 'sourceLocation', 'targetLocation', 'status', 'priority', 'origin', 'source', 'requestedBy', 'requestedByName', 'handledBy', 'handledByName', 'note', 'handledNote'],
+    string: ['id', 'tenantId', 'productId', 'productName', 'sku', 'barcode', 'sectionId', 'sectionName', 'sourceLocation', 'targetLocation', 'status', 'priority', 'origin', 'source', 'requestedBy', 'requestedByName', 'handledBy', 'handledByName', 'note', 'handledNote'],
     int: ['sectionNumber', 'quantity', 'warehouseStockSnapshot', 'shelfStockSnapshot'],
     date: ['createdAt', 'completedAt', 'stockTransferredAt', 'updatedAt'],
   },
   transferAudit: {
-    string: ['id', 'transferRequestId', 'fromStatus', 'toStatus', 'note', 'actorId', 'actorName', 'event', 'origin'],
+    string: ['id', 'tenantId', 'transferRequestId', 'fromStatus', 'toStatus', 'note', 'actorId', 'actorName', 'event', 'origin'],
     date: ['createdAt'],
   },
   eslDevice: {
-    string: ['id', 'name', 'macAddress', 'model', 'firmwareVersion', 'status', 'assignedProductId', 'location', 'ipAddress'],
+    string: ['id', 'tenantId', 'name', 'macAddress', 'model', 'firmwareVersion', 'status', 'assignedProductId', 'location', 'ipAddress'],
     int: ['batteryLevel'],
     bool: ['isDeleted'],
     date: ['lastSyncAt', 'deletedAt', 'createdAt', 'updatedAt'],
   },
   eslHistory: {
-    string: ['id', 'deviceId', 'deviceName', 'productId', 'productName', 'productSku', 'productBarcode', 'template', 'status'],
+    string: ['id', 'tenantId', 'deviceId', 'deviceName', 'productId', 'productName', 'productSku', 'productBarcode', 'template', 'status'],
     decimal: ['salePrice'],
     json: ['customFields'],
     date: ['createdAt'],
   },
   accessRequest: {
-    string: ['id', 'userId', 'storeId', 'permission', 'reason', 'status', 'createdBy', 'reviewedBy', 'assignedTo', 'reviewNote'],
+    string: ['id', 'tenantId', 'userId', 'storeId', 'permission', 'reason', 'status', 'createdBy', 'reviewedBy', 'assignedTo', 'reviewNote'],
     int: ['requestedDurationMinutes'],
     date: ['createdAt', 'updatedAt', 'reviewedAt'],
   },
   temporaryPermissionGrant: {
-    string: ['id', 'userId', 'permission', 'storeId', 'requestId', 'status', 'approvedBy', 'reason', 'revokedBy'],
+    string: ['id', 'tenantId', 'userId', 'permission', 'storeId', 'requestId', 'status', 'approvedBy', 'reason', 'revokedBy'],
     date: ['createdAt', 'updatedAt', 'expiresAt', 'revokedAt'],
   },
   accessAuditLog: {
-    string: ['id', 'action', 'userId', 'permission', 'storeId', 'requestId', 'actorId', 'actorIp'],
+    string: ['id', 'tenantId', 'action', 'userId', 'permission', 'storeId', 'requestId', 'actorId', 'actorIp'],
     json: ['metadata'],
     date: ['createdAt'],
   },
   catalogImport: {
-    string: ['id', 'supplierId', 'supplierName', 'fileName', 'uploadedBy', 'status'],
+    string: ['id', 'tenantId', 'supplierId', 'supplierName', 'fileName', 'uploadedBy', 'status'],
     bool: ['requiredApproval', 'columnsValidated'],
     json: ['summary', 'rows'],
     date: ['uploadedAt', 'validityStart', 'validityEnd'],
   },
   supplierCatalogVersion: {
-    string: ['id', 'supplierId', 'status'],
+    string: ['id', 'tenantId', 'supplierId', 'status'],
     json: ['rows'],
     date: ['createdAt', 'updatedAt'],
   },
   supportTicket: {
-    string: ['id', 'subject', 'description', 'userId', 'user', 'role', 'page', 'browser', 'status'],
+    string: ['id', 'tenantId', 'subject', 'description', 'userId', 'user', 'role', 'page', 'browser', 'status'],
     json: ['attachments'],
     date: ['createdAt', 'updatedAt'],
   },
@@ -373,6 +374,32 @@ const normalizePurchaseSuggestionPayload = (source = {}) => {
   };
 };
 
+const TENANT_SCOPED_MODELS = new Set([
+  'accessAuditLog', 'accessRequest', 'catalogImport', 'category', 'customer', 'customerOrder',
+  'dailyStoreClosing', 'eslDevice', 'eslHistory', 'notification', 'product', 'purchaseOrder',
+  'purchaseOrderItem', 'purchaseSuggestion', 'sale', 'section', 'setting', 'stock', 'stockBatch',
+  'stockMovement', 'stockTransferRequest', 'supplier', 'supplierCatalogVersion', 'supplierProduct',
+  'supportTicket', 'task', 'temporaryPermissionGrant', 'transferAudit', 'user', 'warehouseLocation',
+  'warehouseMovement',
+]);
+
+const STORE_SCOPED_MODELS = new Set(['accessRequest', 'dailyStoreClosing', 'temporaryPermissionGrant', 'user']);
+
+const tenantWhere = (modelName, extra = {}) => (
+  TENANT_SCOPED_MODELS.has(modelName)
+    ? { ...extra, tenantId: getActiveTenantId() }
+    : extra
+);
+
+const withTenantData = (modelName, data = {}) => {
+  if (!TENANT_SCOPED_MODELS.has(modelName)) return data;
+  const next = { ...data, tenantId: data.tenantId || getActiveTenantId() || MAIN_TENANT_ID };
+  if (STORE_SCOPED_MODELS.has(modelName) && !next.storeId) {
+    next.storeId = getActiveStoreId();
+  }
+  return next;
+};
+
 const mapPurchaseSuggestionToDb = (item) => {
   const source = mapIncomingAliases(item || {});
   const data = { payload: toJson(normalizePurchaseSuggestionPayload(source)) };
@@ -392,7 +419,7 @@ const mapPurchaseSuggestionToDb = (item) => {
     if (source[key] !== undefined) data[key] = pickDate(source, key);
   }
 
-  return data;
+  return withTenantData('purchaseSuggestion', data);
 };
 
 const mapPurchaseSuggestionFromDb = (row) => {
@@ -484,7 +511,7 @@ const mapToDb = (modelName, item) => {
     if (source[key] !== undefined) data[key] = pickDate(source, key);
   }
 
-  return data;
+  return withTenantData(modelName, data);
 };
 
 const mapFromDb = (modelName, row) => {
@@ -525,14 +552,14 @@ const mapFromDb = (modelName, row) => {
   return out;
 };
 
-const findByRepositoryId = async ({ delegate, idKey, id }) => {
-  if (idKey === 'id') return delegate.findUnique({ where: { id } });
-  const rows = await delegate.findMany({ where: { [idKey]: id }, take: 1 });
+const findByRepositoryId = async ({ delegate, modelName, idKey, id }) => {
+  if (idKey === 'id') return delegate.findFirst({ where: tenantWhere(modelName, { id }) });
+  const rows = await delegate.findMany({ where: tenantWhere(modelName, { [idKey]: id }), take: 1 });
   return rows[0] || null;
 };
 
 const updateByRepositoryId = async ({ delegate, modelName, idKey, id, updater }) => {
-  const existingRow = await findByRepositoryId({ delegate, idKey, id });
+  const existingRow = await findByRepositoryId({ delegate, modelName, idKey, id });
   if (!existingRow) return null;
 
   const existing = mapFromDb(modelName, existingRow);
@@ -544,7 +571,7 @@ const updateByRepositoryId = async ({ delegate, modelName, idKey, id, updater })
 };
 
 const deleteByRepositoryId = async ({ delegate, modelName, idKey, id }) => {
-  const existingRow = await findByRepositoryId({ delegate, idKey, id });
+  const existingRow = await findByRepositoryId({ delegate, modelName, idKey, id });
   if (!existingRow) return null;
   const where = idKey === 'id' ? { id } : { id: existingRow.id };
   const deleted = await delegate.delete({ where });
@@ -561,20 +588,20 @@ const createGenericPostgresRepository = ({ modelName, idKey = 'id', client = nul
 
   const getAll = async () => {
     const delegate = await getDelegate();
-    const rows = await delegate.findMany();
+    const rows = await delegate.findMany({ where: tenantWhere(modelName) });
     return rows.map((row) => mapFromDb(modelName, row));
   };
 
   const findById = async (id) => {
     const delegate = await getDelegate();
-    return mapFromDb(modelName, await findByRepositoryId({ delegate, idKey, id }));
+    return mapFromDb(modelName, await findByRepositoryId({ delegate, modelName, idKey, id }));
   };
 
   const writeData = async (items) => {
     const delegate = await getDelegate();
     if (!Array.isArray(items)) return items;
     if (items.length === 0) {
-      await delegate.deleteMany({});
+      await delegate.deleteMany({ where: tenantWhere(modelName) });
       return [];
     }
 
@@ -627,6 +654,7 @@ const safeActorId = (value) => {
 
 const saleItemData = ({ saleId, item, index }) => ({
   id: toNestedId('sale-item', saleId, index, item),
+  tenantId: item?.tenantId || getActiveTenantId(),
   saleId,
   productId: item?.productId && item.productId !== '__bag__' ? String(item.productId) : null,
   barcode: item?.barcode || null,
@@ -641,6 +669,7 @@ const saleItemData = ({ saleId, item, index }) => ({
 
 const purchaseStatusData = ({ orderId, item, index }) => ({
   id: toNestedId('po-status', orderId, index, item),
+  tenantId: item?.tenantId || getActiveTenantId(),
   orderId,
   status: item?.status || null,
   at: toDate(item?.at),
@@ -651,6 +680,7 @@ const purchaseStatusData = ({ orderId, item, index }) => ({
 
 const purchaseActivityData = ({ orderId, item, index }) => ({
   id: toNestedId('po-activity', orderId, index, item),
+  tenantId: item?.tenantId || getActiveTenantId(),
   orderId,
   type: item?.type || null,
   status: item?.status || null,
@@ -662,6 +692,7 @@ const purchaseActivityData = ({ orderId, item, index }) => ({
 
 const taskCommentData = ({ taskId, item, index }) => ({
   id: toNestedId('task-comment', taskId, index, item),
+  tenantId: item?.tenantId || getActiveTenantId(),
   taskId,
   text: item?.text || null,
   authorId: safeActorId(item?.authorId),
@@ -775,7 +806,7 @@ const createNestedPostgresRepository = ({ modelName, client = null }) => {
       const prisma = await getPrismaClient();
       if (!Array.isArray(items)) return items;
       if (items.length === 0) {
-        await prisma[modelName].deleteMany({});
+        await prisma[modelName].deleteMany({ where: tenantWhere(modelName) });
         return [];
       }
       const rows = [];
@@ -794,12 +825,12 @@ const createNestedPostgresRepository = ({ modelName, client = null }) => {
     },
     async getAll() {
       const prisma = await getPrismaClient();
-      const rows = await prisma[modelName].findMany({ include });
+      const rows = await prisma[modelName].findMany({ where: tenantWhere(modelName), include });
       return rows.map(mapRow);
     },
     async findById(id) {
       const prisma = await getPrismaClient();
-      return mapRow(await prisma[modelName].findUnique({ where: { id }, include }));
+      return mapRow(await prisma[modelName].findFirst({ where: tenantWhere(modelName, { id }), include }));
     },
     async findOne(predicate) {
       const all = await this.getAll();
@@ -851,6 +882,8 @@ const mapStockFromDb = (row) => {
 
   return {
     ...payload,
+    id: row.id,
+    tenantId: row.tenantId || MAIN_TENANT_ID,
     productId: row.productId,
     warehouseQuantity: row.warehouseQuantity || 0,
     shelfQuantity: row.shelfQuantity || 0,
@@ -888,7 +921,7 @@ const deriveBatchSummaryForStockData = (batches = []) => {
 
 const stockData = (item = {}) => {
   const batchSummary = deriveBatchSummaryForStockData(item.batches || []);
-  return {
+  return withTenantData('stock', {
     productId: String(item.productId || ''),
     warehouseQuantity: toInt(item.warehouseQuantity) || 0,
     shelfQuantity: toInt(item.shelfQuantity) || 0,
@@ -902,7 +935,7 @@ const stockData = (item = {}) => {
     fefoDefaultExpiry: batchSummary.fefoDefaultExpiry,
     payload: toJson({ ...item, batches: undefined, productBatches: undefined, batchNo: undefined, skt: undefined, expiryDate: undefined }),
     updatedAt: toDate(item.updatedAt) || new Date(),
-  };
+  });
 };
 
 const syncStockBatches = async (prisma, stockRow, batches = []) => {
@@ -914,6 +947,7 @@ const syncStockBatches = async (prisma, stockRow, batches = []) => {
     await prisma.stockBatch.create({
       data: {
         id: String(batch.id || `batch-${stockRow.productId}-${batch.batchNo || Date.now()}-${Math.random().toString(16).slice(2)}`),
+        tenantId: stockRow.tenantId || getActiveTenantId(),
         stockId: stockRow.id,
         productId: stockRow.productId,
         batchNo: String(batch.batchNo || ''),
@@ -936,8 +970,8 @@ const createStockPostgresRepository = (client = null) => ({
   },
   async writeData(items) {
     const prisma = client || await getPrisma();
-    await prisma.stockBatch.deleteMany({});
-    await prisma.stock.deleteMany({});
+    await prisma.stockBatch.deleteMany({ where: tenantWhere('stockBatch') });
+    await prisma.stock.deleteMany({ where: tenantWhere('stock') });
     const created = [];
     for (const item of Array.isArray(items) ? items : []) {
       created.push(await this.create(item));
@@ -946,7 +980,7 @@ const createStockPostgresRepository = (client = null) => ({
   },
   async getAll() {
     const prisma = client || await getPrisma();
-    const rows = await prisma.stock.findMany({ include: { batches: true } });
+    const rows = await prisma.stock.findMany({ where: tenantWhere('stock'), include: { batches: true } });
     return rows.map(mapStockFromDb);
   },
   async findById(productId) {
@@ -954,7 +988,7 @@ const createStockPostgresRepository = (client = null) => ({
   },
   async findByProductId(productId) {
     const prisma = client || await getPrisma();
-    const row = await prisma.stock.findUnique({ where: { productId }, include: { batches: true } });
+    const row = await prisma.stock.findFirst({ where: tenantWhere('stock', { productId }), include: { batches: true } });
     return mapStockFromDb(row);
   },
   async findOne(predicate) {
@@ -993,13 +1027,15 @@ const createSettingsPostgresRepository = (client = null) => ({
   ensureFile: async () => {},
   async readData() {
     const prisma = client || await getPrisma();
-    const row = await prisma.setting.findUnique({ where: { id: 'default' } });
+    const row = await prisma.setting.findUnique({ where: { id: getActiveTenantId() } })
+      || await prisma.setting.findUnique({ where: { id: 'default' } });
     return isObject(row?.payload) ? clone(row.payload) : {};
   },
   async writeData(payload) {
     const prisma = client || await getPrisma();
     const data = {
-      id: 'default',
+      id: getActiveTenantId(),
+      tenantId: getActiveTenantId(),
       systemName: payload?.systemName || null,
       companyName: payload?.companyName || payload?.businessName || 'Shelfio',
       currency: payload?.currency || null,
@@ -1008,7 +1044,7 @@ const createSettingsPostgresRepository = (client = null) => ({
       payload: toJson(payload || {}),
     };
     await prisma.setting.upsert({
-      where: { id: 'default' },
+      where: { id: getActiveTenantId() },
       create: data,
       update: data,
     });
@@ -1033,3 +1069,4 @@ export const createPostgresRepository = ({ fileName, idKey = 'id', client = null
 };
 
 export const postgresRepositoryModelNames = MODEL_BY_FILE;
+

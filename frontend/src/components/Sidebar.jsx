@@ -45,54 +45,56 @@ export default function Sidebar({ isOpen, onClose, settings, effectivePermission
 
   const isAdmin = user?.role === 'admin';
   const can = (permission) => hasPermission(user, permission, effectivePermissions);
+  const enabledModules = Array.isArray(user?.enabledModules) ? user.enabledModules : [];
+  const hasModule = (moduleKey) => enabledModules.length === 0 || enabledModules.includes(moduleKey);
 
   const productManagementItems = useMemo(
     () => [
-      { to: '/urunler', label: 'Ürünler', icon: PackageSearch, permission: 'product:view' },
-      { to: '/kategoriler', label: 'Kategoriler', icon: Tags, permission: 'category:view' },
-      { to: '/eslesmeler', label: 'Eşleşmeler', icon: Link2, permission: 'supplier:view' },
-      { to: '/lokasyon-yonetimi', label: 'Lokasyon Yönetimi', icon: Monitor, permission: 'section:view' },
-      { to: '/stok-islemleri', label: 'Stok İşlemleri', icon: Boxes, permission: 'stock:view' },
-      { to: '/skt-takibi', label: 'SKT Takibi', icon: Clock, permission: 'stock:view' },
+      { to: '/urunler', label: 'Ürünler', icon: PackageSearch, permission: 'product:view', module: 'products' },
+      { to: '/kategoriler', label: 'Kategoriler', icon: Tags, permission: 'category:view', module: 'products' },
+      { to: '/eslesmeler', label: 'Eşleşmeler', icon: Link2, permission: 'supplier:view', module: 'suppliers' },
+      { to: '/lokasyon-yonetimi', label: 'Lokasyon Yönetimi', icon: Monitor, permission: 'section:view', module: 'warehouse' },
+      { to: '/stok-islemleri', label: 'Stok İşlemleri', icon: Boxes, permission: 'stock:view', module: 'stock' },
+      { to: '/skt-takibi', label: 'SKT Takibi', icon: Clock, permission: 'stock:view', module: 'stock_batches' },
     ],
     []
   );
 
   const procurementItems = useMemo(
     () => [
-      { to: '/tedarikciler', label: 'Tedarikçiler', icon: Truck, permission: 'supplier:view' },
-      { to: '/siparis-olustur', label: 'Sipariş Oluştur', icon: Wallet, permission: 'purchase:view' },
-      { to: '/siparis-takibi', label: 'Sipariş Takibi', icon: Receipt, permission: 'purchase:view' },
+      { to: '/tedarikciler', label: 'Tedarikçiler', icon: Truck, permission: 'supplier:view', module: 'suppliers' },
+      { to: '/siparis-olustur', label: 'Sipariş Oluştur', icon: Wallet, permission: 'purchase:view', module: 'purchase_orders' },
+      { to: '/siparis-takibi', label: 'Sipariş Takibi', icon: Receipt, permission: 'purchase:view', module: 'purchase_orders' },
     ],
     []
   );
 
   const analyticsItems = useMemo(
     () => [
-      { to: '/fiyat-talep-analizi', label: 'Fiyat & Talep Analizi', icon: BrainCircuit, permission: 'report:view' },
-      { to: '/kampanya-yonetimi', label: 'Kampanya Yönetimi', icon: Megaphone, permission: 'settings:update' },
-      { to: '/siparis-onerileri', label: 'Sipariş Önerileri', icon: Sparkles, permission: 'purchase:view' },
+      { to: '/fiyat-talep-analizi', label: 'Fiyat & Talep Analizi', icon: BrainCircuit, permission: 'report:view', module: 'reports' },
+      { to: '/kampanya-yonetimi', label: 'Kampanya Yönetimi', icon: Megaphone, permission: 'settings:update', module: 'campaigns' },
+      { to: '/siparis-onerileri', label: 'Sipariş Önerileri', icon: Sparkles, permission: 'purchase:view', module: 'procurement' },
     ],
     []
   );
 
   const systemManagementItems = useMemo(
     () => [
-      { to: '/personel-yonetimi', label: 'Personel Yönetimi', icon: Users, permission: 'user:view' },
-      { to: '/musteri-yonetimi', label: 'Müşteri Yönetimi', icon: UserCircle, permission: 'user:view' },
-      { to: '/rol-yonetimi', label: 'Rol Yönetimi', icon: Shield, permission: 'settings:update' },
-      { to: '/erisim-taleplerim', label: 'Taleplerim', icon: ShieldPlus, permission: 'access_request:view_own', hideForAdmin: true },
-      { to: '/erisim-talepleri', label: 'Erişim Talepleri', icon: ShieldPlus, permission: 'access_request:view_all' },
-      { to: '/proximity-yonetimi', label: 'Proximity Yönetimi', icon: RadioTower, permission: 'proximity:view' },
+      { to: '/personel-yonetimi', label: 'Personel Yönetimi', icon: Users, permission: 'user:view', module: 'users' },
+      { to: '/musteri-yonetimi', label: 'Müşteri Yönetimi', icon: UserCircle, permission: 'user:view', module: 'customers' },
+      { to: '/rol-yonetimi', label: 'Rol Yönetimi', icon: Shield, permission: 'settings:update', module: 'permissions' },
+      { to: '/erisim-taleplerim', label: 'Taleplerim', icon: ShieldPlus, permission: 'access_request:view_own', hideForAdmin: true, module: 'permissions' },
+      { to: '/erisim-talepleri', label: 'Erişim Talepleri', icon: ShieldPlus, permission: 'access_request:view_all', module: 'permissions' },
+      { to: '/proximity-yonetimi', label: 'Proximity Yönetimi', icon: RadioTower, permission: 'proximity:view', module: 'proximity' },
     ],
     []
   );
 
-  const visibleProductManagementItems = productManagementItems.filter((item) => can(item.permission));
-  const visibleProcurementItems = procurementItems.filter((item) => can(item.permission));
-  const visibleAnalyticsItems = analyticsItems.filter((item) => can(item.permission));
+  const visibleProductManagementItems = productManagementItems.filter((item) => can(item.permission) && hasModule(item.module));
+  const visibleProcurementItems = procurementItems.filter((item) => can(item.permission) && hasModule(item.module));
+  const visibleAnalyticsItems = analyticsItems.filter((item) => can(item.permission) && hasModule(item.module));
   const visibleSystemManagementItems = systemManagementItems.filter((item) => {
-    if (!can(item.permission)) return false;
+    if (!can(item.permission) || !hasModule(item.module)) return false;
     if (item.hideForAdmin && isAdmin) return false;
     return true;
   });
@@ -182,12 +184,12 @@ export default function Sidebar({ isOpen, onClose, settings, effectivePermission
   const isAnalyticsOpen = isAnalyticsPinnedOpen || isAnalyticsHovered || isAnalyticsRouteActive;
   const isSystemManagementOpen = isSystemManagementPinnedOpen || isSystemManagementHovered || isSystemManagementRouteActive;
 
-  const isPosVisible = can('pos:view');
-  const isReportsVisible = can('report:view');
-  const isTasksVisible = can('task:view');
-  const isEslVisible = can('esl:view');
-  const isSettingsVisible = can('settings:view');
-  const isTransferVisible = can('transfer_request:view');
+  const isPosVisible = can('pos:view') && hasModule('pos');
+  const isReportsVisible = can('report:view') && hasModule('reports');
+  const isTasksVisible = can('task:view') && hasModule('tasks');
+  const isEslVisible = can('esl:view') && hasModule('esl');
+  const isSettingsVisible = can('settings:view') && hasModule('settings');
+  const isTransferVisible = can('transfer_request:view') && hasModule('stock_movements');
   const isNotificationsVisible = can('notification:view');
   const isDashboardVisible = can('report:view');
   const homePath = isDashboardVisible

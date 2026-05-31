@@ -5,6 +5,8 @@ import { comparePassword, hashPassword } from '../utils/password.js';
 import { signStaffRefreshToken, signToken, verifyStaffRefreshToken } from '../utils/jwt.js';
 import { sanitizeRegisterInput, validateLoginPayload, validateRegisterPayload } from '../utils/validators.js';
 import { settingsService } from './settingsService.js';
+import { licenseService } from './licenseService.js';
+import { MAIN_TENANT_ID, MAIN_STORE_ID, runWithTenantContext } from '../tenant/tenantContext.js';
 
 const normalizeIdentityText = (value) => String(value || '')
   .toLowerCase()
@@ -42,6 +44,7 @@ const mapUser = (user) => {
     name: user.name,
     email: user.email || '',
     role: unlimitedAccess ? 'admin' : user.role,
+    tenantId: user.tenantId || MAIN_TENANT_ID,
     storeId: user.storeId || 'store-main',
     assignedDeskCode: user.assignedDeskCode || null,
     registerPin: user.registerPin || '',
@@ -53,18 +56,27 @@ const mapUser = (user) => {
   };
 };
 
-const issueSessionTokens = (user) => {
+const issueSessionTokens = (user, tenantContext = {}) => {
   const unlimitedAccess = isUnlimitedAccessUser(user);
   const role = unlimitedAccess ? 'admin' : user.role;
+  const tenantId = tenantContext.tenantId || user.tenantId || MAIN_TENANT_ID;
+  const storeId = tenantContext.storeId || user.storeId || MAIN_STORE_ID;
+  const licenseId = tenantContext.licenseId || null;
   const token = signToken({
     sub: user.id,
     role,
     username: user.username,
+    tenantId,
+    storeId,
+    licenseId,
   });
   const refreshToken = signStaffRefreshToken({
     sub: user.id,
     role,
     username: user.username,
+    tenantId,
+    storeId,
+    licenseId,
     type: 'staff_refresh',
   });
 
@@ -101,7 +113,13 @@ export const authService = {
       source: context.source || payload.source || 'admin_web',
       identity: username,
     };
-    const user = await userRepo.findByUsername(username);
+    const licenseContext = await licenseService.resolveLicenseSession(payload.licenseSessionToken);
+    const tenantRuntime = {
+      tenantId: licenseContext.tenantId,
+      storeId: licenseContext.storeId || MAIN_STORE_ID,
+      licenseId: licenseContext.licenseId,
+    };
+    const user = await runWithTenantContext(tenantRuntime, () => userRepo.findByUsername(username));
 
     if (!user) {
       await recordStaffLoginActivity(null, {
@@ -121,6 +139,17 @@ export const authService = {
         failureReason: 'Kullanıcı pasif',
       });
       throw new AppError(403, 'Bu kullanıcı pasif durumda');
+    }
+
+    const userTenantId = user.tenantId || MAIN_TENANT_ID;
+    if (userTenantId !== licenseContext.tenantId) {
+      await recordStaffLoginActivity(user, {
+        ...activityContext,
+        eventType: 'login_failed',
+        status: 'failed',
+        failureReason: 'Kullanıcı bu lisans tenantına bağlı değil',
+      });
+      throw new AppError(403, 'Bu kullanıcı bu lisans alanına bağlı değil.');
     }
 
     const passwordHash = String(user?.passwordHash || '').trim();
@@ -163,20 +192,27 @@ export const authService = {
       updatedAt: new Date().toISOString(),
     };
 
-    await userRepo.updateById(user.id, loggedInUser);
+    await runWithTenantContext(tenantRuntime, () => userRepo.updateById(user.id, loggedInUser));
 
-    await recordStaffLoginActivity(loggedInUser, {
+    await runWithTenantContext(tenantRuntime, () => recordStaffLoginActivity(loggedInUser, {
       ...activityContext,
       eventType: 'login_success',
       status: 'success',
-    });
+    }));
 
-    const { token, refreshToken } = issueSessionTokens(loggedInUser);
+    const { token, refreshToken } = issueSessionTokens(loggedInUser, licenseContext);
+    const tenantData = await licenseService.resolveAuthenticatedTenant({
+      tenantId: licenseContext.tenantId,
+      licenseId: licenseContext.licenseId,
+      storeId: licenseContext.storeId,
+    });
 
     return {
       token,
       refreshToken,
       user: mapUser(loggedInUser),
+      currentUser: mapUser(loggedInUser),
+      ...tenantData,
     };
   },
 
@@ -206,7 +242,19 @@ export const authService = {
       throw new AppError(403, 'Bu işlem için yetkiniz bulunmuyor.');
     }
 
-    const { token, refreshToken: nextRefreshToken } = issueSessionTokens(user);
+    const userTenantId = user.tenantId || MAIN_TENANT_ID;
+    const tokenTenantId = tokenPayload.tenantId || MAIN_TENANT_ID;
+    if (userTenantId !== tokenTenantId) {
+      throw new AppError(403, 'Bu kullanıcı bu lisans alanına bağlı değil.');
+    }
+
+    const sessionContext = {
+      tenantId: tokenTenantId,
+      storeId: tokenPayload.storeId || user.storeId || MAIN_STORE_ID,
+      licenseId: tokenPayload.licenseId || null,
+    };
+    const tenantData = await licenseService.resolveAuthenticatedTenant(sessionContext);
+    const { token, refreshToken: nextRefreshToken } = issueSessionTokens(user, sessionContext);
     await recordStaffLoginActivity(user, {
       ...payload.context,
       eventType: 'token_refresh',
@@ -217,6 +265,8 @@ export const authService = {
       token,
       refreshToken: nextRefreshToken,
       user: mapUser(user),
+      currentUser: mapUser(user),
+      ...tenantData,
     };
   },
 
@@ -230,13 +280,99 @@ export const authService = {
     return { ok: true };
   },
 
-  async getCurrentUser(userId) {
+  async loginWithSsoUser(ssoUser = {}, context = {}, controlSession = {}) {
+    const email = String(ssoUser?.email || ssoUser?.username || '').trim().toLowerCase();
+    if (!email) {
+      throw new AppError(400, 'SSO kullanıcı bilgisi doğrulanamadı.');
+    }
+
+    const user = await userRepo.findByEmail(email) || await userRepo.findByUsername(email);
+    if (!user) {
+      await recordStaffLoginActivity(null, {
+        ...context,
+        eventType: 'sso_login_failed',
+        status: 'failed',
+        identity: email,
+        failureReason: 'Ana sistem kullanıcısı bulunamadı',
+        source: context.source || 'getshelfio_sso',
+      });
+      throw new AppError(403, 'Ana sistem hesabı henüz hazırlanmadı.');
+    }
+
+    if (!user.isActive) {
+      await recordStaffLoginActivity(user, {
+        ...context,
+        eventType: 'sso_login_failed',
+        status: 'failed',
+        identity: email,
+        failureReason: 'Kullanıcı pasif',
+        source: context.source || 'getshelfio_sso',
+      });
+      throw new AppError(403, 'Bu kullanıcı pasif durumda');
+    }
+
+    const tenantId = user.tenantId || MAIN_TENANT_ID;
+    const storeId = user.storeId || MAIN_STORE_ID;
+    const tenantData = await licenseService.resolveAuthenticatedTenant({
+      tenantId,
+      storeId,
+      licenseId: user.licenseId || null,
+    });
+    const sessionContext = {
+      tenantId,
+      storeId: tenantData.activeStore?.id || storeId,
+      licenseId: tenantData.license?.id || user.licenseId || null,
+    };
+    const loggedInUser = {
+      ...user,
+      lastLoginAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await runWithTenantContext(sessionContext, () => userRepo.updateById(user.id, loggedInUser));
+    await runWithTenantContext(sessionContext, () => recordStaffLoginActivity(loggedInUser, {
+      ...context,
+      eventType: 'sso_login_success',
+      status: 'success',
+      identity: email,
+      source: context.source || 'getshelfio_sso',
+    }));
+
+    const { token, refreshToken } = issueSessionTokens(loggedInUser, sessionContext);
+
+    return {
+      token,
+      refreshToken,
+      user: mapUser(loggedInUser),
+      currentUser: mapUser(loggedInUser),
+      ...tenantData,
+      control: {
+        tenantId: controlSession?.tenant?.id || controlSession?.tenantId || null,
+        licenseStatus: controlSession?.license?.status || controlSession?.licenseStatus || null,
+        planSlug: controlSession?.plan?.slug || controlSession?.plan?.code || controlSession?.planSlug || null,
+        modules: controlSession?.modules || controlSession?.license?.modules || [],
+        limits: controlSession?.limits || controlSession?.license?.limits || null,
+      },
+    };
+  },
+
+  async getCurrentUser(userId, tenantContext = {}) {
     const user = await userRepo.findById(userId);
     if (!user) {
       throw createNotFoundError('Kullanıcı bulunamadı');
     }
 
-    return mapUser(user);
+    const sessionContext = {
+      tenantId: tenantContext.tenantId || user.tenantId || MAIN_TENANT_ID,
+      storeId: tenantContext.storeId || user.storeId || MAIN_STORE_ID,
+      licenseId: tenantContext.licenseId || null,
+    };
+    const tenantData = await licenseService.resolveAuthenticatedTenant(sessionContext);
+    return {
+      currentUser: mapUser(user),
+      user: mapUser(user),
+      ...tenantData,
+    };
   },
 
   async register(payload) {
@@ -256,7 +392,8 @@ export const authService = {
       username: input.username,
       passwordHash,
       role: input.role,
-      storeId: input.storeId || 'store-main',
+      tenantId: payload.tenantId || MAIN_TENANT_ID,
+      storeId: input.storeId || MAIN_STORE_ID,
       assignedDeskCode: input.role === 'cashier' ? input.assignedDeskCode || '' : null,
       name: input.name,
       email: input.email,

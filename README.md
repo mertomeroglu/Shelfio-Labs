@@ -226,6 +226,41 @@ Notlar:
 - `node_modules` Git'e gönderilmez.
 - Runtime veri kaynağı PostgreSQL/Prisma'dır; `DATA_STORE=json` desteklenmez.
 
+## Stage 5 getshelfio Control API Entegrasyonu
+
+Bu repo shelfiolabs.com ana operasyon sistemidir. getshelfio.com hizmet sitesi ayri repo ve ayri deploy akisiyle yonetilir; bu repodan getshelfio kodu, DB, env veya deploy dosyalari degistirilmez.
+
+Stage 5 yalniz shadow/off entegrasyon asamasidir. Enforcement aktif degildir; POS, stok, satis, procurement, ESL ve diger operasyon API'leri lisans nedeniyle engellenmez.
+
+Backend env degiskenleri:
+
+```env
+GETSHELFIO_CONTROL_API_URL=https://getshelfio.com/api/control
+GETSHELFIO_CONTROL_SECRET=
+LICENSE_CONTROL_ENABLED=false
+LICENSE_ENFORCEMENT_MODE=off
+LICENSE_CONTROL_TIMEOUT_MS=1500
+LICENSE_CONTROL_CACHE_TTL_SECONDS=300
+LICENSE_CONTROL_FAIL_OPEN=true
+SHELFIO_PUBLIC_SITE_URL=https://getshelfio.com
+MAIN_APP_URL=https://shelfiolabs.com
+```
+
+`GETSHELFIO_CONTROL_SECRET` sadece backend env icinde tutulur; frontend `VITE_` veya public env degiskenlerine konulmaz ve loglanmaz.
+
+Eklenen ana sistem endpointleri:
+
+- `GET /api/license-control/health`: Control API yapilandirmasini ve shadow/off durumunu secret dondurmeden raporlar.
+- `POST /api/sso/exchange`: getshelfio tarafindan uretilen SSO `code` degerini server-to-server Control API ile exchange eder.
+
+Frontend route:
+
+- `/sso/callback?code=...`: getshelfio yonlendirmesini karsilar, code'u localStorage/sessionStorage'a yazmadan backend exchange endpointine gonderir ve basariliysa ana panele yonlendirir.
+
+SSO basarili oldugunda mevcut ana sistem kullanicisi e-posta ile bulunur ve mevcut JWT/refresh token oturum mekanizmasi kullanilir. Kullanici ana sistemde yoksa otomatik tam provisioning yapilmaz; kontrollu hata doner.
+
+Production enforcement ayri bir sonraki asamada planlanmalidir. Bu asamada tenant/store schema migration, user/store limit enforcement ve module route guard enforcement eklenmemistir.
+
 ## J) Güvenlik Notları
 
 - GitHub token, SMTP şifresi, VPS şifresi, JWT secret ve ESL device token README'ye yazılmaz.
@@ -268,6 +303,8 @@ npm --prefix backend test
 `backend/src/routes/routes.js` altında `/api` prefix'iyle çalışan ana gruplar:
 
 - `/auth`
+- `/license-control`
+- `/sso`
 - `/categories`
 - `/suppliers`
 - `/products`

@@ -1,7 +1,8 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Activity, BarChart3, Cookie, Eye, EyeOff, Lock, ShieldCheck, User } from 'lucide-react';
+import { Activity, BarChart3, Cookie, ExternalLink, Eye, EyeOff, KeyRound, Lock, ShieldCheck, User } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.js';
+import { authService } from '../../services/authService.js';
 import { usePageTitle } from '../../hooks/usePageTitle.js';
 import LoginTransition from '../../components/LoginTransition.jsx';
 import logoPng from '../../assets/logo.png';
@@ -13,8 +14,13 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated, login, isLoading, user } = useAuth();
+  const [licenseVerified, setLicenseVerified] = useState(false);
+  const [checkingLicense, setCheckingLicense] = useState(true);
+  const [licenseForm, setLicenseForm] = useState({ licenseKey: '' });
   const [form, setForm] = useState({ username: '', password: '' });
+  const [licenseError, setLicenseError] = useState('');
   const [error, setError] = useState('');
+  const [licenseSubmitting, setLicenseSubmitting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showTransition, setShowTransition] = useState(false);
   const [toast, setToast] = useState(null);
@@ -33,6 +39,35 @@ export default function Login() {
     }
   }, [isAuthenticated, showTransition, resolvedRedirectPath, navigate]);
 
+  useEffect(() => {
+    let active = true;
+
+    const validateStoredLicense = async () => {
+      try {
+        const context = await authService.validateLicenseContext();
+        if (active && context) {
+          setLicenseVerified(true);
+        }
+      } catch (requestError) {
+        const message = resolveLicenseError(requestError);
+        if (active) {
+          setLicenseVerified(false);
+          setLicenseError(message);
+        }
+      } finally {
+        if (active) {
+          setCheckingLicense(false);
+        }
+      }
+    };
+
+    validateStoredLicense();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const handleTransitionComplete = useCallback(() => {
     navigate(resolvedRedirectPath, { replace: true });
   }, [navigate, resolvedRedirectPath]);
@@ -40,6 +75,49 @@ export default function Login() {
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleLicenseChange = (event) => {
+    const { name, value } = event.target;
+    setLicenseForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const resolveLicenseError = (requestError) => {
+    const message = requestError?.message || '';
+    if (message.includes('süresi dol')) return 'Bu lisansın süresi dolmuş.';
+    if (message.includes('askıya')) return 'Bu lisans askıya alınmış. Destek ile iletişime geçin.';
+    if (message.includes('aktif')) return 'Bu lisans aktif değil.';
+    return 'Lisans doğrulanamadı.';
+  };
+
+  const handleLicenseSubmit = async (event) => {
+    event.preventDefault();
+    setLicenseError('');
+
+    if (!licenseForm.licenseKey.trim()) {
+      setLicenseError('Lisans doğrulanamadı.');
+      return;
+    }
+
+    try {
+      setLicenseSubmitting(true);
+      await authService.verifyLicense(licenseForm.licenseKey);
+      setLicenseVerified(true);
+    } catch (requestError) {
+      const message = resolveLicenseError(requestError);
+      setLicenseError(message);
+      setToast({ type: 'error', title: 'Lisans Hatası', message });
+    } finally {
+      setLicenseSubmitting(false);
+    }
+  };
+
+  const handleChangeLicense = () => {
+    authService.clearLicenseSessionToken();
+    setLicenseVerified(false);
+    setLicenseError('');
+    setError('');
+    setForm({ username: '', password: '' });
   };
 
   const handleSubmit = async (event) => {
@@ -109,6 +187,47 @@ export default function Login() {
         </div>
 
         <div className="auth-right">
+          {checkingLicense ? (
+            <div className="auth-glass-card">
+              <div className="auth-form-header">
+                <h2 className="auth-title-row"><ShieldCheck size={20} /> Lisans Doğrulama</h2>
+                <p>Lisans bilgisi kontrol ediliyor...</p>
+              </div>
+              <div className="alert info">Doğrulanmış lisans context’i aranıyor.</div>
+            </div>
+          ) : !licenseVerified ? (
+            <form className="auth-glass-card" onSubmit={handleLicenseSubmit}>
+              <div className="auth-form-header">
+                <h2 className="auth-title-row"><ShieldCheck size={20} /> Lisans Doğrulama</h2>
+                <p>Devam etmek için Shelfio lisans anahtarınızı girin</p>
+              </div>
+
+              {licenseError ? <div className="alert error">{licenseError}</div> : null}
+
+              <label className="auth-input-group">
+                <KeyRound size={16} className="auth-input-icon" />
+                <input
+                  name="licenseKey"
+                  value={licenseForm.licenseKey}
+                  onChange={handleLicenseChange}
+                  placeholder="Lisans anahtarı"
+                  autoComplete="off"
+                />
+              </label>
+
+              <button className="auth-submit-btn" type="submit" disabled={licenseSubmitting}>
+                {licenseSubmitting ? 'Lisans doğrulanıyor...' : 'Devam Et'}
+              </button>
+
+              <div className="auth-license-help">
+                <strong>Lisansınız yok mu?</strong>
+                <p>Lisans almak veya demo talebi oluşturmak için getshelfio.com adresini ziyaret edin.</p>
+                <a href="https://getshelfio.com" target="_blank" rel="noreferrer">
+                  getshelfio.com adresine git <ExternalLink size={14} />
+                </a>
+              </div>
+            </form>
+          ) : (
           <form className="auth-glass-card" onSubmit={handleSubmit}>
             <div className="auth-form-header">
               <h2>Giriş Yap</h2>
@@ -139,7 +258,11 @@ export default function Login() {
             <button className="auth-submit-btn" type="submit" disabled={submitting}>
               {submitting ? 'Giriş yapılıyor...' : 'Giriş Yap'}
             </button>
+            <button type="button" className="auth-change-license-btn" onClick={handleChangeLicense}>
+              Lisansı Değiştir
+            </button>
           </form>
+          )}
         </div>
       </div>
 

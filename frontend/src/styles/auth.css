@@ -169,6 +169,18 @@
   margin: 0;
 }
 
+.auth-form-header .auth-title-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.auth-title-row svg {
+  flex: 0 0 auto;
+  color: #67e8f9;
+}
+
 .auth-form-header p {
   color: #94a3b8;
   font-size: 0.9rem;
@@ -282,6 +294,62 @@
 .auth-submit-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.auth-license-help {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.28);
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.auth-license-help strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #ffffff;
+  font-size: 0.95rem;
+}
+
+.auth-license-help p {
+  margin: 0 0 12px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.auth-license-help a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #bfdbfe;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-license-help a:hover {
+  color: #ffffff;
+}
+
+.auth-change-license-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  margin: 14px auto 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(191, 219, 254, 0.86);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-change-license-btn:hover {
+  color: #ffffff;
 }
 
 /* "?"? Alerts inside glass card "?"? */
