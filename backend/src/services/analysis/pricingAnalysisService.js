@@ -1,0 +1,3119 @@
+import { categoryRepo } from '../../repositories/categoryRepository.js';
+import { productRepo } from '../../repositories/productRepository.js';
+import { salesRepo } from '../../repositories/salesRepository.js';
+import { stockRepo } from '../../repositories/stockRepository.js';
+import { supplierProductRepo } from '../../repositories/supplierProductRepository.js';
+import { supplierRepo } from '../../repositories/supplierRepository.js';
+import { purchaseOrderRepo } from '../../repositories/purchaseOrderRepository.js';
+import { purchaseOrderItemRepo } from '../../repositories/purchaseOrderItemRepository.js';
+import { config } from '../../config/config.js';
+import { getPrisma } from '../../providers/postgresProvider.js';
+import { withPostgresQueryLogging } from '../../utils/performanceLogger.js';
+import { demandForecastService } from './demandForecastService.js';
+import { recommendationEngine } from './recommendationEngine.js';
+import { riskScoringService } from './riskScoringService.js';
+import { AppError, createNotFoundError } from '../../utils/appError.js';
+import { parsePagePagination, resolveWhitelistedSort } from '../../utils/pagination.js';
+import { settingsRepo } from '../../repositories/settingsRepository.js';
+import { logisticsTariffService } from '../logisticsTariffService.js';
+import { applyCampaignPricingToProduct, listActiveCampaignDefinitions } from '../campaignPricingService.js';
+import { v4 as uuidv4 } from 'uuid';
+import { Prisma } from '@prisma/client';
+import { getActiveTenantId } from '../../tenant/tenantContext.js';
+import {
+  normalizePurchaseOrderStatus,
+  PURCHASE_ORDER_CANCELLED_STATUSES,
+  PURCHASE_ORDER_COMPLETED_STATUSES,
+  PURCHASE_ORDER_GOODS_RECEIPT_STATUSES,
+  PURCHASE_ORDER_TERMINAL_STATUSES,
+  PURCHASE_ORDER_WAITING_DELIVERY_STATUSES,
+} from '../../domain/purchaseOrderLifecycle.js';
+import {
+  buildProductUniverseWhere,
+  matchesProductUniverse,
+  normalizeProductUniverse,
+  PRODUCT_UNIVERSES,
+} from '../../utils/productUniverse.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SALES_LOOKBACK_DAYS = 30;
+const ANALYSIS_CACHE_TTL_MS = 120_000;
+const analysisCache = new Map();
+const NON_REAL_PRICE_EVENT_SOURCES = new Set([
+  'legacy_price_updated_at',
+  'legacy',
+  'import',
+  'bulk_import',
+  'seed',
+  'migration',
+  'updated_at',
+  'catalog_import',
+  'initial_import',
+]);
+
+const isRealPriceEventSource = (source) => !NON_REAL_PRICE_EVENT_SOURCES.has(String(source || '').toLowerCase());
+
+const pricesEqual = (left, right) => {
+  const a = Number(left);
+  const b = Number(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.round(a * 100) === Math.round(b * 100);
+};
+
+const PRICE_ACTION_MODAL_SOURCES = new Set(['bulk_price_update_modal', 'sell_price_advisor_modal', 'pricing_decision_table']);
+const TEMPORARY_PRICE_ACTION_SOURCE = 'temporary_price_action';
+const TEMPORARY_PRICE_REVERT_SOURCE = 'temporary_price_revert';
+const PRICING_DECISION_SKIP_SOURCE = 'pricing_decision_skip';
+const TEMPORARY_PRICE_DURATION_BY_RISK = {
+  critical: 3,
+  high: 7,
+  medium: 14,
+  low: 21,
+};
+
+const normalizeSalePriceValue = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Number(numeric.toFixed(2));
+};
+
+const normalizePriceForDecisionKey = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return '0';
+  return String(Number(numeric.toFixed(2)));
+};
+
+const buildPricingDecisionKey = (row = {}) => [
+  row.productId || row.id || '',
+  row.primaryAction || row.actionType || '',
+  normalizePriceForDecisionKey(row.currentPrice ?? row.salePrice),
+  normalizePriceForDecisionKey(row.discountSuggestion?.newPrice ?? row.suggestedPrice ?? row.currentPrice ?? row.salePrice),
+].map((part) => String(part ?? '').trim()).join('|');
+
+const actorLabel = (actor = {}) => actor?.name || actor?.username || actor?.id || 'Sistem kullanıcısı';
+
+const normalizeRiskLevel = (value, fallback = 'medium') => {
+  const key = String(value || '').trim().toLocaleLowerCase('tr-TR');
+  if (!key) return fallback;
+  if (['critical', 'kritik', 'urgent', 'acil', 'very high', 'çok yüksek', 'cok yuksek'].includes(key)) return 'critical';
+  if (['high', 'yüksek', 'yuksek', 'danger', 'riskli'].includes(key)) return 'high';
+  if (['medium', 'orta', 'moderate', 'normal'].includes(key)) return 'medium';
+  if (['low', 'düşük', 'dusuk', 'safe', 'güvenli', 'guvenli'].includes(key)) return 'low';
+  return fallback;
+};
+
+const SKT_STATUS_FILTER_VALUES = new Set(['safe', 'soon', 'critical']);
+
+const normalizeSktStatusFilterValue = (value) => {
+  const key = String(value || '').trim().toLocaleLowerCase('tr-TR').replace(/[_\s-]+/g, '-');
+  if (!key || ['all', 'tum', 'tüm', 'tum-durumlar', 'tüm-durumlar'].includes(key)) return '';
+  if (['safe', 'normal', 'ok', 'guvenli', 'güvenli'].includes(key)) return 'safe';
+  if (['soon', 'near', 'upcoming', 'yaklasiyor', 'yaklaşıyor', 'high'].includes(key)) return 'soon';
+  if (['critical', 'kritik', 'expired', 'past-due', 'overdue'].includes(key)) return 'critical';
+  return SKT_STATUS_FILTER_VALUES.has(key) ? key : '';
+};
+
+const normalizeSktStatusFilter = (value) => {
+  if (Array.isArray(value)) {
+    const selected = [...new Set(value.map(normalizeSktStatusFilterValue).filter(Boolean))];
+    return selected.length === SKT_STATUS_FILTER_VALUES.size ? [] : selected;
+  }
+  const normalized = normalizeSktStatusFilterValue(value);
+  return normalized ? [normalized] : [];
+};
+
+export const getTemporaryPriceDurationDays = (riskLevel) => TEMPORARY_PRICE_DURATION_BY_RISK[normalizeRiskLevel(riskLevel)] || TEMPORARY_PRICE_DURATION_BY_RISK.medium;
+
+const summarizePriceRange = (events = []) => {
+  const previousValues = events.map((event) => Number(event.previousSalePrice || 0)).filter((value) => Number.isFinite(value) && value > 0);
+  const nextValues = events.map((event) => Number(event.salePrice || 0)).filter((value) => Number.isFinite(value) && value > 0);
+  if (!previousValues.length || !nextValues.length) return 'Fiyat özeti hesaplanamadı';
+  const avg = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  return `Ortalama ${avg(previousValues).toFixed(2)} TL -> ${avg(nextValues).toFixed(2)} TL`;
+};
+
+const mapPriceActionGroup = (actionId, events = []) => {
+  const first = events[0] || {};
+  const payload = first.payload && typeof first.payload === 'object' ? first.payload : {};
+  const statuses = events.map((event) => event.payload?.rollbackStatus || payload.rollbackStatus || 'active');
+  const rolledBackCount = statuses.filter((status) => status === 'rolled_back').length;
+  const skippedCount = statuses.filter((status) => status === 'rollback_skipped').length;
+  const status = rolledBackCount === events.length
+    ? 'rolled_back'
+    : rolledBackCount > 0 || skippedCount > 0
+      ? 'partial_rollback'
+      : payload.status || 'applied';
+
+  return {
+    id: actionId,
+    type: payload.actionType || (payload.sourceModal === 'sell_price_advisor_modal' ? 'single_price_approval' : 'bulk_price_update'),
+    sourceModal: payload.sourceModal || first.source || '',
+    scope: payload.scope || { label: payload.scopeLabel || 'Fiyat işlemi' },
+    scopeLabel: payload.scopeLabel || payload.scope?.label || 'Fiyat işlemi',
+    affectedProductCount: events.length,
+    priceSummary: payload.priceSummary || summarizePriceRange(events),
+    actorId: payload.actorId || payload.approvedBy || null,
+    actorName: payload.actorName || 'Sistem kullanıcısı',
+    createdAt: first.createdAt ? new Date(first.createdAt).toISOString() : payload.createdAt || null,
+    status,
+    rollbackSummary: payload.rollbackSummary || null,
+  };
+};
+
+const mapPriceActionLog = (action) => ({
+  ...action,
+  statusLabel: action.status === 'rolled_back'
+    ? 'Geri alındı'
+    : action.status === 'partial_rollback'
+      ? 'Kısmen geri alındı'
+      : action.status === 'rollback_skipped'
+        ? 'Geri alınamaz'
+        : action.status === 'active'
+          ? 'Aktif'
+          : action.status === 'expired'
+            ? 'Süresi doldu'
+            : 'Uygulandı',
+});
+
+const listRecentPriceActionsFromPostgres = async ({ limit = 3 } = {}) => {
+  const prisma = await getPrisma();
+  const rows = await prisma.productPriceEvent.findMany({
+    where: {
+      source: { in: ['bulk_price_update', 'sell_price_recommendation', TEMPORARY_PRICE_ACTION_SOURCE] },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 250,
+  });
+  const groups = new Map();
+  rows.forEach((row) => {
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    if (!PRICE_ACTION_MODAL_SOURCES.has(payload.sourceModal)) return;
+    const actionId = String(payload.priceActionId || '').trim();
+    if (!actionId) return;
+    if (!groups.has(actionId)) groups.set(actionId, []);
+    groups.get(actionId).push(row);
+  });
+  return Array.from(groups.entries())
+    .map(([actionId, events]) => mapPriceActionGroup(actionId, events.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0))))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, limit)
+    .map(mapPriceActionLog);
+};
+
+const updateProductSalePricesBatch = ({ prisma, rows = [], source = '', now = new Date() } = {}) => {
+  if (!rows.length) return null;
+  const tenantId = getActiveTenantId();
+  const cases = Prisma.join(
+    rows.map((row) => Prisma.sql`WHEN ${row.productId || row.product.id} THEN ${row.salePrice}`),
+    Prisma.raw(' ')
+  );
+  const ids = Prisma.join(rows.map((row) => row.productId || row.product.id));
+  return prisma.$executeRaw`
+    UPDATE products
+    SET
+      sale_price = (CASE id ${cases} END)::numeric,
+      price_updated_at = ${now},
+      last_price_change_date = ${now},
+      last_price_change_at = ${now},
+      last_price_change_source = ${source}
+    WHERE id IN (${ids})
+      AND tenant_id = ${tenantId}
+  `;
+};
+
+const mergePriceEventPayloadBatch = ({ prisma, ids = [], payloadPatch = {} } = {}) => {
+  const eventIds = ids.map((id) => String(id || '').trim()).filter(Boolean);
+  if (!eventIds.length) return null;
+  const tenantId = getActiveTenantId();
+  return prisma.$executeRaw`
+    UPDATE product_price_events
+    SET payload = COALESCE(payload, '{}'::jsonb) || ${JSON.stringify(payloadPatch)}::jsonb
+    WHERE id IN (${Prisma.join(eventIds)})
+      AND tenant_id = ${tenantId}
+  `;
+};
+
+const applyBulkPriceUpdatePostgres = async ({ updates = [], scope = {}, actor = {} } = {}) => {
+  const normalizedUpdates = updates
+    .map((item) => ({
+      productId: String(item.productId || item.id || item.product?.id || '').trim(),
+      nextPrice: normalizeSalePriceValue(item.nextPrice ?? item.salePrice),
+    }))
+    .filter((item) => item.productId && item.nextPrice !== null);
+  if (!normalizedUpdates.length) throw new AppError(400, 'Güncellenecek ürün bulunamadı');
+
+  const prisma = await getPrisma();
+  const now = new Date();
+  const actionId = uuidv4();
+  const products = await prisma.product.findMany({
+    where: { id: { in: normalizedUpdates.map((item) => item.productId) } },
+    select: { id: true, name: true, sku: true, salePrice: true },
+  });
+  const productMap = new Map(products.map((product) => [product.id, product]));
+  const rows = normalizedUpdates.map((item) => {
+    const product = productMap.get(item.productId);
+    if (!product) return null;
+    const previousSalePrice = Number(product.salePrice || 0);
+    if (pricesEqual(previousSalePrice, item.nextPrice)) return null;
+    return {
+      product,
+      previousSalePrice,
+      salePrice: item.nextPrice,
+      eventId: uuidv4(),
+    };
+  }).filter(Boolean);
+  if (!rows.length) throw new AppError(400, 'Fiyatı değişecek ürün bulunamadı');
+
+  const priceSummary = summarizePriceRange(rows);
+  const actorName = actorLabel(actor);
+  const eventRows = rows.map((row) => {
+    const payload = {
+      priceActionId: actionId,
+      priceEventId: row.eventId,
+      actionType: 'bulk_price_update',
+      sourceModal: 'bulk_price_update_modal',
+      scope,
+      scopeLabel: scope.label || 'Toplu fiyat güncelleme',
+      productId: row.product.id,
+      productName: row.product.name,
+      sku: row.product.sku,
+      previousPrice: row.previousSalePrice,
+      newPrice: row.salePrice,
+      priceSummary,
+      actorId: actor?.id || null,
+      actorName,
+      status: 'applied',
+      createdAt: now.toISOString(),
+    };
+    return {
+      id: row.eventId,
+      productId: row.product.id,
+      previousSalePrice: row.previousSalePrice,
+      salePrice: row.salePrice,
+      source: 'bulk_price_update',
+      payload,
+      createdAt: now,
+    };
+  });
+
+  await prisma.$transaction([
+    updateProductSalePricesBatch({ prisma, rows, source: 'bulk_price_update', now }),
+    prisma.productPriceEvent.createMany({ data: eventRows }),
+  ]);
+  analysisCache.clear();
+  const action = mapPriceActionGroup(actionId, rows.map((row) => ({
+    id: row.eventId,
+    productId: row.product.id,
+    previousSalePrice: row.previousSalePrice,
+    salePrice: row.salePrice,
+    source: 'bulk_price_update',
+    payload: {
+      priceActionId: actionId,
+      actionType: 'bulk_price_update',
+      sourceModal: 'bulk_price_update_modal',
+      scope,
+      scopeLabel: scope.label || 'Toplu fiyat güncelleme',
+      actorId: actor?.id || null,
+      actorName,
+      priceSummary,
+      status: 'applied',
+    },
+    createdAt: now,
+  })));
+  return {
+    ...mapPriceActionLog(action),
+    updatedProducts: rows.map((row) => ({
+      productId: row.product.id,
+      previousSalePrice: row.previousSalePrice,
+      salePrice: row.salePrice,
+    })),
+  };
+};
+
+const mapTemporaryPriceAction = (action = {}) => ({
+  id: action.id,
+  priceActionId: action.id,
+  productId: action.productId,
+  previousSalePrice: action.oldPrice === null || action.oldPrice === undefined ? null : Number(action.oldPrice),
+  salePrice: action.appliedPrice === null || action.appliedPrice === undefined ? null : Number(action.appliedPrice),
+  appliedPrice: action.appliedPrice === null || action.appliedPrice === undefined ? null : Number(action.appliedPrice),
+  actionType: action.actionType || 'temporary_price_decision',
+  recommendationType: action.recommendationType || '',
+  riskLevel: action.riskLevel || '',
+  startAt: action.startAt ? new Date(action.startAt).toISOString() : null,
+  endAt: action.endAt ? new Date(action.endAt).toISOString() : null,
+  durationDays: action.durationDays,
+  appliedBy: action.appliedBy || null,
+  appliedAt: action.appliedAt ? new Date(action.appliedAt).toISOString() : null,
+  status: action.status,
+  sourceRecommendationKey: action.sourceRecommendationKey || '',
+  priceEventId: action.priceEventId || '',
+  notes: action.notes || '',
+  rowSnapshot: action.payload?.rowSnapshot || null,
+});
+
+const mapSkippedPricingDecision = (event = {}) => {
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+  return {
+    id: event.id,
+    productId: event.productId,
+    sourceRecommendationKey: payload.sourceRecommendationKey || '',
+    decisionKey: payload.sourceRecommendationKey || '',
+    actionType: payload.actionType || 'pricing_decision_skip',
+    recommendationType: payload.recommendationType || '',
+    riskLevel: payload.riskLevel || '',
+    skippedAt: event.createdAt ? new Date(event.createdAt).toISOString() : payload.skippedAt || null,
+    skippedBy: payload.skippedBy || null,
+    skippedByName: payload.skippedByName || payload.actorName || 'Sistem kullanıcısı',
+    notes: payload.notes || '',
+    rowSnapshot: payload.rowSnapshot || null,
+  };
+};
+
+const mapActiveTemporaryPriceAction = (action = {}) => ({
+  id: action.id,
+  productId: action.productId,
+  oldPrice: action.oldPrice === null || action.oldPrice === undefined ? null : Number(action.oldPrice),
+  appliedPrice: action.appliedPrice === null || action.appliedPrice === undefined ? null : Number(action.appliedPrice),
+  status: action.status || '',
+  startAt: action.startAt ? new Date(action.startAt).toISOString() : null,
+  endAt: action.endAt ? new Date(action.endAt).toISOString() : null,
+  durationDays: action.durationDays,
+  appliedAt: action.appliedAt ? new Date(action.appliedAt).toISOString() : null,
+  sourceRecommendationKey: action.sourceRecommendationKey || '',
+  priceEventId: action.priceEventId || '',
+  rowSnapshot: action.payload?.rowSnapshot || null,
+});
+
+const getActiveTemporaryPriceActionsByProduct = async () => {
+  if (config.dataStore !== 'postgres') return new Map();
+  const prisma = await getPrisma();
+  assertTemporaryPriceActionDelegate(prisma);
+  const actions = await prisma.temporaryPriceAction.findMany({
+    where: { status: 'active' },
+    orderBy: { appliedAt: 'desc' },
+  });
+  return new Map(actions.map((action) => [String(action.productId || '').trim(), mapActiveTemporaryPriceAction(action)]));
+};
+
+const getSkippedPricingDecisionsByProduct = async () => {
+  if (config.dataStore !== 'postgres') return new Map();
+  const prisma = await getPrisma();
+  const events = await prisma.productPriceEvent.findMany({
+    where: { source: PRICING_DECISION_SKIP_SOURCE },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, productId: true, payload: true, createdAt: true },
+  });
+  const byProduct = new Map();
+  events.forEach((event) => {
+    const mapped = mapSkippedPricingDecision(event);
+    if (!mapped.productId || !mapped.sourceRecommendationKey) return;
+    const productKey = String(mapped.productId).trim();
+    const current = byProduct.get(productKey) || new Map();
+    if (!current.has(mapped.sourceRecommendationKey)) current.set(mapped.sourceRecommendationKey, mapped);
+    byProduct.set(productKey, current);
+  });
+  return byProduct;
+};
+
+const isSkippedPricingDecision = (row = {}, skippedByProduct = new Map()) => {
+  const productKey = String(row.productId || row.id || '').trim();
+  const decisionKey = String(row.sourceRecommendationKey || '').trim();
+  if (!productKey || !decisionKey) return false;
+  return Boolean(skippedByProduct.get(productKey)?.has(decisionKey));
+};
+
+const TEMPORARY_PRICE_ACTION_INFRA_MESSAGE = 'Geçici fiyat aksiyonu altyapısı hazır değil. Migration veya Prisma generate eksik.';
+
+const assertTemporaryPriceActionDelegate = (client) => {
+  if (!client?.temporaryPriceAction) {
+    throw new AppError(503, TEMPORARY_PRICE_ACTION_INFRA_MESSAGE, {
+      errorCode: 'TEMPORARY_PRICE_ACTION_INFRA_NOT_READY',
+    });
+  }
+};
+
+const isTemporaryPriceActionInfrastructureError = (error) => {
+  const message = String(error?.message || '').toLowerCase();
+  return ['P2021', 'P2022'].includes(String(error?.code || ''))
+    || message.includes('temporarypriceaction')
+    || message.includes('temporary_price_actions')
+    || message.includes('does not exist')
+    || message.includes('no such table');
+};
+
+const rethrowTemporaryPriceActionInfrastructureError = (error) => {
+  if (isTemporaryPriceActionInfrastructureError(error)) {
+    throw new AppError(503, TEMPORARY_PRICE_ACTION_INFRA_MESSAGE, {
+      errorCode: 'TEMPORARY_PRICE_ACTION_INFRA_NOT_READY',
+      details: { cause: error?.message || String(error) },
+    });
+  }
+  throw error;
+};
+
+const rethrowTemporaryPriceActionApplyError = (error) => {
+  if (error instanceof AppError) throw error;
+  if (String(error?.code || '') === 'P2002') {
+    throw new AppError(409, 'Bu ürün için aktif geçici fiyat uygulaması devam ediyor.', {
+      errorCode: 'ACTIVE_TEMPORARY_PRICE_ACTION_EXISTS',
+    });
+  }
+  rethrowTemporaryPriceActionInfrastructureError(error);
+};
+
+const applyTemporaryPriceActionPostgres = async ({
+  productId,
+  salePrice,
+  actionType = 'temporary_price_decision',
+  recommendationType = '',
+  riskLevel = 'medium',
+  sourceRecommendationKey = '',
+  notes = '',
+  rowSnapshot = null,
+  actor = {},
+} = {}) => {
+  const targetProductId = String(productId || '').trim();
+  const appliedPrice = normalizeSalePriceValue(salePrice);
+  if (!targetProductId) throw new AppError(400, 'Uygulanacak ürün bulunamadı');
+  if (appliedPrice === null) throw new AppError(400, 'Geçerli önerilen fiyat zorunludur');
+
+  const prisma = await getPrisma();
+  assertTemporaryPriceActionDelegate(prisma);
+  const product = await prisma.product.findUnique({
+    where: { id: targetProductId },
+    select: { id: true, name: true, sku: true, salePrice: true },
+  });
+  if (!product) throw createNotFoundError('Ürün bulunamadı');
+
+  const oldPrice = Number(product.salePrice || 0);
+  if (pricesEqual(oldPrice, appliedPrice)) throw new AppError(400, 'Fiyatı değişecek ürün bulunamadı');
+
+  const now = new Date();
+  const durationDays = getTemporaryPriceDurationDays(riskLevel);
+  const endAt = new Date(now.getTime() + durationDays * DAY_MS);
+  const priceActionId = uuidv4();
+  const eventId = uuidv4();
+  const actorName = actorLabel(actor);
+  const normalizedRisk = normalizeRiskLevel(riskLevel);
+  const priceSummary = summarizePriceRange([{ previousSalePrice: oldPrice, salePrice: appliedPrice }]);
+  const payload = {
+    priceActionId,
+    priceEventId: eventId,
+    actionType,
+    sourceModal: 'pricing_decision_table',
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    previousPrice: oldPrice,
+    newPrice: appliedPrice,
+    priceSummary,
+    recommendationType,
+    riskLevel: normalizedRisk,
+    durationDays,
+    startAt: now.toISOString(),
+    endAt: endAt.toISOString(),
+    appliedBy: actor?.id || null,
+    appliedByName: actorName,
+    actorId: actor?.id || null,
+    actorName,
+    sourceRecommendationKey,
+    status: 'active',
+    temporary: true,
+    rowSnapshot,
+    createdAt: now.toISOString(),
+  };
+
+  let action;
+  try {
+    action = await prisma.$transaction(async (tx) => {
+      assertTemporaryPriceActionDelegate(tx);
+      const existingActiveAction = await tx.temporaryPriceAction.findFirst({
+        where: { productId: product.id, status: 'active' },
+        select: { id: true, endAt: true },
+      });
+      if (existingActiveAction) {
+        throw new AppError(409, 'Bu ürün için aktif geçici fiyat uygulaması devam ediyor.', {
+          errorCode: 'ACTIVE_TEMPORARY_PRICE_ACTION_EXISTS',
+          details: {
+            actionId: existingActiveAction.id,
+            endAt: existingActiveAction.endAt ? existingActiveAction.endAt.toISOString() : null,
+          },
+        });
+      }
+      await tx.product.update({
+        where: { id: product.id },
+        data: {
+          salePrice: appliedPrice,
+          priceUpdatedAt: now,
+          lastPriceChangeDate: now,
+          lastPriceChangeAt: now,
+          lastPriceChangeSource: TEMPORARY_PRICE_ACTION_SOURCE,
+        },
+      });
+      await tx.productPriceEvent.create({
+        data: {
+          id: eventId,
+          productId: product.id,
+          previousSalePrice: oldPrice,
+          salePrice: appliedPrice,
+          source: TEMPORARY_PRICE_ACTION_SOURCE,
+          payload,
+          createdAt: now,
+        },
+      });
+      return tx.temporaryPriceAction.create({
+        data: {
+          id: priceActionId,
+          productId: product.id,
+          oldPrice,
+          appliedPrice,
+          actionType,
+          recommendationType,
+          riskLevel: normalizedRisk,
+          startAt: now,
+          endAt,
+          durationDays,
+          appliedBy: actor?.id || null,
+          appliedAt: now,
+          status: 'active',
+          sourceRecommendationKey,
+          priceEventId: eventId,
+          notes,
+          payload,
+        },
+      });
+    });
+  } catch (error) {
+    rethrowTemporaryPriceActionApplyError(error);
+  }
+
+  analysisCache.clear();
+  return {
+    ...mapTemporaryPriceAction(action),
+    statusLabel: 'Aktif',
+    updatedProducts: [{
+      productId: product.id,
+      previousSalePrice: oldPrice,
+      salePrice: appliedPrice,
+    }],
+  };
+};
+
+const skipPricingDecisionPostgres = async ({
+  productId,
+  sourceRecommendationKey = '',
+  recommendationType = '',
+  riskLevel = '',
+  notes = '',
+  rowSnapshot = null,
+  actor = {},
+} = {}) => {
+  const targetProductId = String(productId || '').trim();
+  const decisionKey = String(sourceRecommendationKey || '').trim();
+  if (!targetProductId) throw new AppError(400, 'Pas geçilecek ürün bulunamadı');
+  if (!decisionKey) throw new AppError(400, 'Pas geçilecek karar anahtarı bulunamadı');
+
+  const prisma = await getPrisma();
+  const product = await prisma.product.findUnique({
+    where: { id: targetProductId },
+    select: { id: true, name: true, sku: true },
+  });
+  if (!product) throw createNotFoundError('Ürün bulunamadı');
+
+  const existing = await prisma.productPriceEvent.findFirst({
+    where: {
+      productId: targetProductId,
+      source: PRICING_DECISION_SKIP_SOURCE,
+      payload: {
+        path: ['sourceRecommendationKey'],
+        equals: decisionKey,
+      },
+    },
+    select: { id: true, createdAt: true, payload: true, productId: true },
+  });
+  if (existing) return mapSkippedPricingDecision(existing);
+
+  const now = new Date();
+  const eventId = uuidv4();
+  const actorName = actorLabel(actor);
+  const payload = {
+    actionType: 'pricing_decision_skip',
+    sourceModal: 'pricing_decision_table',
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    sourceRecommendationKey: decisionKey,
+    recommendationType,
+    riskLevel: normalizeRiskLevel(riskLevel, ''),
+    notes,
+    rowSnapshot,
+    skippedBy: actor?.id || null,
+    skippedByName: actorName,
+    actorId: actor?.id || null,
+    actorName,
+    status: 'skipped',
+    skippedAt: now.toISOString(),
+  };
+  const event = await prisma.productPriceEvent.create({
+    data: {
+      id: eventId,
+      productId: product.id,
+      previousSalePrice: null,
+      salePrice: null,
+      source: PRICING_DECISION_SKIP_SOURCE,
+      payload,
+      createdAt: now,
+    },
+  });
+  analysisCache.clear();
+  return mapSkippedPricingDecision(event);
+};
+
+const expireTemporaryPriceActionsPostgres = async ({ limit = 100, actor = {} } = {}) => {
+  const prisma = await getPrisma();
+  assertTemporaryPriceActionDelegate(prisma);
+  const now = new Date();
+  const actions = await prisma.temporaryPriceAction.findMany({
+    where: { status: 'active', endAt: { lte: now } },
+    orderBy: { endAt: 'asc' },
+    take: Math.max(1, Math.min(Number(limit) || 100, 500)),
+  });
+  if (!actions.length) return { expiredCount: 0, revertedCount: 0, skippedCount: 0, actions: [] };
+
+  const products = await prisma.product.findMany({
+    where: { id: { in: actions.map((action) => action.productId) } },
+    select: { id: true, salePrice: true },
+  });
+  const productMap = new Map(products.map((product) => [product.id, product]));
+  const actorName = actorLabel(actor);
+  let revertedCount = 0;
+  let skippedCount = 0;
+  const resultActions = [];
+
+  await prisma.$transaction(async (tx) => {
+    for (const action of actions) {
+      const product = productMap.get(action.productId);
+      const expectedCurrentPrice = Number(action.appliedPrice || 0);
+      const revertPrice = normalizeSalePriceValue(action.oldPrice);
+      if (!product || revertPrice === null || !pricesEqual(product.salePrice, expectedCurrentPrice)) {
+        skippedCount += 1;
+        const updated = await tx.temporaryPriceAction.update({
+          where: { id: action.id },
+          data: {
+            status: 'expired',
+            revertAt: now,
+            payload: {
+              ...(action.payload && typeof action.payload === 'object' ? action.payload : {}),
+              revertStatus: 'skipped_current_price_changed',
+              revertCheckedAt: now.toISOString(),
+            },
+          },
+        });
+        resultActions.push(updated);
+        continue;
+      }
+
+      const revertEventId = uuidv4();
+      await tx.product.update({
+        where: { id: action.productId },
+        data: {
+          salePrice: revertPrice,
+          priceUpdatedAt: now,
+          lastPriceChangeDate: now,
+          lastPriceChangeAt: now,
+          lastPriceChangeSource: TEMPORARY_PRICE_REVERT_SOURCE,
+        },
+      });
+      await tx.productPriceEvent.create({
+        data: {
+          id: revertEventId,
+          productId: action.productId,
+          previousSalePrice: expectedCurrentPrice,
+          salePrice: revertPrice,
+          source: TEMPORARY_PRICE_REVERT_SOURCE,
+          payload: {
+            priceActionId: action.id,
+            revertEventId,
+            actionType: 'temporary_price_revert',
+            previousPrice: expectedCurrentPrice,
+            newPrice: revertPrice,
+            actorId: actor?.id || null,
+            actorName,
+            automatic: true,
+            createdAt: now.toISOString(),
+          },
+          createdAt: now,
+        },
+      });
+      const updated = await tx.temporaryPriceAction.update({
+        where: { id: action.id },
+        data: {
+          status: 'expired',
+          revertAt: now,
+          revertedAt: now,
+          payload: {
+            ...(action.payload && typeof action.payload === 'object' ? action.payload : {}),
+            revertStatus: 'reverted',
+            revertEventId,
+            revertedAt: now.toISOString(),
+          },
+        },
+      });
+      revertedCount += 1;
+      resultActions.push(updated);
+    }
+  });
+
+  if (resultActions.length) analysisCache.clear();
+  return {
+    expiredCount: resultActions.length,
+    revertedCount,
+    skippedCount,
+    actions: resultActions.map(mapTemporaryPriceAction),
+  };
+};
+
+const rollbackPriceActionPostgres = async ({ actionId, actor = {} } = {}) => {
+  const id = String(actionId || '').trim();
+  if (!id) throw new AppError(400, 'Geri alınacak işlem bulunamadı');
+  const prisma = await getPrisma();
+  assertTemporaryPriceActionDelegate(prisma);
+  const events = await prisma.productPriceEvent.findMany({
+    where: {
+      source: { in: ['bulk_price_update', 'sell_price_recommendation', TEMPORARY_PRICE_ACTION_SOURCE] },
+      payload: { path: ['priceActionId'], equals: id },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!events.length) throw createNotFoundError('Fiyat işlemi bulunamadı');
+  if (events.every((event) => event.payload?.rollbackStatus === 'rolled_back')) {
+    throw new AppError(400, 'Bu işlem daha önce geri alındı');
+  }
+
+  const products = await prisma.product.findMany({
+    where: { id: { in: events.map((event) => event.productId) } },
+    select: { id: true, salePrice: true },
+  });
+  const productMap = new Map(products.map((product) => [product.id, product]));
+  const now = new Date();
+  const actorName = actorLabel(actor);
+  const rollbackRows = [];
+  const rollbackEventRows = [];
+  const rolledBackEventIds = [];
+  const skippedEventIds = [];
+  let rolledBackCount = 0;
+  let skippedCount = 0;
+
+  events.forEach((event) => {
+    const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+    if (payload.rollbackStatus === 'rolled_back') {
+      skippedCount += 1;
+      return;
+    }
+    const product = productMap.get(event.productId);
+    const expectedCurrent = Number(event.salePrice || 0);
+    const rollbackPrice = normalizeSalePriceValue(event.previousSalePrice);
+    if (!product || rollbackPrice === null || !pricesEqual(product.salePrice, expectedCurrent)) {
+      skippedCount += 1;
+      skippedEventIds.push(event.id);
+      return;
+    }
+    const rollbackEventId = uuidv4();
+    rolledBackCount += 1;
+    rollbackRows.push({
+      productId: event.productId,
+      salePrice: rollbackPrice,
+      previousSalePrice: expectedCurrent,
+    });
+    rollbackEventRows.push({
+      id: rollbackEventId,
+      productId: event.productId,
+      previousSalePrice: expectedCurrent,
+      salePrice: rollbackPrice,
+      source: 'price_action_rollback',
+      payload: {
+        priceActionId: id,
+        rollbackEventId,
+        rollbackOfEventId: event.id,
+        actionType: 'price_rollback',
+        sourceModal: payload.sourceModal,
+        previousPrice: expectedCurrent,
+        newPrice: rollbackPrice,
+        actorId: actor?.id || null,
+        actorName,
+        createdAt: now.toISOString(),
+      },
+      createdAt: now,
+    });
+    rolledBackEventIds.push(event.id);
+  });
+
+  if (!rolledBackCount && skippedCount) {
+    const skippedPatch = mergePriceEventPayloadBatch({
+      prisma,
+      ids: skippedEventIds,
+      payloadPatch: {
+        rollbackStatus: 'rollback_skipped',
+        rollbackCheckedAt: now.toISOString(),
+        rollbackBy: actor?.id || null,
+        rollbackByName: actorName,
+      },
+    });
+    if (skippedPatch) await prisma.$transaction([skippedPatch]);
+    throw new AppError(409, 'Bu işlemden sonra aynı ürünlerde başka fiyat değişikliği yapıldığı için geri alınamadı');
+  }
+
+  const operations = [
+    updateProductSalePricesBatch({ prisma, rows: rollbackRows, source: 'price_action_rollback', now }),
+    rollbackEventRows.length ? prisma.productPriceEvent.createMany({ data: rollbackEventRows }) : null,
+    mergePriceEventPayloadBatch({
+      prisma,
+      ids: rolledBackEventIds,
+      payloadPatch: {
+        rollbackStatus: 'rolled_back',
+        rolledBackAt: now.toISOString(),
+        rolledBackBy: actor?.id || null,
+        rolledBackByName: actorName,
+      },
+    }),
+    mergePriceEventPayloadBatch({
+      prisma,
+      ids: skippedEventIds,
+      payloadPatch: {
+        rollbackStatus: 'rollback_skipped',
+        rollbackCheckedAt: now.toISOString(),
+        rollbackBy: actor?.id || null,
+        rollbackByName: actorName,
+      },
+    }),
+    rolledBackEventIds.length ? prisma.temporaryPriceAction.updateMany({
+      where: { priceEventId: { in: rolledBackEventIds }, status: 'active' },
+      data: { status: 'reverted', revertAt: now, revertedAt: now },
+    }) : null,
+    skippedEventIds.length ? prisma.temporaryPriceAction.updateMany({
+      where: { priceEventId: { in: skippedEventIds }, status: 'active' },
+      data: { status: 'expired', revertAt: now },
+    }) : null,
+  ].filter(Boolean);
+  await prisma.$transaction(operations);
+  analysisCache.clear();
+  return {
+    actionId: id,
+    status: skippedCount > 0 ? 'partial_rollback' : 'rolled_back',
+    rolledBackCount,
+    skippedCount,
+    rolledBackProducts: rollbackRows,
+    message: skippedCount > 0
+      ? 'Bazı ürünlerde daha sonra fiyat değişikliği olduğu için kısmi geri alma yapıldı.'
+      : 'Fiyat işlemi geri alındı.',
+    updatedAt: now.toISOString(),
+  };
+};
+
+const getAnalysisCacheKey = (query = {}) => JSON.stringify(Object.entries(query || {})
+  .filter(([key]) => !['forceRefresh', 'page', 'limit', 'sort'].includes(key))
+  .sort(([left], [right]) => left.localeCompare(right)));
+
+const getCachedAnalysis = (key) => {
+  const entry = analysisCache.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    analysisCache.delete(key);
+    return null;
+  }
+  return entry.promise;
+};
+
+const setCachedAnalysis = (key, promise) => {
+  analysisCache.set(key, {
+    promise,
+    expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS,
+  });
+  promise.catch(() => analysisCache.delete(key));
+  return promise;
+};
+
+export const clearPricingAnalysisCache = () => analysisCache.clear();
+
+const resolveStockBatchesFefo = (stock = {}) => {
+  const batches = Array.isArray(stock?.batches) ? stock.batches : [];
+  return batches
+    .map((batch) => ({
+      batchNo: String(batch?.batchNo || '').trim(),
+      skt: String(batch?.skt || '').slice(0, 10),
+      totalQuantity: Number(batch?.totalQuantity ?? (Number(batch?.warehouseQuantity || 0) + Number(batch?.shelfQuantity || 0)) ?? 0),
+    }))
+    .filter((batch) => batch.batchNo && batch.skt && batch.totalQuantity > 0 && Number.isFinite(new Date(batch.skt).getTime()))
+    .sort((left, right) => left.skt.localeCompare(right.skt) || left.batchNo.localeCompare(right.batchNo, 'tr'))[0] || null;
+};
+
+const omitLegacyBatchPayload = (payload = {}) => {
+  if (!payload || typeof payload !== 'object') return {};
+  const {
+    productBatches,
+    batches,
+    batchNo,
+    partiNo,
+    lotNo,
+    skt,
+    expiryDate,
+    expirationDate,
+    nearestExpiry,
+    fefoDefaultBatchNo,
+    fefoDefaultExpiry,
+    ...rest
+  } = payload;
+  return rest;
+};
+
+const buildPricingWhere = (query = {}) => {
+  const productUniverse = resolveAnalysisUniverse(query);
+  const where = buildProductUniverseWhere(productUniverse);
+  if (query.categoryId) {
+    where.categoryId = String(query.categoryId);
+  }
+  if (query.supplierId) {
+    where.supplierId = String(query.supplierId);
+  }
+  const search = String(query.search || query.q || '').trim();
+  if (search) {
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : []),
+      {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          { barcode: { contains: search, mode: 'insensitive' } },
+        ],
+      },
+    ];
+  }
+  return { where, productUniverse };
+};
+
+const normalizeDate = (value, fallback = new Date()) => {
+  const parsed = value ? new Date(value) : fallback;
+  if (!Number.isFinite(parsed.getTime())) return fallback;
+  return parsed;
+};
+
+const toDateOnly = (value) => new Date(value).toISOString().slice(0, 10);
+
+const toNumberValue = (value) => {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'object' && typeof value.toNumber === 'function') return value.toNumber();
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : value;
+};
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const uniqStrings = (values = []) => [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
+
+const normalizeCampaignScopeKey = (value) => String(value || '')
+  .trim()
+  .toLocaleLowerCase('tr-TR')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '');
+
+const campaignMatchesPricingRow = (campaign = {}, row = {}) => {
+  const productId = String(row.productId || '').trim();
+  const categoryId = String(row.categoryId || '').trim();
+  const categoryLabelId = String(row.labelId || row.tagId || row.selectedTagId || row.categoryLabelId || '').trim();
+  const categoryLabelName = normalizeCampaignScopeKey(row.etiket || row.categoryLabelName || row.labelName || row.tag || '');
+  const brand = normalizeCampaignScopeKey(row.brand || row.brandName || '');
+  const targetProducts = (Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : []).map(String);
+  const targetCategories = (Array.isArray(campaign.targetCategoryIds) ? campaign.targetCategoryIds : []).map(String);
+  const targetCategoryLabelIds = (Array.isArray(campaign.targetCategoryLabelIds) ? campaign.targetCategoryLabelIds : []).map(String);
+  const targetCategoryLabels = (Array.isArray(campaign.targetCategoryLabels) ? campaign.targetCategoryLabels : []).map(normalizeCampaignScopeKey);
+  const targetBrands = (Array.isArray(campaign.targetBrands) ? campaign.targetBrands : []).map(normalizeCampaignScopeKey);
+  const hasExplicitScope = targetProducts.length || targetCategories.length || targetCategoryLabelIds.length || targetBrands.length;
+  const labelMatched = targetCategoryLabelIds.length
+    ? (categoryLabelId && targetCategoryLabelIds.includes(categoryLabelId)) || (categoryLabelName && targetCategoryLabels.includes(categoryLabelName))
+    : true;
+  if (productId && targetProducts.includes(productId)) return true;
+  if (categoryId && targetCategories.includes(categoryId) && labelMatched) return true;
+  if (brand && targetBrands.includes(brand)) return true;
+  return !hasExplicitScope && !['product', 'category', 'brand'].includes(String(campaign.type || '').toLowerCase());
+};
+
+const findPricingActiveCampaignConflict = (row = {}, activeCampaigns = []) => {
+  const campaign = activeCampaigns.find((item) => campaignMatchesPricingRow(item, row));
+  if (!campaign) return null;
+  return {
+    campaignId: campaign.id || null,
+    campaignName: campaign.name || campaign.internalName || campaign.publicName || 'Aktif kampanya',
+    campaignType: campaign.type || 'general',
+    reason: 'active_campaign_conflict',
+  };
+};
+
+const buildPricingProcurementContext = async () => {
+  const context = new Map();
+  const [orders, items] = await Promise.all([
+    purchaseOrderRepo.getAll().catch(() => []),
+    purchaseOrderItemRepo.getAll().catch(() => []),
+  ]);
+  const orderById = new Map((Array.isArray(orders) ? orders : []).map((order) => [String(order.id || order.orderId || ''), order]));
+  const now = Date.now();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const productId = String(item.productId || '').trim();
+    const orderId = String(item.orderId || item.purchaseOrderId || '').trim();
+    if (!productId || !orderId) return;
+    const order = orderById.get(orderId);
+    if (!order) return;
+    const status = normalizePurchaseOrderStatus(order.status || order.currentStatus, '');
+    if (!status || PURCHASE_ORDER_TERMINAL_STATUSES.has(status) || PURCHASE_ORDER_CANCELLED_STATUSES.has(status) || PURCHASE_ORDER_COMPLETED_STATUSES.has(status)) return;
+    const eta = order.estimatedDeliveryDate ? new Date(order.estimatedDeliveryDate).getTime() : null;
+    const etaDays = eta && Number.isFinite(eta) ? Math.max(0, Math.ceil((eta - now) / DAY_MS)) : 0;
+    const leadTimeDays = Math.max(toFiniteNumber(order.estimatedDeliveryDays ?? order.payload?.estimatedDeliveryDays, 0), etaDays);
+    const current = context.get(productId) || {
+      hasOpenOrder: false,
+      inboundQuantity: 0,
+      waitingDelivery: false,
+      goodsReceiptPending: false,
+      longestLeadTimeDays: 0,
+      orderIds: [],
+      statuses: [],
+    };
+    current.hasOpenOrder = true;
+    current.inboundQuantity += Math.max(0, toFiniteNumber(item.quantity, 0));
+    current.waitingDelivery = current.waitingDelivery || PURCHASE_ORDER_WAITING_DELIVERY_STATUSES.has(status);
+    current.goodsReceiptPending = current.goodsReceiptPending || PURCHASE_ORDER_GOODS_RECEIPT_STATUSES.has(status);
+    current.longestLeadTimeDays = Math.max(current.longestLeadTimeDays, leadTimeDays);
+    current.orderIds.push(orderId);
+    current.statuses.push(status);
+    context.set(productId, current);
+  });
+
+  return context;
+};
+
+const buildStockGuardrail = ({ totalStock, criticalStock, avgDailySales, daysToStockout }) => {
+  const safeStock = toFiniteNumber(totalStock, 0);
+  const safeCritical = Math.max(0, toFiniteNumber(criticalStock, 0));
+  const safeDaily = Math.max(0, toFiniteNumber(avgDailySales, 0));
+  const coverageDays = daysToStockout === null || daysToStockout === undefined
+    ? (safeDaily > 0 ? Number((safeStock / safeDaily).toFixed(1)) : (safeStock > 0 ? 999 : 0))
+    : toFiniteNumber(daysToStockout, null);
+  const nearCriticalThreshold = Math.max(safeCritical + 2, Math.ceil(safeCritical * 1.35), Math.ceil(safeDaily * 7));
+  const isCriticalStock = safeStock <= safeCritical;
+  const isNearCriticalFast = safeStock <= nearCriticalThreshold && (safeDaily >= 1.5 || coverageDays <= 7);
+  const isLowCoverage = coverageDays !== null && coverageDays <= 5;
+  const blockingReasons = [];
+  if (isCriticalStock) blockingReasons.push('critical_stock');
+  if (!isCriticalStock && isNearCriticalFast) blockingReasons.push('near_critical_fast_moving');
+  if (!isCriticalStock && !isNearCriticalFast && isLowCoverage) blockingReasons.push('low_stock_coverage');
+  return {
+    isCriticalStock,
+    isNearCriticalFast,
+    stockCoverageDays: coverageDays,
+    blocksDiscount: blockingReasons.length > 0,
+    blockingReasons,
+  };
+};
+
+const buildProcurementGuardrail = ({ productId, leadTimeDays, stockGuardrail, procurementContext = new Map() }) => {
+  const context = procurementContext.get(String(productId || '').trim()) || null;
+  const resolvedLeadTime = Math.max(toFiniteNumber(leadTimeDays, 0), toFiniteNumber(context?.longestLeadTimeDays, 0));
+  const hasPipeline = Boolean(context?.hasOpenOrder);
+  const pipelineWeak = !hasPipeline || resolvedLeadTime >= 14 || Boolean(context?.goodsReceiptPending);
+  const blockingReasons = [];
+  if (!hasPipeline) blockingReasons.push('replenishment_pipeline_missing');
+  if (resolvedLeadTime >= 14) blockingReasons.push('long_lead_time');
+  if (context?.goodsReceiptPending) blockingReasons.push('goods_receipt_pending_not_secured');
+  return {
+    hasPipeline,
+    pipelineWeak,
+    inboundQuantity: toFiniteNumber(context?.inboundQuantity, 0),
+    leadTimeDays: resolvedLeadTime,
+    waitingDelivery: Boolean(context?.waitingDelivery),
+    goodsReceiptPending: Boolean(context?.goodsReceiptPending),
+    orderIds: uniqStrings(context?.orderIds || []),
+    statuses: uniqStrings(context?.statuses || []),
+    blocksDiscount: Boolean(stockGuardrail?.blocksDiscount && pipelineWeak),
+    blockingReasons: stockGuardrail?.blocksDiscount && pipelineWeak ? blockingReasons : [],
+  };
+};
+
+const buildMarginGuardrail = ({ currentPrice, purchasePrice }) => {
+  const price = toFiniteNumber(currentPrice, 0);
+  const cost = toFiniteNumber(purchasePrice, 0);
+  const currentMarginPercent = price > 0 ? Number((((price - cost) / price) * 100).toFixed(1)) : null;
+  const blocksDiscount = cost > 0 && (price <= cost || (currentMarginPercent !== null && currentMarginPercent < 12));
+  const blockingReasons = [];
+  if (cost > 0 && price <= cost) blockingReasons.push('price_at_or_below_cost');
+  else if (blocksDiscount) blockingReasons.push('low_margin');
+  return {
+    currentMarginPercent,
+    blocksDiscount,
+    blockingReasons,
+  };
+};
+
+const fromDateValue = (value) => (value instanceof Date ? value.toISOString() : value ?? null);
+
+const diffDays = (futureDate, baseDate) => {
+  if (!futureDate) return null;
+  const diff = Math.ceil((futureDate.getTime() - baseDate.getTime()) / DAY_MS);
+  return Number.isFinite(diff) ? diff : null;
+};
+
+const estimateShelfLifeDays = (productName = '', categoryName = '') => {
+  const name = `${productName} ${categoryName}`.toLowerCase();
+  if (/sut|yogurt|ayran|krema|peynir|tavuk|et|balik/.test(name)) return 7;
+  if (/ekmek|simit|pogaca/.test(name)) return 3;
+  if (/meyve|sebze|salata/.test(name)) return 5;
+  if (/icecek|su|cola|gazoz|meyve suyu/.test(name)) return 45;
+  if (/cikolata|biskuvi|makarna|bakliyat|konserve/.test(name)) return 180;
+  return 30;
+};
+
+const resolveExpiryDate = (product, categoryName) => {
+  const direct = product.expiryDate || product.expiry_date || product.expirationDate || product.sktDate || product.skt || product.bestBeforeDate || null;
+  if (direct) {
+    const parsed = new Date(direct);
+    if (Number.isFinite(parsed.getTime())) {
+      return { expiryDate: parsed, source: 'actual' };
+    }
+  }
+
+  const base = normalizeDate(product.updatedAt || product.createdAt);
+  const shelfLife = estimateShelfLifeDays(product.name, categoryName);
+  return { expiryDate: new Date(base.getTime() + shelfLife * DAY_MS), source: 'estimated' };
+};
+
+const resolveExpiryFromStock = (stock = {}, product = {}, categoryName = '') => {
+  const fefoBatch = resolveStockBatchesFefo(stock);
+  if (fefoBatch?.skt) {
+    const parsed = new Date(fefoBatch.skt);
+    if (Number.isFinite(parsed.getTime())) {
+      return { expiryDate: parsed, source: 'actual_batch', batchNo: fefoBatch.batchNo };
+    }
+  }
+
+  const stockExpiry = stock?.fefoDefaultExpiry || stock?.nearestExpiry || null;
+  if (stockExpiry) {
+    const parsed = new Date(stockExpiry);
+    if (Number.isFinite(parsed.getTime())) {
+      return { expiryDate: parsed, source: 'actual_stock_summary', batchNo: stock?.fefoDefaultBatchNo || null };
+    }
+  }
+
+  return { ...resolveExpiryDate(product, categoryName), batchNo: null };
+};
+
+const getSktStatus = (daysToExpiry) => {
+  if (daysToExpiry === null) return 'unknown';
+  if (daysToExpiry <= 3) return 'critical';
+  if (daysToExpiry <= 7) return 'soon';
+  return 'safe';
+};
+
+const getLeadTimeDays = (mappings, productId) => {
+  const options = mappings.filter((item) => item.productId === productId && item.isActive !== false);
+  if (!options.length) return 3;
+  const cheapest = [...options].sort((a, b) => Number(a.purchasePrice || 0) - Number(b.purchasePrice || 0))[0];
+  return Math.max(1, Number(cheapest.leadTimeDays || 3));
+};
+
+const groupSupplierProductsByProduct = (mappings = []) => {
+  const grouped = new Map();
+  for (const item of mappings) {
+    if (!item?.productId || item.isActive === false) continue;
+    const rows = grouped.get(item.productId) || [];
+    rows.push(item);
+    grouped.set(item.productId, rows);
+  }
+  return grouped;
+};
+
+const getBestSupplierOption = (options = []) => {
+  if (!options.length) return null;
+  return [...options].sort((left, right) => {
+    if (Boolean(right.isDefault) !== Boolean(left.isDefault)) {
+      return Number(Boolean(right.isDefault)) - Number(Boolean(left.isDefault));
+    }
+    return Number(left.purchasePrice || 0) - Number(right.purchasePrice || 0);
+  })[0];
+};
+
+const normalizePriceEvent = (event = {}, product = {}) => {
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+  const at = event.eventDate
+    || event.date
+    || event.at
+    || payload.eventDate
+    || payload.date
+    || payload.at
+    || event.createdAt
+    || event.updatedAt
+    || null;
+  const price = Number(event.salePrice ?? event.newPrice ?? event.price ?? event.currentPrice ?? payload.salePrice ?? payload.newPrice ?? payload.price ?? payload.currentPrice ?? 0);
+  const previousPrice = event.previousSalePrice ?? event.previousPrice ?? payload.previousSalePrice ?? payload.previousPrice ?? null;
+  return {
+    priceEventId: event.priceEventId || event.id || payload.priceEventId || payload.id || null,
+    productId: event.productId || payload.productId || product.id || null,
+    sku: event.sku || payload.sku || product.sku || null,
+    at,
+    date: at ? String(at).slice(0, 10) : null,
+    price: Number.isFinite(price) ? price : null,
+    salePrice: Number.isFinite(price) ? price : null,
+    newPrice: Number.isFinite(price) ? price : null,
+    previousPrice: previousPrice === null || previousPrice === undefined ? null : Number(previousPrice),
+    previousSalePrice: previousPrice === null || previousPrice === undefined ? null : Number(previousPrice),
+    changeDirection: event.changeDirection || payload.changeDirection || null,
+    changePercent: Number(event.changePercent ?? payload.changePercent ?? 0),
+    currency: event.currency || payload.currency || 'TRY',
+    source: event.source || payload.source || '',
+    createdAt: event.createdAt || at,
+  };
+};
+
+const getProductPriceEventRows = (product = {}) => {
+  const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+  const relationRows = Array.isArray(product.priceEvents) ? product.priceEvents : [];
+  if (relationRows.length > 0) return relationRows;
+  return [
+    ...(Array.isArray(payload.priceEvents) ? payload.priceEvents : []),
+    ...(Array.isArray(product.priceHistory) ? product.priceHistory : []),
+    ...(Array.isArray(payload.priceHistory) ? payload.priceHistory : []),
+  ];
+};
+
+const normalizePriceHistory = (product = {}) => {
+  const rows = getProductPriceEventRows(product);
+  const seen = new Set();
+  return rows
+    .map((event) => normalizePriceEvent(event, product))
+    .filter((event) => isRealPriceEventSource(event.source))
+    .filter((event) => event.date && Number.isFinite(event.price))
+    .filter((event) => Number.isFinite(Number(event.previousPrice)) && !pricesEqual(event.previousPrice, event.price))
+    .filter((event) => {
+      const key = `${event.priceEventId || ''}:${event.productId || ''}:${event.at}:${event.price}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => new Date(left.date).getTime() - new Date(right.date).getTime());
+};
+
+const buildPriceHistoryMetrics = (product = {}) => {
+  const history = normalizePriceHistory(product);
+  const latest = history[history.length - 1] || null;
+  const previous = history.length > 1 ? history[history.length - 2] : null;
+  const latestPrice = Number(latest?.price ?? product.salePrice ?? 0);
+  const previousPrice = Number(previous?.price ?? latest?.previousPrice ?? product.purchasePrice ?? 0);
+  const changePercent = Number.isFinite(previousPrice) && previousPrice > 0 && Number.isFinite(latestPrice)
+    ? Number((((latestPrice - previousPrice) / previousPrice) * 100).toFixed(2))
+    : 0;
+
+  return {
+    priceHistory: history.slice(-12),
+    priceHistoryCount: Number(product.priceEventsCount || 0) || history.length,
+    lastPrice: Number.isFinite(latestPrice) ? latestPrice : Number(product.salePrice || 0),
+    previousPrice: Number.isFinite(previousPrice) ? previousPrice : null,
+    priceChangePercent: changePercent,
+    lastPriceChangeAt: latest?.at || null,
+    lastPriceChangeDate: latest?.date || null,
+    priceTrend: latest?.changeDirection || (changePercent > 0 ? 'increase' : changePercent < 0 ? 'decrease' : 'stable'),
+    priceHistorySource: latest?.source || product.lastPriceChangeSource || '',
+  };
+};
+
+const mapPostgresPriceEvent = (event = {}) => ({
+  ...(event.payload && typeof event.payload === 'object' ? event.payload : {}),
+  id: event.id,
+  priceEventId: event.id,
+  productId: event.productId,
+  previousSalePrice: toNumberValue(event.previousSalePrice),
+  previousPrice: toNumberValue(event.previousSalePrice),
+  salePrice: toNumberValue(event.salePrice),
+  price: toNumberValue(event.salePrice),
+  newPrice: toNumberValue(event.salePrice),
+  source: event.source || '',
+  createdAt: fromDateValue(event.createdAt),
+  at: fromDateValue(event.createdAt),
+  eventDate: fromDateValue(event.createdAt),
+});
+
+const mapPostgresProduct = (product = {}) => ({
+  ...omitLegacyBatchPayload(product.payload),
+  ...product,
+  purchasePrice: toNumberValue(product.purchasePrice) || 0,
+  salePrice: toNumberValue(product.salePrice) || 0,
+  averageDesi: toNumberValue(product.averageDesi) || 0,
+  createdAt: fromDateValue(product.createdAt),
+  updatedAt: fromDateValue(product.updatedAt),
+  priceUpdatedAt: fromDateValue(product.priceUpdatedAt),
+  lastPriceChangeDate: fromDateValue(product.lastPriceChangeDate),
+  lastPriceChangeAt: fromDateValue(product.lastPriceChangeAt),
+  lastPriceChangeSource: product.lastPriceChangeSource || null,
+  priceEventsCount: Number(product._count?.priceEvents || product.priceEventsCount || 0),
+  priceEvents: Array.isArray(product.priceEvents) ? product.priceEvents.map(mapPostgresPriceEvent) : [],
+});
+
+const mapPostgresStock = (stock = {}, productId) => {
+  if (!stock) return null;
+  const fefoBatch = resolveStockBatchesFefo(stock);
+  return {
+    productId: stock.productId || productId,
+    warehouseQuantity: Number(stock.warehouseQuantity || 0),
+    shelfQuantity: Number(stock.shelfQuantity || 0),
+    onHand: Number(stock.onHand || 0),
+    available: Number(stock.available || 0),
+    reserved: Number(stock.reserved || 0),
+    nearestExpiry: fefoBatch?.skt || null,
+    fefoDefaultBatchNo: fefoBatch?.batchNo || null,
+    fefoDefaultExpiry: fefoBatch?.skt || null,
+    batchCount: Number(stock.batchCount || 0),
+    batches: normalizePricingBatches(stock),
+  };
+};
+
+const mapPostgresSupplierProduct = (row = {}) => ({
+  ...(row.payload && typeof row.payload === 'object' ? row.payload : {}),
+  ...row,
+  purchasePrice: toNumberValue(row.purchasePrice) || 0,
+  createdAt: fromDateValue(row.createdAt),
+  updatedAt: fromDateValue(row.updatedAt),
+});
+
+const mapPostgresSale = (sale = {}) => ({
+  id: sale.id,
+  referenceNo: sale.referenceNo,
+  type: sale.type,
+  createdAt: fromDateValue(sale.createdAt),
+  items: Array.isArray(sale.saleItems) && sale.saleItems.length
+    ? sale.saleItems.map((item) => ({
+      ...(item.payload && typeof item.payload === 'object' ? item.payload : {}),
+      id: item.id,
+      saleId: item.saleId,
+      productId: item.productId,
+      barcode: item.barcode,
+      name: item.name,
+      productName: item.name,
+      sku: item.sku,
+      quantity: Number(item.quantity || 0),
+      unitPrice: toNumberValue(item.unitPrice) || 0,
+      totalPrice: toNumberValue(item.totalPrice) || 0,
+      vatRate: toNumberValue(item.vatRate) || 0,
+    }))
+    : (Array.isArray(sale.items) ? sale.items : []),
+});
+
+const mapPostgresPriceEventRows = (rows = []) => {
+  const byProduct = new Map();
+  const counts = new Map();
+
+  for (const row of rows) {
+    const productId = row.productId || row.product_id;
+    if (!productId) continue;
+
+    const event = {
+      id: row.id,
+      productId,
+      previousSalePrice: row.previousSalePrice ?? row.previous_sale_price ?? null,
+      salePrice: row.salePrice ?? row.sale_price ?? null,
+      source: row.source || '',
+      payload: row.payload || null,
+      createdAt: row.createdAt ?? row.created_at ?? null,
+    };
+    const productRows = byProduct.get(productId) || [];
+    productRows.push(event);
+    byProduct.set(productId, productRows);
+    counts.set(productId, Number(row.priceEventsCount ?? row.price_events_count ?? 0));
+  }
+
+  return { byProduct, counts };
+};
+
+const compactDiscountSuggestion = (suggestion = {}) => ({
+  hasSuggestion: Boolean(suggestion.hasSuggestion),
+  discountRate: Number(suggestion.discountRate || 0),
+  opportunityDiscountRate: Number(suggestion.opportunityDiscountRate || 0),
+  recommendedDiscountRate: Number(suggestion.recommendedDiscountRate ?? suggestion.discountRate ?? 0),
+  newPrice: Number(suggestion.newPrice || 0),
+  reason: suggestion.reason || '',
+  expectedImpact: suggestion.expectedImpact || '',
+  reasonCodes: Array.isArray(suggestion.reasonCodes) ? suggestion.reasonCodes : [],
+  blockingReasons: Array.isArray(suggestion.blockingReasons) ? suggestion.blockingReasons : [],
+  suggestedAction: suggestion.suggestedAction || '',
+  primaryAction: suggestion.primaryAction || '',
+  primaryActionLabel: suggestion.primaryActionLabel || '',
+  isSuppressed: Boolean(suggestion.isSuppressed),
+  suppressionReason: suggestion.suppressionReason || '',
+  sourceMetrics: suggestion.sourceMetrics || {},
+  activeCampaignFlag: Boolean(suggestion.activeCampaignFlag),
+  activeCampaignConflict: suggestion.activeCampaignConflict || null,
+  replenishmentSupportFlag: Boolean(suggestion.replenishmentSupportFlag),
+  lowStockGuardrailFlag: Boolean(suggestion.lowStockGuardrailFlag),
+  marginGuardrailFlag: Boolean(suggestion.marginGuardrailFlag),
+});
+
+const buildSaleWhere = (query = {}) => {
+  const where = { type: { in: ['sale', 'return'] } };
+  const startDate = query.startDate ? normalizeDate(query.startDate, null) : null;
+  const endDate = query.endDate ? normalizeDate(query.endDate, null) : normalizeDate(new Date(), null);
+  const effectiveStartDate = startDate || (endDate ? new Date(endDate.getTime() - (SALES_LOOKBACK_DAYS - 1) * DAY_MS) : null);
+
+  if (effectiveStartDate || endDate) where.createdAt = {};
+  if (effectiveStartDate) {
+    effectiveStartDate.setHours(0, 0, 0, 0);
+    where.createdAt.gte = effectiveStartDate;
+  }
+  if (endDate) {
+    const endOfDay = new Date(endDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    where.createdAt.lte = endOfDay;
+  }
+  return where;
+};
+
+const resolveAnalysisUniverse = (query = {}) => (
+  normalizeProductUniverse(query.universe, PRODUCT_UNIVERSES.LISTED_ACTIVE)
+  || PRODUCT_UNIVERSES.LISTED_ACTIVE
+);
+
+const getAnalysisInputs = async (query = {}) => {
+  const productUniverse = resolveAnalysisUniverse(query);
+
+  if (config.dataStore !== 'postgres') {
+    const [products, categories, suppliers, stocks, sales, supplierProducts] = await Promise.all([
+      productRepo.getAll(),
+      categoryRepo.getAll(),
+      supplierRepo.getAll(),
+      stockRepo.getAll(),
+      salesRepo.getAll(),
+      supplierProductRepo.getAll(),
+    ]);
+    return {
+      products: products.filter((product) => matchesProductUniverse(product, productUniverse)),
+      categories,
+      suppliers,
+      stocks,
+      sales,
+      supplierProducts,
+      productUniverse,
+    };
+  }
+
+  const tenantId = getActiveTenantId();
+    const prisma = await getPrisma();
+    const [productsRaw, categories, suppliers, salesRaw, priceEventsRaw] = await withPostgresQueryLogging('GET /api/reports/pricing-analysis', () => Promise.all([
+    prisma.product.findMany({
+      where: buildProductUniverseWhere(productUniverse),
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        sku: true,
+        barcode: true,
+        name: true,
+        brand: true,
+        categoryId: true,
+        supplierId: true,
+        purchasePrice: true,
+        salePrice: true,
+        criticalStock: true,
+        maxStock: true,
+        maxShelfStock: true,
+        isActive: true,
+        isListed: true,
+        payload: true,
+        createdAt: true,
+        updatedAt: true,
+        priceUpdatedAt: true,
+        lastPriceChangeDate: true,
+        lastPriceChangeAt: true,
+        lastPriceChangeSource: true,
+        stock: {
+          select: {
+            productId: true,
+            warehouseQuantity: true,
+            shelfQuantity: true,
+            onHand: true,
+            available: true,
+            reserved: true,
+            nearestExpiry: true,
+            fefoDefaultBatchNo: true,
+            fefoDefaultExpiry: true,
+            batchCount: true,
+            batches: {
+              where: { totalQuantity: { gt: 0 } },
+              orderBy: [{ skt: 'asc' }, { batchNo: 'asc' }],
+              take: 1,
+              select: {
+                batchNo: true,
+                skt: true,
+                warehouseQuantity: true,
+                shelfQuantity: true,
+                totalQuantity: true,
+              },
+            },
+          },
+        },
+        supplierProducts: {
+          where: { isActive: { not: false } },
+          select: {
+            id: true,
+            productId: true,
+            supplierId: true,
+            purchasePrice: true,
+            priceUnit: true,
+            minOrderUnit: true,
+            defaultOrderUnit: true,
+            minimumOrderQty: true,
+            minOrderQty: true,
+            unitsPerCase: true,
+            casesPerPallet: true,
+            leadTimeDays: true,
+            isDefault: true,
+            isActive: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+      },
+    }),
+    prisma.category.findMany({ select: { id: true, name: true } }),
+    prisma.supplier.findMany({ select: { id: true, name: true } }),
+    prisma.sale.findMany({
+      where: buildSaleWhere(query),
+      select: {
+        id: true,
+        referenceNo: true,
+        type: true,
+        createdAt: true,
+        saleItems: {
+          select: {
+            id: true,
+            saleId: true,
+            productId: true,
+            barcode: true,
+            name: true,
+            sku: true,
+            quantity: true,
+            unitPrice: true,
+            totalPrice: true,
+            vatRate: true,
+            payload: true,
+          },
+        },
+      },
+    }),
+    prisma.$queryRaw`
+      WITH ranked_events AS (
+        SELECT
+          id,
+          product_id AS "productId",
+          previous_sale_price AS "previousSalePrice",
+          sale_price AS "salePrice",
+          source,
+          payload,
+          created_at AS "createdAt",
+          COUNT(*) OVER (PARTITION BY product_id) AS "priceEventsCount",
+          ROW_NUMBER() OVER (
+            PARTITION BY product_id
+            ORDER BY created_at DESC NULLS LAST, id DESC
+          ) AS rn
+        FROM product_price_events
+        WHERE tenant_id = ${tenantId}
+      )
+      SELECT
+        id,
+        "productId",
+        "previousSalePrice",
+        "salePrice",
+        source,
+        payload,
+        "createdAt",
+        "priceEventsCount"
+      FROM ranked_events
+      WHERE rn <= 2
+      ORDER BY "productId", "createdAt" ASC NULLS LAST, id ASC
+    `,
+  ]));
+
+  const { byProduct: priceEventsByProduct, counts: priceEventCounts } = mapPostgresPriceEventRows(priceEventsRaw);
+  const products = productsRaw.map((product) => mapPostgresProduct({
+    ...product,
+    priceEvents: priceEventsByProduct.get(product.id) || [],
+    priceEventsCount: priceEventCounts.get(product.id) || 0,
+  }));
+  const stocks = productsRaw.map((product) => mapPostgresStock(product.stock, product.id)).filter(Boolean);
+  const supplierProducts = productsRaw.flatMap((product) => (
+    Array.isArray(product.supplierProducts) ? product.supplierProducts.map(mapPostgresSupplierProduct) : []
+  ));
+  const sales = salesRaw.map(mapPostgresSale);
+  return { products, categories, suppliers, stocks, sales, supplierProducts, productUniverse };
+};
+
+const buildLast14DailySalesMap = (sales = [], analysisDate) => {
+  const end = new Date(`${analysisDate}T23:59:59.999Z`);
+  const start = new Date(end.getTime() - 13 * DAY_MS);
+  start.setUTCHours(0, 0, 0, 0);
+  const dayKeys = [];
+
+  for (let index = 0; index < 14; index += 1) {
+    const day = new Date(start.getTime() + index * DAY_MS);
+    dayKeys.push(toDateOnly(day));
+  }
+
+  const productDailyTotals = new Map();
+  for (const record of sales) {
+    const createdAt = normalizeDate(record.createdAt, null);
+    if (!createdAt || createdAt < start || createdAt > end) continue;
+    const sign = record.type === 'return' ? -1 : 1;
+    const dayKey = toDateOnly(createdAt);
+    for (const item of Array.isArray(record.items) ? record.items : []) {
+      const productId = item?.productId;
+      if (!productId || productId === '__bag__') continue;
+      const qty = Number(item.quantity || 0) * sign;
+      if (!Number.isFinite(qty) || qty === 0) continue;
+
+      const totals = productDailyTotals.get(productId) || new Map(dayKeys.map((key) => [key, 0]));
+      totals.set(dayKey, Math.max(0, (totals.get(dayKey) || 0) + qty));
+      productDailyTotals.set(productId, totals);
+    }
+  }
+
+  const result = new Map();
+  for (const [productId, totals] of productDailyTotals.entries()) {
+    result.set(productId, dayKeys.map((dayKey) => Number((totals.get(dayKey) || 0).toFixed(2))));
+  }
+
+  return result;
+};
+
+const matchesSearch = (row, searchTerm) => {
+  if (!searchTerm) return true;
+  const hay = [row.productName, row.sku, row.categoryName, row.supplierName, row.actionSuggestion]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return hay.includes(searchTerm.toLowerCase());
+};
+
+const SORTERS = {
+  risk_desc: (a, b) => Number(b.riskScore || 0) - Number(a.riskScore || 0),
+  risk_asc: (a, b) => Number(a.riskScore || 0) - Number(b.riskScore || 0),
+  product_asc: (a, b) => String(a.productName || '').localeCompare(String(b.productName || ''), 'tr') || String(a.productId || '').localeCompare(String(b.productId || '')),
+  product_desc: (a, b) => String(b.productName || '').localeCompare(String(a.productName || ''), 'tr') || String(b.productId || '').localeCompare(String(a.productId || '')),
+  stock_asc: (a, b) => Number(a.totalStock || 0) - Number(b.totalStock || 0),
+  stock_desc: (a, b) => Number(b.totalStock || 0) - Number(a.totalStock || 0),
+  price_asc: (a, b) => Number(a.currentPrice || 0) - Number(b.currentPrice || 0),
+  price_desc: (a, b) => Number(b.currentPrice || 0) - Number(a.currentPrice || 0),
+  expiry_asc: (a, b) => Number(a.daysToExpiry ?? 999999) - Number(b.daysToExpiry ?? 999999),
+};
+
+const sortRows = (rows, sortKey = 'risk_desc') => {
+  const key = resolveWhitelistedSort(sortKey, Object.keys(SORTERS), 'risk_desc', { context: 'GET /api/reports/pricing-analysis/rows' });
+  return { key, rows: [...rows].sort(SORTERS[key]) };
+};
+
+const paginateRows = (rows, query = {}) => {
+  const pagination = parsePagePagination(query, { defaultLimit: 20, maxLimit: 200 });
+  const pageRows = rows.slice(pagination.skip, pagination.skip + pagination.limit);
+  const total = rows.length;
+  return {
+    pageRows,
+    pagination: {
+      mode: 'offset',
+      page: pagination.page,
+      limit: pagination.limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
+      hasNextPage: pagination.skip + pageRows.length < total,
+      nextCursor: null,
+      cursorVersion: null,
+    },
+  };
+};
+
+const compactAnalysisRow = (row = {}) => ({
+  productId: row.productId,
+  id: row.productId,
+  sku: row.sku,
+  productName: row.productName,
+  brand: row.brand || row.brandName || '',
+  categoryId: row.categoryId,
+  categoryName: row.categoryName,
+  supplierId: row.supplierId,
+  supplierName: row.supplierName,
+  currentPrice: row.currentPrice,
+  salePrice: row.salePrice,
+  originalPrice: row.originalPrice,
+  discountedPrice: row.discountedPrice,
+  hasActiveDiscount: row.hasActiveDiscount,
+  activeCampaign: row.activeCampaign,
+  activeCampaigns: row.activeCampaigns,
+  campaignInfo: row.campaignInfo,
+  campaignBadge: row.campaignBadge,
+  campaignIds: row.campaignIds,
+  campaignCount: row.campaignCount,
+  activeTemporaryPriceAction: row.activeTemporaryPriceAction || null,
+  hasActiveTemporaryPriceAction: Boolean(row.hasActiveTemporaryPriceAction),
+  purchasePrice: row.purchasePrice,
+  supplierPrice: row.supplierPrice,
+  supplierPriceUnit: row.supplierPriceUnit,
+  supplierLastPriceUpdate: row.supplierLastPriceUpdate,
+  priceHistoryCount: row.priceHistoryCount,
+  lastPrice: row.lastPrice,
+  previousPrice: row.previousPrice,
+  priceChangePercent: row.priceChangePercent,
+  lastPriceChangeAt: row.lastPriceChangeAt,
+  lastPriceChangeDate: row.lastPriceChangeDate,
+  priceTrend: row.priceTrend,
+  priceHistorySource: row.priceHistorySource,
+  criticalStock: row.criticalStock,
+  warehouseStock: row.warehouseStock,
+  shelfStock: row.shelfStock,
+  totalStock: row.totalStock,
+  sold7: row.sold7,
+  sold30: row.sold30,
+  avgDailySales: row.avgDailySales,
+  salesTrendLast14Days: row.salesTrendLast14Days,
+  salesTrend: row.salesTrend,
+  trendDirection: row.trendDirection,
+  trendRatio: row.trendRatio,
+  salesSpeed: row.salesSpeed,
+  salesSpeedLabel: row.salesSpeedLabel,
+  expiryDate: row.expiryDate,
+  expirySource: row.expirySource,
+  expiryBatchNo: row.expiryBatchNo,
+  daysToExpiry: row.daysToExpiry,
+  sktStatus: row.sktStatus,
+  daysToStockout: row.daysToStockout,
+  estimatedStockoutDate: row.estimatedStockoutDate,
+  leadTimeDays: row.leadTimeDays,
+  discountSuggestion: compactDiscountSuggestion(row.discountSuggestion),
+  orderSuggestion: row.orderSuggestion,
+  primaryAction: row.primaryAction || row.discountSuggestion?.primaryAction || 'hold_price',
+  sourceRecommendationKey: row.sourceRecommendationKey || buildPricingDecisionKey(row),
+  primaryActionLabel: row.primaryActionLabel || row.discountSuggestion?.primaryActionLabel || '',
+  actionSuggestion: row.actionSuggestion,
+  reasonCodes: Array.isArray(row.reasonCodes) ? row.reasonCodes : [],
+  blockingReasons: Array.isArray(row.blockingReasons) ? row.blockingReasons : [],
+  suggestedAction: row.suggestedAction || row.actionSuggestion,
+  recommendedDiscountRate: Number(row.recommendedDiscountRate || 0),
+  isSuppressed: Boolean(row.isSuppressed),
+  suppressionReason: row.suppressionReason || '',
+  sourceMetrics: row.sourceMetrics || {},
+  activeCampaignFlag: Boolean(row.activeCampaignFlag || row.hasActiveDiscount),
+  activeCampaignConflict: row.activeCampaignConflict || null,
+  replenishmentSupportFlag: Boolean(row.replenishmentSupportFlag),
+  lowStockGuardrailFlag: Boolean(row.lowStockGuardrailFlag),
+  marginGuardrailFlag: Boolean(row.marginGuardrailFlag),
+  stockGuardrail: row.stockGuardrail || null,
+  procurementGuardrail: row.procurementGuardrail || null,
+  marginGuardrail: row.marginGuardrail || null,
+  riskScore: row.riskScore,
+  riskLevel: row.riskLevel,
+  riskLabel: row.riskLabel,
+});
+
+const compactPricingListRow = (row = {}) => {
+  const compact = compactAnalysisRow(row);
+  const cost = Number(compact.purchasePrice ?? compact.supplierPrice ?? 0);
+  const currentPrice = Number(compact.currentPrice ?? compact.salePrice ?? 0);
+  const margin = currentPrice > 0 ? Number((((currentPrice - cost) / currentPrice) * 100).toFixed(2)) : 0;
+
+  return {
+    productId: compact.productId,
+    id: compact.productId,
+    sku: compact.sku,
+    name: compact.productName,
+    productName: compact.productName,
+    brand: compact.brand,
+    categoryId: compact.categoryId,
+    categoryName: compact.categoryName,
+    tag: compact.categoryName,
+    supplierId: compact.supplierId,
+    supplierName: compact.supplierName,
+    currentPrice,
+    salePrice: compact.salePrice,
+    cost,
+    purchasePrice: compact.purchasePrice,
+    margin,
+    currentMarginPercent: margin,
+    criticalStock: compact.criticalStock,
+    warehouseStock: compact.warehouseStock,
+    shelfStock: compact.shelfStock,
+    totalStock: compact.totalStock,
+    salesSpeed: compact.salesSpeed,
+    salesSpeedLabel: compact.salesSpeedLabel,
+    daysToExpiry: compact.daysToExpiry,
+    sktStatus: compact.sktStatus,
+    daysToStockout: compact.daysToStockout,
+    discountSuggestion: compact.discountSuggestion,
+    orderSuggestion: compact.orderSuggestion,
+    primaryAction: compact.primaryAction,
+    sourceRecommendationKey: compact.sourceRecommendationKey,
+    primaryActionLabel: compact.primaryActionLabel,
+    recommendationSummary: compact.actionSuggestion,
+    actionSuggestion: compact.actionSuggestion,
+    reasonCodes: compact.reasonCodes,
+    blockingReasons: compact.blockingReasons,
+    suggestedAction: compact.suggestedAction,
+    recommendedDiscountRate: compact.recommendedDiscountRate,
+    isSuppressed: compact.isSuppressed,
+    suppressionReason: compact.suppressionReason,
+    sourceMetrics: compact.sourceMetrics,
+    activeCampaignFlag: compact.activeCampaignFlag,
+    activeCampaignConflict: compact.activeCampaignConflict,
+    replenishmentSupportFlag: compact.replenishmentSupportFlag,
+    lowStockGuardrailFlag: compact.lowStockGuardrailFlag,
+    marginGuardrailFlag: compact.marginGuardrailFlag,
+    stockGuardrail: compact.stockGuardrail,
+    procurementGuardrail: compact.procurementGuardrail,
+    marginGuardrail: compact.marginGuardrail,
+    riskScore: compact.riskScore,
+    riskLevel: compact.riskLevel,
+    riskLabel: compact.riskLabel,
+  };
+};
+
+const trendLabel = {
+  up: 'Yukseliyor',
+  down: 'Dusuyor',
+  flat: 'Dengeli',
+};
+
+const riskLabel = {
+  low: 'Düşük',
+  medium: 'Orta',
+  high: 'Yüksek',
+  critical: 'Kritik',
+};
+
+const normalizeStorageForPricing = (product = {}, category = {}) => {
+  const raw = String(product.requiredStorageType || product.storageType || category?.mainStorageType || '').toLocaleLowerCase('tr-TR');
+  if (category?.requiresFreezer || raw.includes('freezer') || raw.includes('frozen') || raw.includes('donuk') || raw.includes('dondur')) return 'frozen';
+  if (category?.requiresColdChain || raw.includes('cold') || raw.includes('soğuk') || raw.includes('soguk')) return 'cold';
+  return 'ambient';
+};
+
+const getUnitMultiplierForPricing = (unit = 'adet', product = {}, supplierProduct = {}) => {
+  const normalized = String(unit || 'adet').toLocaleLowerCase('tr-TR');
+  const unitsPerCase = Math.max(1, Number(supplierProduct.unitsPerCase || product.unitsPerCase || 1));
+  const casesPerPallet = Math.max(1, Number(supplierProduct.casesPerPallet || product.casesPerPallet || 1));
+  const unitsPerPallet = Math.max(1, Number(product.unitsPerPallet || unitsPerCase * casesPerPallet));
+  if (normalized.includes('koli') || normalized.includes('kasa') || normalized.includes('çuval') || normalized.includes('cuval')) return unitsPerCase;
+  if (normalized.includes('palet')) return unitsPerPallet;
+  return 1;
+};
+
+const resolvePurchaseCostPerBaseUnit = (product = {}, supplierProduct = null) => {
+  const source = supplierProduct || product;
+  const purchasePrice = Number(source?.purchasePrice || product.purchasePrice || 0);
+  const multiplier = getUnitMultiplierForPricing(source?.priceUnit || 'adet', product, supplierProduct || {});
+  return multiplier > 0 ? Number((purchasePrice / multiplier).toFixed(4)) : purchasePrice;
+};
+
+const CONTROLLED_PRICING_POLICY = {
+  targetMarginPct: 22,
+  commissionRatePct: 0,
+  defaultVatRatePct: 20,
+  operationalCostRatesPct: { ambient: 1.6, cold: 2.4, frozen: 3.1 },
+  handlingCostPerCase: { ambient: 12, cold: 16, frozen: 20 },
+  spoilageRiskRatesPct: { ambient: 0.4, cold: 1.2, frozen: 1.8 },
+  expiryRiskMultipliers: [
+    { maxDays: 7, multiplier: 3 },
+    { maxDays: 14, multiplier: 2.25 },
+    { maxDays: 30, multiplier: 1.5 },
+    { maxDays: 60, multiplier: 1.15 },
+  ],
+  allowedPriceCents: [0, 25, 50, 75, 90, 95, 99],
+};
+
+const clampPct = (value, fallback = CONTROLLED_PRICING_POLICY.targetMarginPct) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(1, Math.min(70, numeric));
+};
+
+const resolvePolicyNumber = (settings = {}, path = [], fallback) => {
+  let cursor = settings.priceRecommendationPolicy && typeof settings.priceRecommendationPolicy === 'object'
+    ? settings.priceRecommendationPolicy
+    : {};
+  for (const segment of path) {
+    cursor = cursor?.[segment];
+  }
+  const numeric = Number(cursor);
+  return Number.isFinite(numeric) ? numeric : fallback;
+};
+
+const resolveVatRate = (product = {}, category = {}, settings = {}) => {
+  const direct = Number(product.vatRate ?? product.taxRate ?? category?.vatRate ?? category?.taxRate);
+  if (Number.isFinite(direct) && direct >= 0) {
+    return { value: direct, source: 'product_or_category_tax_rate' };
+  }
+  const policyVat = resolvePolicyNumber(settings, ['defaultVatRatePct'], CONTROLLED_PRICING_POLICY.defaultVatRatePct);
+  return { value: policyVat, source: settings.priceRecommendationPolicy?.defaultVatRatePct !== undefined ? 'settings_price_recommendation_policy' : 'controlled_default_policy' };
+};
+
+const resolvePricingPolicy = ({ product = {}, category = {}, storageType = 'ambient', targetMarginPct, settings = {} }) => {
+  const policy = settings.priceRecommendationPolicy && typeof settings.priceRecommendationPolicy === 'object'
+    ? settings.priceRecommendationPolicy
+    : {};
+  const storageRates = policy.operationalCostRatesPct || {};
+  const handlingCosts = policy.handlingCostPerCase || {};
+  const riskRates = policy.spoilageRiskRatesPct || {};
+  const vatRate = resolveVatRate(product, category, settings);
+  return {
+    targetMarginPct: clampPct(targetMarginPct, resolvePolicyNumber(settings, ['targetMarginPct'], CONTROLLED_PRICING_POLICY.targetMarginPct)),
+    vatRatePct: vatRate.value,
+    vatRateSource: vatRate.source,
+    commissionRatePct: resolvePolicyNumber(settings, ['commissionRatePct'], CONTROLLED_PRICING_POLICY.commissionRatePct),
+    operationalCostRatePct: Number(storageRates[storageType] ?? CONTROLLED_PRICING_POLICY.operationalCostRatesPct[storageType] ?? CONTROLLED_PRICING_POLICY.operationalCostRatesPct.ambient),
+    handlingCostPerCase: Number(handlingCosts[storageType] ?? CONTROLLED_PRICING_POLICY.handlingCostPerCase[storageType] ?? CONTROLLED_PRICING_POLICY.handlingCostPerCase.ambient),
+    spoilageRiskRatePct: Number(riskRates[storageType] ?? CONTROLLED_PRICING_POLICY.spoilageRiskRatesPct[storageType] ?? CONTROLLED_PRICING_POLICY.spoilageRiskRatesPct.ambient),
+    policySource: policy && Object.keys(policy).length ? 'settings.priceRecommendationPolicy' : 'controlled_default_policy',
+  };
+};
+
+const roundShelfPrice = (value, allowedCents = CONTROLLED_PRICING_POLICY.allowedPriceCents) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  const base = Math.floor(numeric);
+  const cents = Math.ceil((numeric - base) * 100);
+  const safeAllowed = Array.isArray(allowedCents) && allowedCents.length ? allowedCents : CONTROLLED_PRICING_POLICY.allowedPriceCents;
+  const nextCent = safeAllowed.find((candidate) => candidate >= cents);
+  if (nextCent !== undefined) return Number((base + (nextCent / 100)).toFixed(2));
+  return Number((base + 1 + (safeAllowed[0] / 100)).toFixed(2));
+};
+
+const normalizePricingBatches = (stock = {}) => {
+  const rows = Array.isArray(stock?.batches) ? stock.batches : [];
+  return rows
+    .map((batch) => ({
+      batchNo: String(batch?.batchNo || '').trim(),
+      skt: String(batch?.skt || '').trim(),
+      totalQuantity: Number(batch?.totalQuantity ?? (Number(batch?.warehouseQuantity || 0) + Number(batch?.shelfQuantity || 0)) ?? 0),
+    }))
+    .filter((batch) => batch.totalQuantity > 0);
+};
+
+const resolveExpiryRisk = ({ stock = {}, storageType = 'ambient', baseRiskRatePct = 0 }) => {
+  const batches = normalizePricingBatches(stock);
+  const nearest = batches
+    .filter((batch) => batch.skt && Number.isFinite(new Date(batch.skt).getTime()))
+    .sort((left, right) => String(left.skt).localeCompare(String(right.skt)))[0] || null;
+  const nearestExpiry = nearest?.skt || null;
+  const daysToExpiry = nearestExpiry ? diffDays(new Date(nearestExpiry), new Date()) : null;
+  const multiplierRow = Number.isFinite(daysToExpiry)
+    ? CONTROLLED_PRICING_POLICY.expiryRiskMultipliers.find((row) => daysToExpiry <= row.maxDays)
+    : null;
+  const storageFloor = storageType === 'frozen' ? 1.15 : storageType === 'cold' ? 1.1 : 1;
+  const multiplier = Math.max(storageFloor, Number(multiplierRow?.multiplier || 1));
+  const resolvedRatePct = Number((Number(baseRiskRatePct || 0) * multiplier).toFixed(4));
+  return {
+    nearestExpiry,
+    fefoBatchNo: nearest?.batchNo || null,
+    daysToExpiry,
+    batchCount: batches.length || Number(stock?.batchCount || 0),
+    source: batches.length ? 'stock_batches_fefo' : 'storage_type_policy',
+    baseRiskRatePct,
+    expiryMultiplier: multiplier,
+    resolvedRiskRatePct: resolvedRatePct,
+  };
+};
+
+const buildCostComponent = ({ key, label, amount, source, details = '' }) => ({
+  key,
+  label,
+  amount: Number(Number(amount || 0).toFixed(4)),
+  source,
+  details,
+});
+
+const getPricingProductContext = async (productId) => {
+  const id = String(productId || '').trim();
+  if (!id) throw new AppError(400, 'productId zorunludur');
+
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    const product = await prisma.product.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        sku: true,
+        barcode: true,
+        name: true,
+        categoryId: true,
+        purchasePrice: true,
+        salePrice: true,
+        unitsPerCase: true,
+        casesPerPallet: true,
+        unitsPerPallet: true,
+        requiredStorageType: true,
+        isListed: true,
+        isActive: true,
+        payload: true,
+        supplier: { select: { id: true, name: true } },
+        category: { select: { id: true, name: true, mainStorageType: true, requiresColdChain: true, requiresFreezer: true } },
+        stock: {
+          select: {
+            warehouseQuantity: true,
+            shelfQuantity: true,
+            batchCount: true,
+            batches: {
+              select: {
+                batchNo: true,
+                skt: true,
+                warehouseQuantity: true,
+                shelfQuantity: true,
+                totalQuantity: true,
+              },
+            },
+          },
+        },
+        priceEvents: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: { id: true, productId: true, previousSalePrice: true, salePrice: true, source: true, payload: true, createdAt: true },
+        },
+        supplierProducts: {
+          where: { isActive: { not: false } },
+          select: {
+            id: true,
+            productId: true,
+            supplierId: true,
+            purchasePrice: true,
+            priceUnit: true,
+            minOrderUnit: true,
+            defaultOrderUnit: true,
+            minimumOrderQty: true,
+            minOrderQty: true,
+            unitsPerCase: true,
+            casesPerPallet: true,
+            leadTimeDays: true,
+            isDefault: true,
+            supplier: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+    if (!product) throw createNotFoundError('Ürün bulunamadı');
+    return {
+      product: mapPostgresProduct(product),
+      category: product.category || null,
+      stock: product.stock ? {
+        productId: product.id,
+        warehouseQuantity: Number(product.stock.warehouseQuantity || 0),
+        shelfQuantity: Number(product.stock.shelfQuantity || 0),
+        nearestExpiry: resolveStockBatchesFefo(product.stock)?.skt || null,
+        fefoDefaultBatchNo: resolveStockBatchesFefo(product.stock)?.batchNo || null,
+        fefoDefaultExpiry: resolveStockBatchesFefo(product.stock)?.skt || null,
+        batchCount: Number(product.stock.batchCount || 0),
+        batches: Array.isArray(product.stock.batches) ? product.stock.batches.map((batch) => ({
+          batchNo: batch.batchNo || '',
+          skt: batch.skt || '',
+          warehouseQuantity: Number(batch.warehouseQuantity || 0),
+          shelfQuantity: Number(batch.shelfQuantity || 0),
+          totalQuantity: Number(batch.totalQuantity || 0),
+        })) : [],
+      } : null,
+      supplierProducts: product.supplierProducts.map(mapPostgresSupplierProduct),
+      suppliers: [
+        product.supplier,
+        ...product.supplierProducts.map((item) => item.supplier),
+      ].filter(Boolean),
+    };
+  }
+
+  const [product, categories, supplierProducts, suppliers, stock] = await Promise.all([
+    productRepo.findById(id),
+    categoryRepo.getAll(),
+    supplierProductRepo.getAll(),
+    supplierRepo.getAll(),
+    stockRepo.findByProductId(id),
+  ]);
+  if (!product) throw createNotFoundError('Ürün bulunamadı');
+  return {
+    product,
+    category: categories.find((item) => item.id === product.categoryId) || null,
+    stock,
+    supplierProducts: supplierProducts.filter((item) => item.productId === id && item.isActive !== false),
+    suppliers,
+  };
+};
+
+const buildSellPriceCalculation = async ({ productId, targetMarginPct, supplierProductId } = {}) => {
+  const { product, category, stock, supplierProducts, suppliers } = await getPricingProductContext(productId);
+  if (product.isListed === false || product.isActive === false) {
+    throw new AppError(400, 'Ne Kadara Satmalıyım hesabı yalnızca listed aktif ürünler için yapılabilir');
+  }
+
+  const selectedSupplierProductId = String(supplierProductId || '').trim();
+  const selectedSupplierOption = selectedSupplierProductId
+    ? supplierProducts.find((item) => String(item.id) === selectedSupplierProductId)
+    : null;
+  if (selectedSupplierProductId && !selectedSupplierOption) {
+    throw new AppError(404, 'Seçili tedarikçi-ürün eşleşmesi bulunamadı');
+  }
+  const supplierOption = selectedSupplierOption || getBestSupplierOption(supplierProducts);
+  const supplier = suppliers.find((item) => item.id === (supplierOption?.supplierId || product.supplierId)) || null;
+  const unitsPerCase = Math.max(1, Number(supplierOption?.unitsPerCase || product.unitsPerCase || 1));
+  const procurementCaseQty = Math.max(1, Number(
+    supplierOption?.minimumOrderQty
+    || supplierOption?.minOrderQty
+    || product.minimumOrderCaseQty
+    || 1
+  ));
+  const purchaseCost = resolvePurchaseCostPerBaseUnit(product, supplierOption);
+  if (!Number.isFinite(purchaseCost) || purchaseCost <= 0) {
+    throw new AppError(400, 'Bu ürün için geçerli alış fiyatı bulunamadı');
+  }
+
+  const storageType = normalizeStorageForPricing(product, category);
+  const cargoTypeCode = storageType === 'frozen' ? 'frozen_chain' : storageType === 'cold' ? 'cold_chain' : 'standard_intercity';
+  const settings = await settingsRepo.getSettings();
+  const normalizedTariffs = logisticsTariffService.normalizeTariffs(settings.logisticsTariffs || []);
+  let logisticsQuote = null;
+  let logisticsSource = 'settings.logisticsTariffs';
+  try {
+    logisticsQuote = logisticsTariffService.calculateQuote({
+      rows: normalizedTariffs,
+      cargoTypeCode,
+      caseQty: procurementCaseQty,
+      storageType,
+      distanceType: 'intercity',
+    });
+  } catch (error) {
+    const compatible = logisticsTariffService.filterTariffsForSelection(normalizedTariffs, { storageType, distanceType: 'intercity' })[0];
+    if (!compatible) throw error;
+    logisticsQuote = logisticsTariffService.calculateQuote({
+      rows: normalizedTariffs,
+      cargoTypeCode: compatible.cargoTypeCode,
+      caseQty: procurementCaseQty,
+      storageType,
+      distanceType: compatible.distanceType,
+      isInternalTransfer: compatible.isInternalTransfer === true,
+    });
+    logisticsSource = 'settings.logisticsTariffs.compatible_fallback';
+  }
+  const logisticsUnits = Math.max(1, procurementCaseQty * unitsPerCase);
+  const logisticsCostPerUnit = Number((Number(logisticsQuote.totalPriceTl || 0) / logisticsUnits).toFixed(4));
+  const policy = resolvePricingPolicy({ product, category, storageType, targetMarginPct, settings });
+  const operationalRateCost = purchaseCost * (policy.operationalCostRatePct / 100);
+  const handlingCost = Number((policy.handlingCostPerCase / unitsPerCase).toFixed(4));
+  const operationalCost = Number((operationalRateCost + handlingCost).toFixed(4));
+  const expiryRisk = resolveExpiryRisk({ stock, storageType, baseRiskRatePct: policy.spoilageRiskRatePct });
+  const spoilageRiskCost = Number((purchaseCost * (expiryRisk.resolvedRiskRatePct / 100)).toFixed(4));
+  const totalEffectiveUnitCost = Number((purchaseCost + logisticsCostPerUnit + operationalCost + spoilageRiskCost).toFixed(4));
+  const vatRate = policy.vatRatePct / 100;
+  const commissionRate = policy.commissionRatePct / 100;
+  const targetMarginRate = policy.targetMarginPct / 100;
+  const denominator = (1 / (1 + vatRate)) - commissionRate - targetMarginRate;
+  if (denominator <= 0.05) throw new AppError(400, 'Hedef marj ve maliyet varsayımları uygulanabilir fiyat üretmiyor');
+  const recommendedNetSalePrice = totalEffectiveUnitCost / (1 - targetMarginRate);
+  const rawSuggestedPrice = totalEffectiveUnitCost / denominator;
+  const allowedPriceCents = Array.isArray(settings.priceRecommendationPolicy?.allowedPriceCents)
+    ? settings.priceRecommendationPolicy.allowedPriceCents.map(Number).filter((item) => Number.isFinite(item) && item >= 0 && item <= 99).sort((a, b) => a - b)
+    : CONTROLLED_PRICING_POLICY.allowedPriceCents;
+  const suggestedSalePrice = roundShelfPrice(rawSuggestedPrice, allowedPriceCents);
+  const netRevenue = Number((suggestedSalePrice / (1 + vatRate)).toFixed(4));
+  const commissionCost = Number((suggestedSalePrice * commissionRate).toFixed(4));
+  const expectedProfit = Number((netRevenue - commissionCost - totalEffectiveUnitCost).toFixed(4));
+  const expectedMarginPct = suggestedSalePrice > 0 ? Number(((expectedProfit / suggestedSalePrice) * 100).toFixed(2)) : 0;
+  const currentSalePrice = Number(product.salePrice || 0);
+  const currentNetRevenue = Number((currentSalePrice / (1 + vatRate)).toFixed(4));
+  const currentCommissionCost = Number((currentSalePrice * commissionRate).toFixed(4));
+  const currentProfit = Number((currentNetRevenue - currentCommissionCost - totalEffectiveUnitCost).toFixed(4));
+  const currentMarginPct = currentSalePrice > 0 ? Number(((currentProfit / currentSalePrice) * 100).toFixed(2)) : 0;
+  const activeCampaigns = await listActiveCampaignDefinitions({ settings });
+  const campaignProjectedProduct = applyCampaignPricingToProduct(product, activeCampaigns, { includeGeneralCampaigns: true });
+  const campaignInfo = campaignProjectedProduct.activeCampaign ? {
+    isActive: true,
+    name: campaignProjectedProduct.activeCampaign.name,
+    type: campaignProjectedProduct.activeCampaign.type,
+    scope: campaignProjectedProduct.activeCampaign.scope,
+    campaignPrice: Number(campaignProjectedProduct.campaignPrice || campaignProjectedProduct.discountedPrice || 0),
+    discountAmount: Number(campaignProjectedProduct.activeCampaign.discountAmount || 0),
+    effectiveDiscountRate: Number(campaignProjectedProduct.activeCampaign.effectiveDiscountRate || 0),
+    startsAt: campaignProjectedProduct.activeCampaign.startsAt || null,
+    endsAt: campaignProjectedProduct.activeCampaign.endsAt || null,
+  } : { isActive: false };
+  const priceHistoryMetrics = buildPriceHistoryMetrics(product);
+  const difference = Number((suggestedSalePrice - currentSalePrice).toFixed(2));
+  const componentRows = [
+    buildCostComponent({
+      key: 'purchase',
+      label: 'Ürün alış maliyeti',
+      amount: purchaseCost,
+      source: supplierOption ? 'supplier_product_mapping' : 'product_master_fallback',
+      details: supplierOption ? `${supplier?.name || 'Tedarikçi'} / ${supplierOption.priceUnit || 'adet'}` : 'Aktif tedarikçi eşleşmesi olmadığı için ürün master alış fiyatı kullanıldı.',
+    }),
+    buildCostComponent({
+      key: 'logistics',
+      label: 'Taşıma payı',
+      amount: logisticsCostPerUnit,
+      source: logisticsSource,
+      details: `${logisticsQuote.cargoTypeName} / ${procurementCaseQty} koli / ${logisticsUnits} birim`,
+    }),
+    buildCostComponent({
+      key: 'operational',
+      label: 'Mağaza operasyon payı',
+      amount: operationalCost,
+      source: policy.policySource,
+      details: `%${policy.operationalCostRatePct} operasyon + ${policy.handlingCostPerCase} TL/koli elleçleme`,
+    }),
+    buildCostComponent({
+      key: 'spoilage',
+      label: 'Fire ve SKT risk payı',
+      amount: spoilageRiskCost,
+      source: expiryRisk.source,
+      details: `%${expiryRisk.resolvedRiskRatePct} risk${expiryRisk.nearestExpiry ? `, en yakın SKT ${expiryRisk.nearestExpiry}` : ''}`,
+    }),
+  ];
+
+  return {
+    product: {
+      id: product.id,
+      productId: product.id,
+      sku: product.sku,
+      barcode: product.barcode || '',
+      name: product.name,
+      productName: product.name,
+      categoryName: category?.name || '-',
+      storageType,
+      unit: product.unit || 'adet',
+      casePack: unitsPerCase,
+    },
+    supplier: supplierOption ? {
+      supplierProductId: supplierOption.id,
+      supplierId: supplierOption.supplierId,
+      supplierName: supplier?.name || '-',
+      purchasePrice: Number(supplierOption.purchasePrice || product.purchasePrice || 0),
+      priceUnit: supplierOption.priceUnit || 'adet',
+      defaultOrderUnit: supplierOption.defaultOrderUnit || supplierOption.minOrderUnit || supplierOption.priceUnit || 'adet',
+      minimumOrderQty: Number(supplierOption.minimumOrderQty || supplierOption.minOrderQty || 1),
+      leadTimeDays: Number(supplierOption.leadTimeDays || 3),
+      purchaseCostSource: 'supplier_product_mapping',
+    } : null,
+    costs: {
+      purchaseCostPerUnit: purchaseCost,
+      purchasePrice: purchaseCost,
+      logisticsCostPerUnit,
+      logisticsCaseCost: Number(logisticsQuote.totalPriceTl || 0),
+      procurementCaseQty,
+      unitsPerCase,
+      operationalCostPerUnit: operationalCost,
+      handlingCostPerUnit: handlingCost,
+      spoilageRiskCostPerUnit: spoilageRiskCost,
+      otherPerUnitCosts: 0,
+      totalEstimatedCost: totalEffectiveUnitCost,
+      totalEffectiveUnitCost,
+      vatRatePct: policy.vatRatePct,
+      vatRateSource: policy.vatRateSource,
+      commissionRatePct: policy.commissionRatePct,
+      componentRows,
+    },
+    current: {
+      salePrice: currentSalePrice,
+      expectedProfit: currentProfit,
+      expectedMarginPct: currentMarginPct,
+      lastPriceChangeAt: priceHistoryMetrics.lastPriceChangeAt || null,
+      lastPriceChangeDate: priceHistoryMetrics.lastPriceChangeDate || null,
+    },
+    recommendation: {
+      targetMarginPct: policy.targetMarginPct,
+      rawSuggestedSalePrice: Number(rawSuggestedPrice.toFixed(4)),
+      recommendedNetSalePrice: Number(recommendedNetSalePrice.toFixed(4)),
+      suggestedSalePrice,
+      recommendedSalePrice: suggestedSalePrice,
+      expectedProfit,
+      expectedMarginPct,
+      difference,
+      differenceDirection: difference > 0 ? 'increase' : difference < 0 ? 'decrease' : 'same',
+      roundingRule: `allowed_cents:${allowedPriceCents.join(',')}; mode:round_up`,
+      salePriceStandard: 'gross_vat_included_display_price',
+    },
+    logistics: {
+      cargoTypeCode: logisticsQuote.cargoTypeCode,
+      cargoTypeName: logisticsQuote.cargoTypeName,
+      caseQty: logisticsQuote.caseQty,
+      calculationMethod: logisticsQuote.calculationMethod,
+      appliedBand: logisticsQuote.appliedBand,
+    },
+    risk: expiryRisk,
+    campaign: campaignInfo,
+    priceHistory: {
+      lastPriceChangeAt: priceHistoryMetrics.lastPriceChangeAt || null,
+      lastPriceChangeDate: priceHistoryMetrics.lastPriceChangeDate || null,
+      source: priceHistoryMetrics.priceHistorySource || null,
+    },
+    calculationSummary: [
+      `Ürün alış maliyeti: ${purchaseCost.toFixed(2)} TL / satış birimi`,
+      `Taşıma payı: ${logisticsQuote.totalPriceTl} TL toplam, ${logisticsUnits} birime dağıtıldı = ${logisticsCostPerUnit.toFixed(2)} TL`,
+      `Mağaza operasyonu ve fire riski: ${(operationalCost + spoilageRiskCost).toFixed(2)} TL`,
+      `Tahmini birim maliyet: ${totalEffectiveUnitCost.toFixed(2)} TL`,
+      `Hedef kârlılık: %${policy.targetMarginPct}, önerilen satış fiyatı: ${suggestedSalePrice.toFixed(2)} TL`,
+    ],
+    generatedAt: new Date().toISOString(),
+  };
+};
+
+const approveSellPriceRecommendation = async ({ productId, salePrice, targetMarginPct, actorUserId }) => {
+  const calculation = await buildSellPriceCalculation({ productId, targetMarginPct });
+  const approvedSalePrice = Number(salePrice || calculation.recommendation.suggestedSalePrice);
+  if (!Number.isFinite(approvedSalePrice) || approvedSalePrice <= 0) throw new AppError(400, 'Geçerli satış fiyatı zorunludur');
+  const now = new Date().toISOString();
+  const actionId = uuidv4();
+  const eventId = uuidv4();
+  const previousSalePrice = Number(calculation.current.salePrice || 0);
+  const priceSummary = summarizePriceRange([{ previousSalePrice, salePrice: approvedSalePrice }]);
+  const eventPayload = {
+    priceActionId: actionId,
+    priceEventId: eventId,
+    actionType: 'single_price_approval',
+    sourceModal: 'sell_price_advisor_modal',
+    scope: {
+      type: 'product',
+      productId: calculation.product.id,
+      label: calculation.product.productName || calculation.product.name || 'Seçili ürün',
+    },
+    scopeLabel: calculation.product.productName || calculation.product.name || 'Seçili ürün',
+    productId: calculation.product.id,
+    productName: calculation.product.productName || calculation.product.name || '',
+    sku: calculation.product.sku || '',
+    eventDate: now,
+    previousPrice: previousSalePrice,
+    newPrice: approvedSalePrice,
+    priceSummary,
+    source: 'sell_price_recommendation',
+    targetMarginPct: calculation.recommendation.targetMarginPct,
+    calculation,
+    approvedBy: actorUserId || null,
+    actorId: actorUserId || null,
+    actorName: actorUserId || 'Sistem kullanıcısı',
+    status: 'applied',
+    createdAt: now,
+  };
+
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    await prisma.$transaction([
+      prisma.product.update({
+        where: { id: calculation.product.id },
+        data: {
+          salePrice: approvedSalePrice,
+          priceUpdatedAt: new Date(now),
+          lastPriceChangeDate: new Date(now),
+          lastPriceChangeAt: new Date(now),
+          lastPriceChangeSource: 'sell_price_recommendation',
+        },
+      }),
+      prisma.productPriceEvent.create({
+        data: {
+          id: eventId,
+          productId: calculation.product.id,
+          previousSalePrice,
+          salePrice: approvedSalePrice,
+          source: 'sell_price_recommendation',
+          payload: eventPayload,
+          createdAt: new Date(now),
+        },
+      }),
+    ]);
+  } else {
+    const product = await productRepo.findById(calculation.product.id);
+    const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+    const priceHistory = Array.isArray(payload.priceHistory) ? payload.priceHistory : [];
+    await productRepo.updateById(calculation.product.id, {
+      ...product,
+      salePrice: approvedSalePrice,
+      priceUpdatedAt: now,
+      lastPriceChangeDate: now.slice(0, 10),
+      lastPriceChangeAt: now,
+      lastPriceChangeSource: 'sell_price_recommendation',
+      payload: {
+        ...payload,
+        priceHistory: [...priceHistory, {
+          id: eventId,
+          ...eventPayload,
+          salePrice: approvedSalePrice,
+          price: approvedSalePrice,
+          createdAt: now,
+        }],
+      },
+    });
+  }
+
+  const action = mapPriceActionGroup(actionId, [{
+    id: eventId,
+    productId: calculation.product.id,
+    previousSalePrice,
+    salePrice: approvedSalePrice,
+    source: 'sell_price_recommendation',
+    payload: eventPayload,
+    createdAt: new Date(now),
+  }]);
+
+  return {
+    productId: calculation.product.id,
+    priceActionId: actionId,
+    previousSalePrice,
+    salePrice: approvedSalePrice,
+    priceEventId: eventId,
+    source: 'sell_price_recommendation',
+    calculation,
+    action: mapPriceActionLog(action),
+    updatedAt: now,
+  };
+};
+
+export const pricingAnalysisService = {
+  async listRecentPriceActions(options = {}) {
+    if (config.dataStore !== 'postgres') return [];
+    return listRecentPriceActionsFromPostgres(options);
+  },
+
+  async applyBulkPriceUpdate(payload = {}, actor = {}) {
+    if (config.dataStore !== 'postgres') {
+      throw new AppError(400, 'Toplu fiyat güncelleme kaydı yalnızca merkezi veritabanında desteklenir');
+    }
+    return applyBulkPriceUpdatePostgres({ ...payload, actor });
+  },
+
+  async applyTemporaryPriceAction(payload = {}, actor = {}) {
+    if (config.dataStore !== 'postgres') {
+      throw new AppError(400, 'Süreli fiyat kararı yalnızca merkezi veritabanında desteklenir');
+    }
+    return applyTemporaryPriceActionPostgres({ ...payload, actor });
+  },
+
+  async skipPricingDecision(payload = {}, actor = {}) {
+    if (config.dataStore !== 'postgres') {
+      throw new AppError(400, 'Pas geç kararı yalnızca merkezi veritabanında desteklenir');
+    }
+    return skipPricingDecisionPostgres({ ...payload, actor });
+  },
+
+  async expireTemporaryPriceActions(options = {}) {
+    if (config.dataStore !== 'postgres') return { expiredCount: 0, revertedCount: 0, skippedCount: 0, actions: [] };
+    return expireTemporaryPriceActionsPostgres(options);
+  },
+
+  async rollbackPriceAction(actionId, actor = {}) {
+    if (config.dataStore !== 'postgres') {
+      throw new AppError(400, 'Fiyat geri alma işlemi yalnızca merkezi veritabanında desteklenir');
+    }
+    return rollbackPriceActionPostgres({ actionId, actor });
+  },
+
+  async calculateSellPrice(payload = {}) {
+    return buildSellPriceCalculation(payload);
+  },
+
+  async approveSellPrice(payload = {}, actorUserId = null) {
+    return approveSellPriceRecommendation({ ...payload, actorUserId });
+  },
+
+  async getAnalysis(query = {}) {
+    const cacheKey = getAnalysisCacheKey(query);
+    const shouldUseCache = config.dataStore === 'postgres';
+    const forceRefresh = (query.forceRefresh === true || query.forceRefresh === 'true')
+      && (query.allowForceRefresh === true || query.allowForceRefresh === 'true');
+    if (shouldUseCache && forceRefresh) {
+      analysisCache.delete(cacheKey);
+    } else if (shouldUseCache) {
+      const cached = getCachedAnalysis(cacheKey);
+      if (cached) return cached;
+    }
+
+    const analysisPromise = (async () => {
+    const {
+      products,
+      categories,
+      suppliers,
+      stocks,
+      sales,
+      supplierProducts,
+      productUniverse,
+    } = await getAnalysisInputs(query);
+
+    const categoryMap = new Map(categories.map((item) => [item.id, item]));
+    const supplierMap = new Map(suppliers.map((item) => [item.id, item]));
+    const stockMap = new Map(stocks.map((item) => [item.productId, item]));
+    const supplierProductsByProduct = groupSupplierProductsByProduct(supplierProducts);
+    const [activeCampaigns, procurementContext, activeTemporaryPriceActionsByProduct, skippedPricingDecisionsByProduct] = await Promise.all([
+      listActiveCampaignDefinitions(),
+      buildPricingProcurementContext(),
+      getActiveTemporaryPriceActionsByProduct(),
+      getSkippedPricingDecisionsByProduct(),
+    ]);
+
+    const analysisDate = toDateOnly(normalizeDate(query.endDate || new Date()));
+    const startDate = query.startDate ? normalizeDate(query.startDate, null) : null;
+    const endDate = query.endDate ? normalizeDate(query.endDate, null) : null;
+
+    const scopedSales = sales.filter((item) => {
+      const created = normalizeDate(item.createdAt, null);
+      if (!created) return false;
+      if (startDate && created < startDate) return false;
+      if (endDate) {
+        const endOfDay = new Date(endDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        if (created > endOfDay) return false;
+      }
+      return item.type === 'sale' || item.type === 'return';
+    });
+
+    const salesMetricsMap = demandForecastService.buildProductSalesMetrics({
+      sales: scopedSales,
+      analysisDate,
+    });
+    const salesTrendLast14DaysMap = buildLast14DailySalesMap(scopedSales, analysisDate);
+
+    const now = new Date(`${analysisDate}T12:00:00.000Z`);
+
+    const rows = products
+      .filter((item) => matchesProductUniverse(item, productUniverse))
+      .map((product) => {
+        const projectedProduct = applyCampaignPricingToProduct(product, activeCampaigns, { includeGeneralCampaigns: true });
+        const baseSalePrice = Number(projectedProduct.originalPrice ?? projectedProduct.salePrice ?? product.salePrice ?? 0);
+        const activeTemporaryPriceAction = activeTemporaryPriceActionsByProduct.get(String(product.id || '').trim()) || null;
+        const recommendationBasePrice = activeTemporaryPriceAction?.oldPrice && Number(activeTemporaryPriceAction.oldPrice) > 0
+          ? Number(activeTemporaryPriceAction.oldPrice)
+          : Number(projectedProduct.currentPrice ?? baseSalePrice);
+        const currentPrice = recommendationBasePrice;
+        const stock = stockMap.get(product.id);
+        const category = categoryMap.get(product.categoryId);
+        const analysisProduct = {
+          ...projectedProduct,
+          categoryName: category?.name || projectedProduct.categoryName || '',
+          salePrice: currentPrice,
+          originalSalePrice: baseSalePrice,
+        };
+        const productSupplierOptions = supplierProductsByProduct.get(product.id) || [];
+        const bestSupplierOption = getBestSupplierOption(productSupplierOptions);
+        const supplier = supplierMap.get(bestSupplierOption?.supplierId || product.supplierId);
+
+        const warehouseStock = Number(stock?.warehouseQuantity || 0);
+        const shelfStock = Number(stock?.shelfQuantity || 0);
+        const totalStock = warehouseStock + shelfStock;
+
+        const metrics = salesMetricsMap.get(product.id) || {
+          sold7: 0,
+          sold30: 0,
+          soldPrev7: 0,
+          avgDaily7: 0,
+          avgDaily30: 0,
+          prevAvgDaily7: 0,
+          trendDirection: 'flat',
+          trendRatio: 0,
+          salesSpeed: 'normal',
+        };
+
+        const { expiryDate, source, batchNo } = resolveExpiryFromStock(stock, product, category?.name || '');
+        const daysToExpiry = diffDays(expiryDate, now);
+        const sktStatus = getSktStatus(daysToExpiry);
+
+        const criticalStock = Number(product.criticalStock || 0);
+        const isCriticalStock = totalStock <= criticalStock;
+        const maxStock = Number(product.maxStock || 0);
+        const overStockRatio = maxStock > 0 ? totalStock / maxStock : 0;
+        const daysToStockout = metrics.avgDaily7 > 0 ? Number((totalStock / metrics.avgDaily7).toFixed(1)) : null;
+        const stockoutDate = daysToStockout !== null ? new Date(now.getTime() + daysToStockout * DAY_MS).toISOString() : null;
+        const leadTimeDays = bestSupplierOption
+          ? Math.max(1, Number(bestSupplierOption.leadTimeDays || 3))
+          : getLeadTimeDays(supplierProducts, product.id);
+        const priceHistoryMetrics = buildPriceHistoryMetrics(product);
+        const salesTrendLast14Days = salesTrendLast14DaysMap.get(product.id) || [];
+
+        const rowForGuardrails = {
+          productId: product.id,
+          categoryId: product.categoryId,
+          brand: product.brand || '',
+        };
+        const activeCampaignConflict = projectedProduct.hasActiveDiscount
+          ? (findPricingActiveCampaignConflict(rowForGuardrails, activeCampaigns) || {
+            campaignId: projectedProduct.activeCampaign?.id || null,
+            campaignName: projectedProduct.activeCampaign?.name || 'Aktif kampanya',
+            campaignType: projectedProduct.activeCampaign?.type || 'active',
+            reason: 'active_campaign_conflict',
+          })
+          : null;
+        const stockGuardrail = buildStockGuardrail({
+          totalStock,
+          criticalStock,
+          avgDailySales: metrics.avgDaily7,
+          daysToStockout,
+        });
+        const procurementGuardrail = buildProcurementGuardrail({
+          productId: product.id,
+          leadTimeDays,
+          stockGuardrail,
+          procurementContext,
+        });
+        const marginGuardrail = buildMarginGuardrail({
+          currentPrice,
+          purchasePrice: Number(bestSupplierOption?.purchasePrice || product.purchasePrice || 0),
+        });
+
+        const baseRecommendation = recommendationEngine.buildRecommendations({
+          product: analysisProduct,
+          metrics,
+          daysToExpiry,
+          overStockRatio,
+          daysToStockout,
+          totalStock,
+          criticalStock,
+          leadTimeDays,
+          activeCampaignConflict,
+          stockGuardrail,
+          procurementGuardrail,
+          marginGuardrail,
+        });
+        const recommendation = activeTemporaryPriceAction
+          ? {
+            ...baseRecommendation,
+            discount: {
+              ...baseRecommendation.discount,
+              hasSuggestion: false,
+              recommendedDiscountRate: 0,
+              discountRate: 0,
+              newPrice: currentPrice,
+              blockingReasons: [...new Set([...(baseRecommendation.discount?.blockingReasons || []), 'active_temporary_price_action'])],
+              suggestedAction: 'Aktif geçici fiyat uygulaması devam ediyor',
+              primaryAction: 'watch_only',
+              primaryActionLabel: 'İzlenmeli',
+              isSuppressed: true,
+              suppressionReason: 'active_temporary_price_action',
+              sourceMetrics: {
+                ...(baseRecommendation.discount?.sourceMetrics || {}),
+                activeTemporaryPriceActionId: activeTemporaryPriceAction.id,
+                activeTemporaryPriceActionEndAt: activeTemporaryPriceAction.endAt,
+              },
+            },
+            primaryAction: 'watch_only',
+            primaryActionLabel: 'İzlenmeli',
+            actionSuggestion: 'Aktif geçici fiyat uygulaması devam ediyor',
+            suggestedAction: 'Aktif geçici fiyat uygulaması devam ediyor',
+            recommendedDiscountRate: 0,
+            blockingReasons: [...new Set([...(baseRecommendation.blockingReasons || []), 'active_temporary_price_action'])],
+            isSuppressed: true,
+            suppressionReason: 'active_temporary_price_action',
+            sourceMetrics: {
+              ...(baseRecommendation.sourceMetrics || {}),
+              activeTemporaryPriceActionId: activeTemporaryPriceAction.id,
+              activeTemporaryPriceActionEndAt: activeTemporaryPriceAction.endAt,
+            },
+          }
+          : baseRecommendation;
+
+        const risk = riskScoringService.scoreProduct({
+          daysToExpiry,
+          totalStock,
+          criticalStock,
+          avgDaily7: metrics.avgDaily7,
+          salesSpeed: metrics.salesSpeed,
+          isCriticalStock,
+          overStockRatio,
+          daysToStockout,
+        });
+
+        const sourceRecommendationKey = buildPricingDecisionKey({
+          productId: product.id,
+          primaryAction: recommendation.primaryAction,
+          currentPrice,
+          discountSuggestion: recommendation.discount,
+        });
+
+        return {
+          productId: product.id,
+          sku: product.sku,
+          productName: product.name,
+          brand: product.brand || '',
+          categoryId: product.categoryId,
+          categoryName: category?.name || '-',
+          supplierId: bestSupplierOption?.supplierId || product.supplierId,
+          supplierName: supplier?.name || '-',
+          currentPrice,
+          salePrice: baseSalePrice,
+          originalPrice: baseSalePrice,
+          discountedPrice: projectedProduct.discountedPrice ?? null,
+          hasActiveDiscount: projectedProduct.hasActiveDiscount === true,
+          activeCampaign: projectedProduct.activeCampaign || null,
+          activeCampaigns: Array.isArray(projectedProduct.activeCampaigns) ? projectedProduct.activeCampaigns : [],
+          campaignInfo: projectedProduct.campaignInfo || '',
+          campaignBadge: projectedProduct.campaignBadge || '',
+          campaignIds: Array.isArray(projectedProduct.campaignIds) ? projectedProduct.campaignIds : [],
+          campaignCount: Number(projectedProduct.campaignCount || 0),
+          activeTemporaryPriceAction,
+          hasActiveTemporaryPriceAction: Boolean(activeTemporaryPriceAction),
+          purchasePrice: Number(product.purchasePrice || 0),
+          supplierPrice: Number(bestSupplierOption?.purchasePrice || product.purchasePrice || 0),
+          supplierPriceUnit: bestSupplierOption?.priceUnit || 'adet',
+          supplierLastPriceUpdate: bestSupplierOption?.lastPriceUpdate || bestSupplierOption?.updatedAt || null,
+          priceHistory: priceHistoryMetrics.priceHistory,
+          priceHistoryCount: priceHistoryMetrics.priceHistoryCount,
+          lastPrice: priceHistoryMetrics.lastPrice,
+          previousPrice: priceHistoryMetrics.previousPrice,
+          priceChangePercent: priceHistoryMetrics.priceChangePercent,
+          lastPriceChangeAt: priceHistoryMetrics.lastPriceChangeAt,
+          lastPriceChangeDate: priceHistoryMetrics.lastPriceChangeDate,
+          priceTrend: priceHistoryMetrics.priceTrend,
+          priceHistorySource: priceHistoryMetrics.priceHistorySource,
+          criticalStock,
+          warehouseStock,
+          shelfStock,
+          totalStock,
+          sold7: metrics.sold7,
+          sold30: metrics.sold30,
+          avgDailySales: metrics.avgDaily7,
+          salesTrendLast14Days,
+          salesTrend: trendLabel[metrics.trendDirection] || 'Dengeli',
+          trendDirection: metrics.trendDirection,
+          trendRatio: metrics.trendRatio,
+          salesSpeed: metrics.salesSpeed,
+          salesSpeedLabel: metrics.salesSpeed === 'fast' ? 'Hızlı' : metrics.salesSpeed === 'slow' ? 'Yavaş' : 'Normal',
+          expiryDate: expiryDate?.toISOString() || null,
+          expirySource: source,
+          expiryBatchNo: batchNo,
+          daysToExpiry,
+          sktStatus,
+          daysToStockout,
+          estimatedStockoutDate: stockoutDate,
+          leadTimeDays,
+          discountSuggestion: recommendation.discount,
+          orderSuggestion: recommendation.order,
+          primaryAction: recommendation.primaryAction,
+          sourceRecommendationKey,
+          primaryActionLabel: recommendation.primaryActionLabel,
+          actionSuggestion: recommendation.actionSuggestion,
+          reasonCodes: recommendation.reasonCodes,
+          blockingReasons: recommendation.blockingReasons,
+          suggestedAction: recommendation.suggestedAction,
+          recommendedDiscountRate: recommendation.recommendedDiscountRate,
+          isSuppressed: recommendation.isSuppressed,
+          suppressionReason: recommendation.suppressionReason,
+          sourceMetrics: recommendation.sourceMetrics,
+          activeCampaignFlag: Boolean(activeCampaignConflict),
+          activeCampaignConflict,
+          replenishmentSupportFlag: procurementGuardrail.hasPipeline,
+          lowStockGuardrailFlag: stockGuardrail.blocksDiscount,
+          marginGuardrailFlag: marginGuardrail.blocksDiscount,
+          stockGuardrail,
+          procurementGuardrail,
+          marginGuardrail,
+          riskScore: risk.score,
+          riskLevel: risk.level,
+          riskLabel: riskLabel[risk.level],
+          riskFactors: risk.factors,
+        };
+      });
+
+    const sktStatusFilter = normalizeSktStatusFilter(query.sktStatus);
+    const filtered = rows.filter((row) => {
+      const blockingReasons = Array.isArray(row.blockingReasons) ? row.blockingReasons.map((reason) => String(reason || '').trim()).filter(Boolean) : [];
+      const suppressionReason = String(row.suppressionReason || '').trim();
+      const hasActiveCampaignConflict = Boolean(row.activeCampaignConflict || row.activeCampaignFlag || row.hasActiveDiscount);
+      const hasLowStockBlock = Boolean(row.lowStockGuardrailFlag || row.stockGuardrail?.blocksDiscount || blockingReasons.some((reason) => ['critical_stock', 'near_critical_fast_moving', 'low_stock_coverage', 'stock_guardrail_blocked'].includes(reason)));
+      const hasWeakReplenishment = Boolean(row.procurementGuardrail?.pipelineWeak || row.replenishmentSupportFlag === false || blockingReasons.some((reason) => ['replenishment_pipeline_missing', 'long_lead_time', 'goods_receipt_pending_not_secured', 'replenishment_guardrail_blocked'].includes(reason)));
+      const hasLowMarginBlock = Boolean(row.marginGuardrailFlag || row.marginGuardrail?.blocksDiscount || blockingReasons.some((reason) => ['low_margin', 'price_at_or_below_cost', 'margin_guardrail_blocked'].includes(reason)));
+      const hasGuardrail = Boolean(hasLowStockBlock || hasWeakReplenishment || hasLowMarginBlock);
+      const campaignEligibility = String(query.campaignEligibility || '').trim().toLowerCase();
+      const suppression = String(query.suppression || '').trim().toLowerCase();
+      const conflict = String(query.conflict || '').trim().toLowerCase();
+      const guardrail = String(query.guardrail || '').trim().toLowerCase();
+      const pricePreset = String(query.pricePreset || '').trim().toLowerCase();
+      const decisionView = String(query.decisionView || '').trim().toLowerCase();
+      const includeSkipped = query.includeSkipped === 'true' || query.includeSkipped === true;
+      const excludeActiveTemporary = query.excludeActiveTemporary === 'true' || query.excludeActiveTemporary === true;
+      const skippedDecision = isSkippedPricingDecision(row, skippedPricingDecisionsByProduct);
+      const wantsSkippedDecisions = ['true', 'yes', 'any', 'suppressed', 'skipped'].includes(suppression);
+      const suggestedPrice = Number(row.discountSuggestion?.newPrice ?? row.currentPrice ?? 0);
+      const hasPriceDelta = Number.isFinite(suggestedPrice)
+        && Math.round(Number(row.currentPrice || 0) * 100) !== Math.round(suggestedPrice * 100);
+      const matchesCategory = !query.categoryId || row.categoryId === query.categoryId;
+      const matchesSupplier = !query.supplierId || row.supplierId === query.supplierId;
+      const matchesRisk = !query.riskLevel || row.riskLevel === query.riskLevel;
+      const rowSktStatus = normalizeSktStatusFilterValue(row.sktStatus);
+      const matchesSkt = sktStatusFilter.length === 0 || sktStatusFilter.includes(rowSktStatus);
+      const matchesSpeed = !query.salesSpeed || row.salesSpeed === query.salesSpeed;
+      const matchesDiscountOnly = query.discountOnly === 'true' ? row.discountSuggestion.hasSuggestion : true;
+      const matchesOrderOnly = query.orderOnly === 'true' ? row.orderSuggestion.hasSuggestion : true;
+      const matchesPrimaryAction = !query.primaryAction || row.primaryAction === query.primaryAction;
+      const matchesCampaignEligibility = !campaignEligibility
+        || (campaignEligibility === 'eligible' && row.campaignEligible !== false && row.primaryAction === 'campaign_candidate')
+        || (campaignEligibility === 'not_eligible' && (row.campaignEligible === false || row.primaryAction !== 'campaign_candidate'))
+        || (campaignEligibility === 'conflict' && hasActiveCampaignConflict)
+        || (campaignEligibility === 'campaign_active' && row.hasActiveDiscount)
+        || (campaignEligibility === 'campaign_inactive' && !row.hasActiveDiscount);
+      const matchesBlockingReason = !query.blockingReason || blockingReasons.includes(String(query.blockingReason));
+      const matchesSuppressionReason = !query.suppressionReason || suppressionReason === String(query.suppressionReason);
+      const matchesActiveCampaignConflict = query.activeCampaignConflict === 'true'
+        ? hasActiveCampaignConflict
+        : query.activeCampaignConflict === 'false'
+          ? !hasActiveCampaignConflict
+          : true;
+      const matchesConflict = !conflict
+        || (['true', 'yes', 'active_campaign'].includes(conflict) && hasActiveCampaignConflict)
+        || (['false', 'none', 'no'].includes(conflict) && !hasActiveCampaignConflict);
+      const matchesSuppression = !suppression
+        || (wantsSkippedDecisions && (row.isSuppressed || Boolean(suppressionReason) || skippedDecision))
+        || (['false', 'none', 'no'].includes(suppression) && !row.isSuppressed && !suppressionReason && !skippedDecision);
+      const matchesLowStockBlocked = query.lowStockBlocked === 'true' ? hasLowStockBlock : true;
+      const matchesWeakReplenishment = query.weakReplenishment === 'true' ? hasWeakReplenishment : true;
+      const matchesLowMarginBlocked = query.lowMarginBlocked === 'true' ? hasLowMarginBlock : true;
+      const matchesGuardrail = !guardrail
+        || (guardrail === 'any' && hasGuardrail)
+        || (guardrail === 'margin' && hasLowMarginBlock)
+        || (guardrail === 'stock' && hasLowStockBlock)
+        || (guardrail === 'procurement' && hasWeakReplenishment)
+        || (guardrail === 'none' && !hasGuardrail);
+      const matchesPricePreset = !pricePreset
+        || (pricePreset === 'nearexpiry' && ['critical', 'soon'].includes(row.sktStatus))
+        || (pricePreset === 'slowselling' && row.salesSpeed === 'slow')
+        || (pricePreset === 'overstocked' && Number(row.totalStock || 0) >= 40 && row.salesSpeed !== 'fast')
+        || (pricePreset === 'highmargin' && Number(row.marginGuardrail?.currentMarginPercent ?? (((Number(row.currentPrice || 0) - Number(row.supplierPrice || row.purchasePrice || 0)) / Math.max(Number(row.currentPrice || 0), 1)) * 100)) >= 30)
+        || (pricePreset === 'campaigneligible' && row.primaryAction === 'campaign_candidate')
+        || (pricePreset === 'conflicted' && hasActiveCampaignConflict)
+        || (pricePreset === 'blocked' && (hasGuardrail || row.isSuppressed || Boolean(suppressionReason) || blockingReasons.length));
+      const matchesDecisionView = decisionView !== 'active'
+        || (row.primaryAction === 'discount_action' && !row.hasActiveTemporaryPriceAction && hasPriceDelta && !skippedDecision);
+      const matchesActiveTemporaryState = !excludeActiveTemporary || !row.hasActiveTemporaryPriceAction;
+      const matchesText = matchesSearch(row, String(query.search || '').trim());
+      return (
+        matchesCategory &&
+        matchesSupplier &&
+        matchesRisk &&
+        matchesSkt &&
+        matchesSpeed &&
+        matchesDiscountOnly &&
+        matchesOrderOnly &&
+        matchesPrimaryAction &&
+        matchesCampaignEligibility &&
+        matchesBlockingReason &&
+        matchesSuppressionReason &&
+        matchesActiveCampaignConflict &&
+        matchesConflict &&
+        matchesSuppression &&
+        matchesLowStockBlocked &&
+        matchesWeakReplenishment &&
+        matchesLowMarginBlocked &&
+        matchesGuardrail &&
+        matchesPricePreset &&
+        matchesDecisionView &&
+        matchesActiveTemporaryState &&
+        (includeSkipped || wantsSkippedDecisions || !skippedDecision) &&
+        matchesText
+      );
+    });
+
+    const allFastSellingProducts = filtered
+      .filter((row) => row.salesSpeed === 'fast')
+      .sort((a, b) => b.sold7 - a.sold7);
+
+    const fastSellingProducts = allFastSellingProducts
+      .slice(0, 20);
+
+    const allSlowAndExpiryRiskProducts = filtered
+      .filter((row) => row.salesSpeed === 'slow' || ['critical', 'soon'].includes(row.sktStatus))
+      .sort((a, b) => b.riskScore - a.riskScore);
+
+    const slowAndExpiryRiskProducts = allSlowAndExpiryRiskProducts
+      .slice(0, 40);
+
+    const allDynamicDiscountSuggestions = filtered
+      .filter((row) => row.discountSuggestion.hasSuggestion)
+      .sort((a, b) => b.discountSuggestion.discountRate - a.discountSuggestion.discountRate);
+
+    const dynamicDiscountSuggestions = allDynamicDiscountSuggestions
+      .slice(0, 40);
+
+    const allStockRunoutAnalysis = filtered
+      .filter((row) => row.daysToStockout !== null)
+      .sort((a, b) => a.daysToStockout - b.daysToStockout);
+
+    const stockRunoutAnalysis = allStockRunoutAnalysis
+      .slice(0, 40);
+
+    const allAutomaticOrderSuggestions = filtered
+      .filter((row) => row.orderSuggestion.hasSuggestion)
+      .sort((a, b) => (a.daysToStockout || 9999) - (b.daysToStockout || 9999));
+
+    const automaticOrderSuggestions = allAutomaticOrderSuggestions
+      .slice(0, 40);
+
+    const actionBuckets = filtered.reduce((acc, row) => {
+      const key = row.primaryAction || 'hold_price';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {
+      discount_action: 0,
+      watch_only: 0,
+      hold_price: 0,
+      order_priority: 0,
+      campaign_candidate: 0,
+    });
+
+    const riskScorePanel = filtered
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 50);
+
+    const salesPattern = demandForecastService.buildWeeklyPattern({ sales: scopedSales, analysisDate });
+
+    const systemControls = {
+      expiringProducts: filtered.filter((row) => ['critical', 'soon'].includes(row.sktStatus)).length,
+      lowStockProducts: filtered.filter((row) => row.totalStock <= row.criticalStock + 5).length,
+      criticalStockProducts: filtered.filter((row) => row.totalStock <= row.criticalStock).length,
+      slowSalesProducts: filtered.filter((row) => row.salesSpeed === 'slow').length,
+      overStockProducts: filtered.filter((row) => row.totalStock > Math.max(row.criticalStock * 3, 20)).length,
+      fastRunoutProducts: filtered.filter((row) => row.daysToStockout !== null && row.daysToStockout <= 7).length,
+    };
+
+    const actions = [
+      {
+        key: 'discount',
+        title: 'İndirim Aksiyonu',
+        value: actionBuckets.discount_action,
+        detail: 'Birden fazla güçlü sinyale göre doğrulanmış fiyat aksiyonları.',
+      },
+      {
+        key: 'order',
+        title: 'Sipariş Aksiyonu',
+        value: actionBuckets.order_priority,
+        detail: 'Tükenme riski olan ürünler için sipariş zamanlaması.',
+      },
+      {
+        key: 'campaign',
+        title: 'Kampanya Adayı',
+        value: actionBuckets.campaign_candidate,
+        detail: 'Fiyatı hemen değiştirmek yerine kampanya planına alınabilecek ürünler.',
+      },
+    ];
+
+    return {
+      generatedAt: new Date().toISOString(),
+      filters: {
+        universe: productUniverse,
+        analysisDate,
+        startDate: query.startDate || null,
+        endDate: query.endDate || null,
+      },
+      summary: {
+        totalAnalyzedProducts: filtered.length,
+        actionRequiredProducts: actionBuckets.discount_action,
+        discountSuggestedProducts: actionBuckets.discount_action,
+        watchOnlyProducts: actionBuckets.watch_only,
+        holdPriceProducts: actionBuckets.hold_price,
+        orderPriorityProducts: actionBuckets.order_priority,
+        campaignCandidateProducts: actionBuckets.campaign_candidate,
+        sktRiskProducts: filtered.filter((row) => ['critical', 'soon'].includes(row.sktStatus)).length,
+        nearRunoutProducts: filtered.filter((row) => row.daysToStockout !== null && row.daysToStockout <= 10).length,
+        orderSuggestedProducts: actionBuckets.order_priority,
+        highRiskProducts: filtered.filter((row) => ['high', 'critical'].includes(row.riskLevel)).length,
+      },
+      filtersMeta: {
+        categories: categories.map((item) => ({ id: item.id, name: item.name })),
+        suppliers: suppliers.map((item) => ({ id: item.id, name: item.name })),
+      },
+      systemControls,
+      actions,
+      rows: filtered.map(compactAnalysisRow),
+      sections: {
+        fastSellingProducts: fastSellingProducts.map(compactAnalysisRow),
+        slowAndExpiryRiskProducts: slowAndExpiryRiskProducts.map(compactAnalysisRow),
+        dynamicDiscountSuggestions: dynamicDiscountSuggestions.map(compactAnalysisRow),
+        stockRunoutAnalysis: stockRunoutAnalysis.map(compactAnalysisRow),
+        automaticOrderSuggestions: automaticOrderSuggestions.map(compactAnalysisRow),
+        salesPattern,
+        riskScorePanel: riskScorePanel.map(compactAnalysisRow),
+      },
+    };
+    })();
+
+    if (shouldUseCache) {
+      return setCachedAnalysis(cacheKey, analysisPromise);
+    }
+
+    return analysisPromise;
+  },
+
+  async getSummary(query = {}) {
+    const analysis = await this.getAnalysis(query);
+    return {
+      generatedAt: analysis.generatedAt,
+      filters: analysis.filters,
+      filtersMeta: analysis.filtersMeta,
+      summary: analysis.summary,
+      systemControls: analysis.systemControls,
+      actions: analysis.actions,
+    };
+  },
+
+  async getRows(query = {}) {
+    const analysis = await this.getAnalysis(query);
+    const { key, rows } = sortRows(analysis.rows || [], query.sort || 'risk_desc');
+    const { pageRows, pagination } = paginateRows(rows, query);
+    return {
+      items: pageRows,
+      pagination,
+      filters: {
+        categoryId: query.categoryId || null,
+        supplierId: query.supplierId || null,
+        riskLevel: query.riskLevel || query.risk || null,
+        sktStatus: query.sktStatus || null,
+        salesSpeed: query.salesSpeed || null,
+        campaignEligibility: query.campaignEligibility || null,
+        conflict: query.conflict || null,
+        suppression: query.suppression || null,
+        blockingReason: query.blockingReason || null,
+        suppressionReason: query.suppressionReason || null,
+        activeCampaignConflict: query.activeCampaignConflict || null,
+        lowStockBlocked: query.lowStockBlocked || null,
+        weakReplenishment: query.weakReplenishment || null,
+        lowMarginBlocked: query.lowMarginBlocked || null,
+        guardrail: query.guardrail || null,
+        pricePreset: query.pricePreset || null,
+        discountOnly: query.discountOnly || null,
+        orderOnly: query.orderOnly || null,
+        primaryAction: query.primaryAction || null,
+        decisionView: query.decisionView || null,
+        excludeActiveTemporary: query.excludeActiveTemporary || null,
+        includeSkipped: query.includeSkipped || null,
+        search: String(query.search || '').trim() || null,
+      },
+      sort: {
+        key,
+        direction: key.endsWith('_asc') ? 'asc' : 'desc',
+      },
+    };
+  },
+
+  async getDetail(productId, query = {}) {
+    const targetId = String(productId || '').trim();
+    if (!targetId) throw new AppError(400, 'productId is required');
+
+    const product = await productRepo.findById(targetId);
+    if (!product) throw createNotFoundError('Fiyat analizi satırı bulunamadı');
+    const priceHistoryMetrics = buildPriceHistoryMetrics(product || {});
+    return {
+      productId: targetId,
+      id: targetId,
+      sku: product.sku,
+      productName: product.name,
+      currentPrice: Number(product.salePrice || product.price || 0),
+      salePrice: Number(product.salePrice || product.price || 0),
+      priceHistory: priceHistoryMetrics.priceHistory,
+      priceHistoryCount: priceHistoryMetrics.priceHistoryCount,
+      lastPrice: priceHistoryMetrics.lastPrice,
+      previousPrice: priceHistoryMetrics.previousPrice,
+      priceChangePercent: priceHistoryMetrics.priceChangePercent,
+      lastPriceChangeAt: priceHistoryMetrics.lastPriceChangeAt,
+      lastPriceChangeDate: priceHistoryMetrics.lastPriceChangeDate,
+      priceTrend: priceHistoryMetrics.priceTrend,
+      priceHistorySource: priceHistoryMetrics.priceHistorySource,
+      riskFactors: [],
+    };
+  },
+};
+

@@ -1,0 +1,510 @@
+:root {
+  --shelf-auth-text: #e7efff;
+  --shelf-auth-muted: #a8b8d3;
+  --shelf-auth-border: rgba(174, 196, 232, 0.28);
+  --shelf-auth-card: rgba(12, 24, 45, 0.76);
+  --shelf-auth-card-soft: rgba(12, 27, 51, 0.74);
+  --shelf-auth-focus: rgba(77, 140, 255, 0.26);
+  --shelf-auth-primary: linear-gradient(135deg, #2f7ffb 0%, #1b5de4 56%, #133fae 100%);
+}
+
+.shelf-auth-shell {
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 18px 12px 24px;
+  background: radial-gradient(66% 72% at 94% 2%, rgba(69, 133, 255, 0.28), transparent 62%),
+    radial-gradient(64% 70% at 8% 92%, rgba(51, 189, 255, 0.2), transparent 58%),
+    linear-gradient(162deg, #020917 0%, #07162d 42%, #0b2344 100%);
+  overflow: hidden;
+}
+
+.shelf-auth-shell-personnel {
+  background: radial-gradient(64% 70% at 92% 4%, rgba(66, 126, 255, 0.3), transparent 60%),
+    radial-gradient(62% 62% at 6% 94%, rgba(36, 98, 219, 0.28), transparent 56%),
+    linear-gradient(162deg, #020816 0%, #08172f 44%, #0c2547 100%);
+}
+
+.shelf-auth-shell-customer {
+  background: radial-gradient(66% 70% at 92% 4%, rgba(56, 189, 248, 0.24), transparent 60%),
+    radial-gradient(64% 64% at 8% 94%, rgba(67, 122, 255, 0.28), transparent 56%),
+    linear-gradient(162deg, #020918 0%, #0a1934 44%, #112b50 100%);
+}
+
+.shelf-auth-flow {
+  width: min(440px, 100%);
+  margin: auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 14px;
+}
+
+.shelf-auth-hero {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.shelf-auth-brand {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.shelf-auth-logo {
+  width: min(360px, calc(100vw - 40px));
+  height: auto;
+  object-fit: contain;
+  filter: none;
+  flex-shrink: 0;
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+
+.shelf-auth-brand-customer {
+  gap: 2px;
+}
+
+.shelf-auth-brand-customer .shelf-auth-logo {
+  margin-bottom: -2px;
+}
+
+.shelf-auth-brand h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1rem;
+  line-height: 1.25;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+
+.shelf-auth-brand p {
+  margin: 0;
+  color: var(--shelf-auth-muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  max-width: 36ch;
+}
+
+.shelf-auth-feature-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.shelf-auth-feature-card {
+  border: 1px solid rgba(176, 197, 232, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.shelf-auth-feature-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, rgba(76, 137, 255, 0.22), rgba(76, 183, 255, 0.2));
+  color: #c9dcff;
+  border: 1px solid rgba(150, 183, 238, 0.36);
+}
+
+.shelf-auth-feature-card strong {
+  display: block;
+  color: #eef4ff;
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.shelf-auth-feature-card p {
+  margin: 4px 0 0;
+  color: #a8bad8;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.shelf-auth-panel {
+  width: 100%;
+}
+
+.shelf-auth-card {
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid var(--shelf-auth-border);
+  background: var(--shelf-auth-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 28px 56px rgba(3, 10, 26, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shelf-auth-card-customer {
+  background: var(--shelf-auth-card-soft);
+}
+
+.shelf-auth-panel-head {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.shelf-auth-panel-head h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.25rem;
+  line-height: 1.25;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shelf-auth-panel-head p {
+  margin: 0;
+  color: #9fb2d1;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.shelf-auth-field {
+  min-height: 54px;
+  width: 100%;
+  border: 1px solid var(--shelf-auth-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.shelf-auth-field svg {
+  color: #93a9cb;
+  flex-shrink: 0;
+}
+
+.shelf-auth-field input {
+  border: 0;
+  outline: 0;
+  width: 100%;
+  background: transparent;
+  color: var(--shelf-auth-text);
+  -webkit-text-fill-color: var(--shelf-auth-text);
+  font-size: 0.98rem;
+  line-height: 1.2;
+  padding: 0;
+  box-shadow: none;
+  caret-color: #dbeafe;
+}
+
+.shelf-auth-field input::placeholder {
+  color: #93a6c3;
+}
+
+.shelf-auth-field input:focus,
+.shelf-auth-field input:active,
+.shelf-auth-field input:not(:placeholder-shown) {
+  background: transparent !important;
+  color: var(--shelf-auth-text);
+  -webkit-text-fill-color: var(--shelf-auth-text);
+}
+
+.shelf-auth-field input:-webkit-autofill,
+.shelf-auth-field input:-webkit-autofill:hover,
+.shelf-auth-field input:-webkit-autofill:focus,
+.shelf-auth-field input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--shelf-auth-text);
+  box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.045) inset;
+  -webkit-box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0.045) inset;
+  transition: background-color 9999s ease-out 0s;
+}
+
+.shelf-auth-field:focus-within {
+  border-color: rgba(124, 173, 255, 0.95);
+  box-shadow: 0 0 0 3px var(--shelf-auth-focus);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.shelf-auth-toggle {
+  border: 0;
+  background: transparent;
+  color: #9db0cc;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.shelf-auth-toggle:hover {
+  color: #d9e6fb;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shelf-auth-submit {
+  min-height: 52px;
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  background: var(--shelf-auth-primary);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  margin-top: 6px;
+  box-shadow: 0 14px 30px rgba(29, 90, 223, 0.42);
+}
+
+.shelf-auth-submit:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.shelf-auth-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(132, 171, 255, 0.28), 0 14px 30px rgba(29, 90, 223, 0.42);
+}
+
+.shelf-auth-submit:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.shelf-auth-error {
+  margin: 0;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 12px;
+  background: rgba(127, 29, 29, 0.36);
+  color: #fecaca;
+  font-size: 0.86rem;
+  padding: 10px 12px;
+}
+
+.shelf-auth-success {
+  margin: 0;
+  border: 1px solid rgba(74, 222, 128, 0.42);
+  border-radius: 12px;
+  background: rgba(20, 83, 45, 0.34);
+  color: #bbf7d0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 10px 12px;
+}
+
+.shelf-auth-help {
+  color: #9fb2d1;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin-top: -2px;
+}
+
+.shelf-auth-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shelf-auth-secondary,
+.shelf-auth-ghost {
+  min-height: 52px;
+  width: 100%;
+  border-radius: 14px;
+  font-size: 0.93rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shelf-auth-secondary {
+  border: 1px solid rgba(168, 191, 226, 0.35);
+  background: rgba(255, 255, 255, 0.1);
+  color: #d6e4fb;
+}
+
+.shelf-auth-ghost {
+  border: 1px solid rgba(154, 178, 217, 0.42);
+  background: transparent;
+  color: #c2d6f4;
+}
+
+.shelf-auth-footer {
+  margin-top: 4px;
+  color: #8ba2c4;
+  font-size: 0.78rem;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.shelf-auth-legal-box {
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 14px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  background: rgba(6, 14, 30, 0.52);
+}
+
+.shelf-auth-legal-title {
+  margin: 0;
+  color: #c5d5ec;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.shelf-auth-legal-row {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  align-items: start;
+  color: #d6e4fa;
+  font-size: 0.78rem;
+}
+
+.shelf-auth-legal-row input {
+  margin-top: 2px;
+}
+
+.shelf-auth-legal-text-btn {
+  grid-column: 2;
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #d6e4fa;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.shelf-auth-legal-text-btn:hover {
+  color: #9ed6ff;
+}
+
+.shelf-auth-field.is-invalid {
+  border-color: rgba(248, 113, 113, 0.9);
+  background: rgba(127, 29, 29, 0.2);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
+}
+
+.shelf-auth-field-error {
+  margin-top: -4px;
+  margin-bottom: 2px;
+  color: #fecaca;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.shelf-auth-link {
+  grid-column: 2;
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #7dc8ff;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.shelf-auth-forgot-link {
+  grid-column: auto;
+  justify-self: end;
+  align-self: end;
+  margin-top: -4px;
+  font-size: 0.82rem;
+}
+
+.shelf-auth-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  z-index: 80;
+}
+
+.shelf-auth-modal-card {
+  width: min(460px, 94vw);
+  max-height: min(72dvh, 540px);
+  border-radius: 16px;
+  background: #0d1f3d;
+  border: 1px solid rgba(167, 191, 224, 0.34);
+  color: #dbe7fb;
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shelf-auth-modal-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shelf-auth-modal-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.shelf-auth-modal-card p {
+  margin: 0;
+  color: #bdd0ee;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.shelf-auth-modal-body {
+  overflow-y: auto;
+  padding: 2px 2px 6px 0;
+}
+
+.shelf-auth-modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.shelf-auth-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  border-radius: 999px;
+}
+
+@media (max-width: 480px) {
+  .shelf-auth-shell {
+    padding: 16px 10px 20px;
+  }
+
+  .shelf-auth-card {
+    padding: 18px;
+  }
+
+  .shelf-auth-field,
+  .shelf-auth-submit,
+  .shelf-auth-secondary,
+  .shelf-auth-ghost {
+    min-height: 50px;
+  }
+}

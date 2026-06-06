@@ -1,0 +1,1304 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import './ESLManagement.css';
+import { useLocation } from 'react-router-dom';
+import {
+  Monitor,
+  Send,
+  Wifi,
+  WifiOff,
+  Battery,
+  RefreshCw,
+  Search,
+  Tag,
+  History,
+  Cpu,
+  CheckCircle2,
+  Package,
+  Eye,
+  Trash2,
+  XCircle,
+  QrCode,
+  ScanLine,
+  Link2,
+  AlertCircle,
+  LayoutTemplate,
+  Megaphone,
+} from 'lucide-react';
+import PageHeader from '../../components/PageHeader.jsx';
+import Toast from '../../components/Toast.jsx';
+import ConfirmModal from '../../components/ConfirmModal.jsx';
+import ESLPreview from '../../components/ESLPreview.jsx';
+import ScanInput from '../../components/ScanInput.jsx';
+import { eslService } from '../../services/eslService.js';
+import { productService } from '../../services/productService.js';
+import { barcodeLookupService } from '../../services/barcodeLookupService.js';
+import { cleanSectionDisplayName, formatUnit, normalizeSearchText, includesNormalized } from '../../services/formatters.js';
+
+const TEMPLATES = [
+  {
+    id: 'standard',
+    label: 'Standart (2.9")',
+    desc: 'Ürün adı, barkod, fiyat, menşei',
+    selectedNote: 'Standart şablon için seçim yapıldı',
+  },
+  {
+    id: 'campaign',
+    label: 'Fırsat',
+    desc: 'Büyük fiyat vurgusu, fırsat bandı',
+    selectedNote: 'Fırsat şablonu için seçim yapıldı',
+  },
+  {
+    id: 'discount',
+    label: 'İndirim',
+    desc: 'Üstü çizili eski fiyat ve indirimli fiyat vurgusu',
+    selectedNote: 'İndirim şablonu için seçim yapıldı',
+  },
+];
+
+const SEND_TIMEOUT_MS = 15000;
+const REFRESH_TIMEOUT_MS = 10000;
+const HISTORY_PAGE_SIZE = 10;
+
+const withTimeout = (promise, ms, message) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    window.clearTimeout(timeoutId);
+  });
+};
+
+const formatDate = (iso) => {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const UNASSIGNED_LABEL_LOCATION = 'Ürün atanmamış';
+
+const hasAssignedProduct = (device) => Boolean(device?.assignedProductId && device?.product);
+
+const getLabelLocationDisplay = (device) => (
+  hasAssignedProduct(device) ? (device.location || '-') : UNASSIGNED_LABEL_LOCATION
+);
+
+const getProductNameLabel = (product) => formatUnit(product?.name || product?.productName || 'Ürün seçilmedi');
+
+const getProductSkuLabel = (product) => product?.sku || product?.barcode || 'SKU yok';
+
+const getProductBarcodeLabel = (product) => product?.barcode || product?.sku || '-';
+
+const getProductPriceLabel = (pricing) => `₺${(Number(pricing?.displayPrice) || 0).toFixed(2)}`;
+
+const isRecord = (value) => Boolean(value && typeof value === 'object');
+
+const TEMPLATE_IDS = new Set(TEMPLATES.map((template) => template.id));
+
+const normalizeTemplateId = (template) => {
+  const value = String(template || '').trim();
+  return TEMPLATE_IDS.has(value) ? value : 'standard';
+};
+
+const readFirstValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
+
+const toNumberOrNull = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const normalized = typeof value === 'string' ? value.replace(/[^\d,.-]/g, '').replace(',', '.') : value;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+};
+
+const normalizeEslProduct = (product) => (isRecord(product) ? product : null);
+
+const normalizeEslDevice = (device) => (
+  isRecord(device) ? { ...device, product: normalizeEslProduct(device.product) } : null
+);
+
+const normalizeEslHistoryEntry = (entry) => {
+  if (!isRecord(entry)) return null;
+  const product = normalizeEslProduct(entry.product);
+  return {
+    ...entry,
+    productName: entry.productName || product?.name || product?.productName || 'Ürün seçilmedi',
+    productSku: entry.productSku || getProductSkuLabel(product),
+  };
+};
+
+const normalizeEslList = (items, mapper) => (
+  Array.isArray(items) ? items.map(mapper).filter(Boolean) : []
+);
+
+const resolveEslDisplayPricing = (product = {}) => {
+  const source = product && typeof product === 'object' ? product : {};
+  const regularPrice = Number(source.salePrice ?? source.regularPrice ?? source.price ?? 0) || 0;
+  const campaignPrice = Number(
+    source.campaignPrice
+    ?? source.discountedPrice
+    ?? source.activeCampaign?.price
+    ?? source.activeCampaign?.campaignPrice
+    ?? source.currentPrice
+    ?? 0
+  ) || 0;
+  const hasActiveCampaign = Boolean(source.hasActiveDiscount || source.hasActiveCampaign)
+    && campaignPrice > 0
+    && Math.round(campaignPrice * 100) < Math.round(regularPrice * 100);
+  const displayPrice = hasActiveCampaign ? campaignPrice : regularPrice;
+
+  return {
+    regularPrice,
+    campaignPrice: hasActiveCampaign ? campaignPrice : null,
+    displayPrice,
+    hasActiveCampaign,
+    priceSource: hasActiveCampaign ? 'campaign' : 'regular',
+  };
+};
+
+const resolveTemplateForPricing = (template, pricing) => {
+  const requestedTemplate = String(template || '').trim();
+  return normalizeTemplateId(requestedTemplate);
+};
+
+const resolveDeviceLabelPreview = (device) => {
+  if (!isRecord(device)) return null;
+
+  const labelCandidates = [
+    device.currentLabel,
+    device.lastLabelData,
+    device.lastPayload?.label,
+    device.lastPayload,
+    device.lastRenderedContent,
+    device.label,
+  ].filter(isRecord);
+  const label = labelCandidates.find((candidate) => candidate.clearLabel !== true) || null;
+  const product = normalizeEslProduct(
+    label?.product
+    || device.assignedProduct
+    || device.product
+  );
+
+  const hasProductAssignment = Boolean(device.assignedProductId && product);
+  const hasLabelPayload = Boolean(label && label.clearLabel !== true);
+  if (!hasProductAssignment && !hasLabelPayload) return null;
+
+  const displayPrice = toNumberOrNull(readFirstValue(
+    label?.displayPrice,
+    label?.salePrice,
+    label?.price,
+    product?.displayPrice,
+    product?.salePrice,
+    product?.currentPrice,
+    product?.price
+  )) || 0;
+  const regularPrice = toNumberOrNull(readFirstValue(
+    label?.regularPrice,
+    label?.previousPrice,
+    product?.regularPrice,
+    product?.salePrice,
+    product?.price
+  )) || displayPrice;
+  const campaignPrice = toNumberOrNull(readFirstValue(label?.campaignPrice, product?.campaignPrice));
+  const previousSalePrice = toNumberOrNull(readFirstValue(
+    label?.previousPrice,
+    label?.previousSalePrice,
+    label?.oldPrice,
+    product?.previousSalePrice,
+    product?.previousPrice,
+    product?.oldPrice
+  )) || 0;
+  const hasActiveCampaign = Boolean(readFirstValue(label?.hasActiveCampaign, product?.hasActiveCampaign))
+    || (campaignPrice !== null && campaignPrice > 0 && Math.round(campaignPrice * 100) < Math.round(regularPrice * 100))
+    || (previousSalePrice > displayPrice && displayPrice > 0);
+
+  const previewProduct = {
+    id: readFirstValue(product?.id, device.assignedProductId, label?.productId),
+    name: readFirstValue(label?.productName, label?.name, product?.name, product?.productName, device.productName),
+    productName: readFirstValue(label?.productName, label?.name, product?.productName, product?.name, device.productName),
+    sku: readFirstValue(label?.productSku, label?.sku, product?.sku, device.productSku, device.sku),
+    barcode: readFirstValue(label?.productBarcode, label?.barcode, product?.barcode, device.productBarcode, device.barcode),
+    salePrice: displayPrice,
+    displayPrice,
+    regularPrice,
+    campaignPrice,
+    previousSalePrice: previousSalePrice || (hasActiveCampaign ? regularPrice : 0),
+    hasActiveCampaign,
+    origin: readFirstValue(label?.origin, product?.origin, 'Türkiye'),
+    expiryDate: readFirstValue(label?.expiryDate, label?.lastPriceChangeDate, product?.expiryDate, product?.lastPriceChangeDate, ''),
+    lastPriceChangeDate: readFirstValue(label?.lastPriceChangeDate, label?.expiryDate, product?.lastPriceChangeDate, ''),
+  };
+
+  return {
+    product: previewProduct,
+    pricing: {
+      regularPrice,
+      campaignPrice: hasActiveCampaign ? (campaignPrice || displayPrice) : null,
+      displayPrice,
+      hasActiveCampaign,
+      priceSource: hasActiveCampaign ? 'campaign' : 'regular',
+    },
+    template: normalizeTemplateId(readFirstValue(label?.template, device.template, product?.template)),
+  };
+};
+
+export default function ESLManagement() {
+  const location = useLocation();
+  const deviceSelectionRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const [devices, setDevices] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [refreshingDevices, setRefreshingDevices] = useState(false);
+  const sendingRef = useRef(false);
+
+  // Form state
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [selectedTemplate, setSelectedTemplate] = useState('standard');
+  const [lastPreview, setLastPreview] = useState(null);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const [productSearch, setProductSearch] = useState('');
+  const [productSearchResults, setProductSearchResults] = useState([]);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
+  const [scanValue, setScanValue] = useState('');
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const [scanMatch, setScanMatch] = useState(null);
+
+  const [toast, setToast] = useState(null);
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [confirmClearLabelOpen, setConfirmClearLabelOpen] = useState(false);
+  const autoTemplateProductRef = useRef('');
+  const productSearchRequestRef = useRef(0);
+
+  const showToast = (type, title, message) => {
+    if (isMountedRef.current) setToast({ type, title, message });
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+    setHistoryPage((current) => Math.min(current, totalPages));
+  }, [history]);
+
+  useEffect(() => {
+    if (!sending) return undefined;
+
+    const fallbackId = window.setTimeout(() => {
+      sendingRef.current = false;
+      setSending(false);
+    }, SEND_TIMEOUT_MS + 2000);
+
+    return () => window.clearTimeout(fallbackId);
+  }, [sending]);
+
+  const scrollToDeviceSelection = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      try {
+        deviceSelectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch {
+        // no-op
+      }
+    });
+  }, []);
+
+  const loadData = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setLoading(true);
+      const [devicesResult, historyResult, statsResult] = await Promise.allSettled([
+        eslService.listDevices(),
+        eslService.listHistory({ page: 1, limit: HISTORY_PAGE_SIZE }),
+        eslService.getStats(),
+      ]);
+
+      const devicesData = devicesResult.status === 'fulfilled' ? devicesResult.value : [];
+      const historyData = historyResult.status === 'fulfilled' ? historyResult.value : [];
+      const statsData = statsResult.status === 'fulfilled' ? statsResult.value : null;
+
+      if (!isMountedRef.current) return;
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
+      setHistory(normalizeEslList(historyData, normalizeEslHistoryEntry));
+      setStats(statsData);
+
+      if (!silent && historyResult.status === 'rejected') {
+        showToast('warning', 'Uyarı', 'ESL geçmiş kaydı geçici olarak okunamadı. Sistem güvenli modda devam ediyor.');
+      }
+
+      if (!silent && devicesResult.status === 'rejected') {
+        throw devicesResult.reason;
+      }
+    } catch (err) {
+      showToast('error', 'Yükleme Hatası', err?.message || 'ESL verileri yüklenemedi.');
+    } finally {
+      if (!silent && isMountedRef.current) setLoading(false);
+    }
+  }, [scrollToDeviceSelection]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const query = productSearch.trim();
+    const requestId = productSearchRequestRef.current + 1;
+    productSearchRequestRef.current = requestId;
+
+    if (query.length < 2) {
+      setProductSearchLoading(false);
+      setProductSearchResults([]);
+      return undefined;
+    }
+
+    setProductSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      productService.list({
+        search: query,
+        page: 1,
+        limit: 30,
+        includeTotal: false,
+        includeGeneralCampaigns: true,
+      })
+        .then((rows) => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          const normalizedRows = normalizeEslList(rows, normalizeEslProduct);
+          setProductSearchResults(normalizedRows);
+          setProducts((current) => {
+            const knownIds = new Set(current.map((item) => item.id).filter(Boolean));
+            const additions = normalizedRows.filter((item) => item?.id && !knownIds.has(item.id));
+            return additions.length ? [...additions, ...current] : current;
+          });
+        })
+        .catch(() => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          setProductSearchResults([]);
+        })
+        .finally(() => {
+          if (!isMountedRef.current || productSearchRequestRef.current !== requestId) return;
+          setProductSearchLoading(false);
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [productSearch]);
+
+  useEffect(() => {
+    const quickAssignProductId = location.state?.quickAssignProductId;
+    if (!quickAssignProductId) {
+      return;
+    }
+
+    let active = true;
+
+    const selectQuickAssignProduct = async () => {
+      const cachedProduct = products.find((item) => item.id === quickAssignProductId);
+      const targetProduct = cachedProduct || await productService.getById(quickAssignProductId, { includeGeneralCampaigns: true });
+      if (!active || !targetProduct) return;
+
+      setProducts((current) => (
+        current.some((item) => item.id === targetProduct.id) ? current : [normalizeEslProduct(targetProduct), ...current].filter(Boolean)
+      ));
+      setSelectedProductId(targetProduct.id);
+      setProductSearch('');
+      setProductSearchResults([]);
+      setScanMatch(null);
+      setScanError('');
+
+    if (location.state?.openDeviceSelection) {
+      setToast({
+        type: 'info',
+        title: 'Etiket Ata',
+        message: 'Ürün seçildi. Etiket atamak için cihaz seçin ve gönderin.',
+      });
+      scrollToDeviceSelection();
+    }
+
+      window.history.replaceState({}, '');
+    };
+
+    selectQuickAssignProduct().catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [location.state, products, scrollToDeviceSelection]);
+
+  const handleRefresh = useCallback(async () => {
+    if (refreshingDevices) return;
+
+    setRefreshingDevices(true);
+    try {
+      const [devicesData, statsData] = await withTimeout(
+        Promise.all([
+          eslService.listDevices({ forceRefresh: true }),
+          eslService.getStats({ forceRefresh: true }),
+        ]),
+        REFRESH_TIMEOUT_MS,
+        'Etiket durumları zaman aşımına uğradı.'
+      );
+      if (!isMountedRef.current) return;
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
+      setStats(statsData);
+    } catch (err) {
+      showToast('error', 'Yenileme Hatası', err?.message || 'Etiket durumları yenilenemedi.');
+    } finally {
+      if (isMountedRef.current) setRefreshingDevices(false);
+    }
+  }, [refreshingDevices]);
+
+  // Gönderim sonrası hafif yenileme - ürün listesi (5000 kayıt) değişmez, sadece cihaz/geçmiş/istatistik güncellenir
+  const refreshAfterSend = useCallback(async () => {
+    try {
+      const [devicesData, historyData, statsData] = await Promise.all([
+        eslService.listDevices({ forceRefresh: true }),
+        eslService.listHistory({ page: 1, limit: HISTORY_PAGE_SIZE, forceRefresh: true }),
+        eslService.getStats({ forceRefresh: true }),
+      ]);
+      if (!isMountedRef.current) return;
+      setDevices(normalizeEslList(devicesData, normalizeEslDevice));
+      setHistory(normalizeEslList(historyData, normalizeEslHistoryEntry));
+      setStats(statsData);
+    } catch (_) { /* ignore */ }
+  }, []);
+
+  const selectedProduct = products.find((p) => p.id === selectedProductId) || null;
+  const selectedProductPricing = selectedProduct ? resolveEslDisplayPricing(selectedProduct) : null;
+  const effectiveSelectedTemplate = selectedProductPricing
+    ? resolveTemplateForPricing(selectedTemplate, selectedProductPricing)
+    : selectedTemplate;
+  const selectedDevice = devices.find((d) => d.id === selectedDeviceId) || null;
+  const hasSelectedDevice = Boolean(selectedDevice);
+  const historyTotalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+  const historyStart = history.length ? ((historyPage - 1) * HISTORY_PAGE_SIZE) + 1 : 0;
+  const historyEnd = history.length ? Math.min(historyPage * HISTORY_PAGE_SIZE, history.length) : 0;
+  const pagedHistory = history.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
+  const deviceLabelPreview = !selectedProduct ? resolveDeviceLabelPreview(selectedDevice) : null;
+  const previewProduct = selectedProduct || deviceLabelPreview?.product || null;
+  const previewPricing = selectedProduct ? selectedProductPricing : deviceLabelPreview?.pricing || null;
+  const previewTemplate = selectedProduct
+    ? (effectiveSelectedTemplate || 'standard')
+    : (deviceLabelPreview?.template || effectiveSelectedTemplate || 'standard');
+  const previewEmptyMessage = selectedDeviceId ? 'Bu cihazda kayıtlı etiket bulunmuyor.' : 'Ürün seçilmedi';
+  const isProductSelected = Boolean(selectedProduct);
+  const isDeviceSelected = Boolean(selectedDeviceId);
+  const isTemplateSelected = Boolean(effectiveSelectedTemplate);
+
+  useEffect(() => {
+    if (!selectedProductId || !selectedProductPricing) {
+      autoTemplateProductRef.current = '';
+      return;
+    }
+    if (autoTemplateProductRef.current === selectedProductId) return;
+    autoTemplateProductRef.current = selectedProductId;
+    setSelectedTemplate(selectedProductPricing.hasActiveCampaign ? 'discount' : 'standard');
+  }, [selectedProductId, selectedProductPricing]);
+
+  const tokenStartsWithQuery = (value, query) => {
+    const text = normalizeSearchText(value);
+    if (!text || !query) return false;
+    if (query.includes(' ')) return text.includes(query);
+    const tokens = text.split(/[^0-9a-z]+/i).filter(Boolean);
+    return tokens.some((token) => token.startsWith(query));
+  };
+
+  const searchQuery = productSearch.trim();
+  const searchSourceProducts = searchQuery.length >= 2 && productSearchResults.length ? productSearchResults : products;
+  const filteredProducts = searchSourceProducts.filter((product) => {
+    const p = product || {};
+    if (!searchQuery) return true;
+    return (
+      includesNormalized(p.name, searchQuery) ||
+      includesNormalized(p.productName, searchQuery) ||
+      includesNormalized(p.brand || p.brandName, searchQuery) ||
+      includesNormalized(p.categoryName || p.mainCategoryName, searchQuery) ||
+      includesNormalized(p.supplierName || p.supplierProductName, searchQuery) ||
+      includesNormalized(p.sku, searchQuery) ||
+      includesNormalized(p.barcode, searchQuery)
+    );
+  });
+
+  const handleProductSelect = (product) => {
+    const productId = typeof product === 'object' ? product?.id : product;
+    if (!productId) return;
+    if (typeof product === 'object') {
+      setProducts((current) => (
+        current.some((item) => item.id === productId) ? current : [normalizeEslProduct(product), ...current].filter(Boolean)
+      ));
+    }
+    setSelectedProductId((prev) => (prev === productId ? '' : productId));
+    setProductSearch('');
+    setProductSearchResults([]);
+  };
+
+  const handleDeviceSelect = (deviceId) => {
+    setSelectedDeviceId((prev) => (prev === deviceId ? '' : deviceId));
+  };
+
+  const handleTemplateSelect = (templateId) => {
+    setSelectedTemplate((prev) => (prev === templateId ? '' : templateId));
+  };
+
+  const handleSendToDevice = async (templateOverride) => {
+    const requestedTemplate = typeof templateOverride === 'string' && templateOverride.trim() ?
+      templateOverride
+      : selectedTemplate;
+    const effectiveTemplate = resolveTemplateForPricing(requestedTemplate, selectedProductPricing);
+
+    if (!selectedProductId || !selectedProduct || !selectedProductPricing) {
+      showToast('error', 'Ürün Seçilmedi', 'Etikete göndermek için önce geçerli bir ürün seçin.');
+      return;
+    }
+
+    if (!selectedDeviceId || !effectiveTemplate) {
+      showToast('error', 'Eksik Bilgi', 'Lütfen cihaz ve şablon seçimi yapın.');
+      return;
+    }
+
+    // Ref-tabanlı kilit: çift tıklama ve yarış koşulunu önler
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+
+    const payload = { deviceId: selectedDeviceId, productId: selectedProductId, template: effectiveTemplate };
+
+    let timeoutId;
+    try {
+      const result = await Promise.race([
+        eslService.sendToDevice(payload),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uğradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
+        }),
+      ]);
+      setLastPreview({
+        product: selectedProduct,
+        pricing: selectedProductPricing,
+        template: effectiveTemplate,
+        deviceId: selectedDeviceId,
+      });
+      setSelectedProductId('');
+      setSelectedDeviceId('');
+      setSelectedTemplate('standard');
+      setProductSearch('');
+      setProductSearchResults([]);
+      setScanMatch(null);
+      setScanError('');
+      showToast('success', 'İstek Oluşturuldu', result.message || 'Etiket güncellemesi kuyruğa alındı.');
+    } catch (err) {
+      showToast('error', 'Gönderim Hatası', err?.message || 'Etiket gönderilemedi.');
+    } finally {
+      clearTimeout(timeoutId);
+      sendingRef.current = false;
+      refreshAfterSend().catch(() => {});
+    }
+  };
+
+  const handleScanSubmit = async (event) => {
+    event.preventDefault();
+    const token = barcodeLookupService.normalizeScanValue(scanValue);
+    if (!token) return;
+
+    setScanLoading(true);
+    setScanError('');
+    setScanMatch(null);
+
+    try {
+      const result = await barcodeLookupService.resolveLabelScan(token, { products, devices });
+      if (result.kind === 'not-found' || result.kind === 'none') {
+        setScanError('Ürün veya etiket kaydı bulunamadı');
+        return;
+      }
+
+      setScanMatch(result);
+
+      if (result.device?.id) {
+        setSelectedDeviceId(result.device.id);
+      }
+
+      if (result.product?.id) {
+        setProducts((current) => (
+          current.some((item) => item.id === result.product.id) ? current : [normalizeEslProduct(result.product), ...current].filter(Boolean)
+        ));
+        setSelectedProductId(result.product.id);
+      }
+    } catch (error) {
+      setScanError(error.message || 'Tarama sonucu işlenemedi');
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  const clearScanResult = () => {
+    setScanValue('');
+    setScanMatch(null);
+    setScanError('');
+  };
+
+  const handleQuickTemplateApply = async (templateId) => {
+    setSelectedTemplate(resolveTemplateForPricing(templateId, selectedProductPricing));
+    await handleSendToDevice(templateId);
+  };
+
+  const resolvePreviousSalePrice = (product) => {
+    if (!product) return null;
+    const direct = Number(product.previousSalePrice ?? product.previousPrice ?? product.oldPrice);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+
+    const events = [
+      ...(Array.isArray(product.priceEvents) ? product.priceEvents : []),
+      ...(Array.isArray(product.priceHistory) ? product.priceHistory : []),
+    ]
+      .map((event) => ({
+        at: event.createdAt || event.at || event.date || event.updatedAt || '',
+        salePrice: Number(event.salePrice ?? event.price ?? event.currentPrice ?? event.newPrice),
+        previousSalePrice: Number(event.previousSalePrice ?? event.previousPrice),
+      }))
+      .filter((event) => event.at || Number.isFinite(event.previousSalePrice))
+      .sort((left, right) => new Date(right.at || 0).getTime() - new Date(left.at || 0).getTime());
+
+    const explicit = events.find((event) => Number.isFinite(event.previousSalePrice) && event.previousSalePrice > 0)?.previousSalePrice;
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+    const current = Number(product.salePrice ?? product.currentPrice ?? product.price);
+    const previousFromHistory = events.find((event) => Number.isFinite(event.salePrice) && event.salePrice > 0 && Math.round(event.salePrice * 100) !== Math.round(current * 100))?.salePrice;
+    if (Number.isFinite(previousFromHistory) && previousFromHistory > 0) return previousFromHistory;
+
+    return Number.isFinite(current) && current > 0 ? Number((current * 1.15).toFixed(2)) : null;
+  };
+
+  const resolvedScanProduct = scanMatch?.product || null;
+  const resolvedScanDevice = scanMatch?.device || (resolvedScanProduct ? devices.find((item) => item.assignedProductId === resolvedScanProduct.id) || null : null);
+  const scanTemplateLabel = TEMPLATES.find((item) => item.id === (resolvedScanDevice?.template || selectedTemplate))?.label || '-';
+
+  const handleClearHistory = async () => {
+    setConfirmClearOpen(false);
+    try {
+      await eslService.clearHistory();
+      setHistory([]);
+      showToast('success', 'Temizlendi', 'Güncelleme geçmişi başarıyla silindi.');
+      await loadData({ silent: true });
+    } catch (err) {
+      showToast('error', 'Hata', 'Geçmiş temizlenemedi: ' + err.message);
+    }
+  };
+
+  const resetLabelSelection = useCallback((resultDevice = null) => {
+    setSelectedProductId('');
+    setSelectedTemplate('standard');
+    setProductSearch('');
+    setProductSearchResults([]);
+    setScanValue('');
+    setScanMatch(null);
+    setScanError('');
+    setPreviewNonce((current) => current + 1);
+
+    if (!selectedDeviceId) return;
+
+    setDevices((currentDevices) => currentDevices.map((device) => (
+      device.id === selectedDeviceId
+        ? {
+            ...device,
+            ...(resultDevice || {}),
+            assignedProductId: null,
+            product: null,
+            template: null,
+          }
+        : device
+    )));
+  }, [selectedDeviceId]);
+
+  const handleClearLabel = async () => {
+    setConfirmClearLabelOpen(false);
+    const deviceIdToClear = selectedDeviceId;
+    let clearedDeviceFromApi = null;
+
+    resetLabelSelection(selectedDevice ? {
+      ...selectedDevice,
+      assignedProductId: null,
+      product: null,
+      template: null,
+    } : null);
+
+    if (!deviceIdToClear) {
+      resetLabelSelection();
+      showToast('success', 'Önizleme Temizlendi', 'Seçili ürün ve etiket önizlemesi temizlendi.');
+      return;
+    }
+
+    if (sendingRef.current) {
+      showToast('success', 'Önizleme Temizlendi', 'Seçili ürün ve etiket önizlemesi temizlendi.');
+      return;
+    }
+    sendingRef.current = true;
+    setSending(true);
+    let timeoutId;
+    try {
+      const result = await Promise.race([
+        eslService.clearLabel(deviceIdToClear),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('İstek zaman aşımına uğradı, lütfen tekrar deneyin.')), SEND_TIMEOUT_MS);
+        }),
+      ]);
+      clearedDeviceFromApi = result?.device || null;
+      resetLabelSelection(clearedDeviceFromApi);
+      showToast('success', 'Etiket Temizlendi', result.message);
+    } catch (err) {
+      showToast('error', 'Hata', 'Etiket temizlenemedi: ' + err.message);
+    } finally {
+      clearTimeout(timeoutId);
+      try {
+        await refreshAfterSend();
+        resetLabelSelection(clearedDeviceFromApi);
+      } finally {
+        setSending(false);
+        sendingRef.current = false;
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="page-stack esl-page">
+        <PageHeader className="dashboard-hero" icon={<Monitor size={22} />} title="Etiket Yönetimi" description="Yükleniyor..." />
+        <div style={{ textAlign: 'center', padding: '3rem' }}>
+          <RefreshCw size={24} className="spin" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-stack esl-page">
+
+      <PageHeader
+        className="dashboard-hero"
+        icon={<Monitor size={22} />}
+        title="Etiket Yönetimi"
+        description="Raf etiketlerini yönetin ve cihazlara gönderin."
+        actions={(
+          <button
+            type="button"
+            className="btn btn-primary esl-refresh-devices-btn"
+            onClick={handleRefresh}
+            disabled={refreshingDevices}
+          >
+            <RefreshCw size={16} className={refreshingDevices ? 'spin' : ''} />
+            {refreshingDevices ? 'Yenileniyor...' : 'Etiketleri Yenile'}
+          </button>
+        )}
+      />
+
+      <Toast toast={toast} onClose={() => setToast(null)} />
+
+      {/* Stats */}
+      <section className="mod-summary-grid four">
+        <div className="mod-stat">
+          <div className="mod-stat-icon mod-icon-blue"><Cpu size={20} /></div>
+          <div className="mod-stat-body">
+            <span className="mod-stat-label">Toplam Cihaz</span>
+            <span className="mod-stat-value">{stats?.totalDevices || 0}</span>
+            <span className="mod-stat-caption">Kayıtlı Etiket Sayısı</span>
+          </div>
+        </div>
+        <div className="mod-stat">
+          <div className="mod-stat-icon mod-icon-green"><Wifi size={20} /></div>
+          <div className="mod-stat-body">
+            <span className="mod-stat-label">Çevrimiçi</span>
+            <span className="mod-stat-value">{stats?.onlineCount || 0}</span>
+            <span className="mod-stat-caption">Bağlı cihaz</span>
+          </div>
+        </div>
+        <div className="mod-stat">
+          <div className="mod-stat-icon mod-icon-rose"><WifiOff size={20} /></div>
+          <div className="mod-stat-body">
+            <span className="mod-stat-label">Çevrimdışı</span>
+            <span className="mod-stat-value">{stats?.offlineCount || 0}</span>
+            <span className="mod-stat-caption">Erişilemeyen cihaz</span>
+          </div>
+        </div>
+        <div className="mod-stat">
+          <div className="mod-stat-icon mod-icon-violet"><History size={20} /></div>
+          <div className="mod-stat-body">
+            <span className="mod-stat-label">Toplam Güncelleme</span>
+            <span className="mod-stat-value">{stats?.totalUpdates || 0}</span>
+            <span className="mod-stat-caption">Gönderilen etiket</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Main Layout: Left (form) + Right (preview) */}
+      <div className="esl-main-layout">
+        {/* LEFT: Configuration */}
+        <div className="esl-config-panel">
+          <div className="mod-card esl-scan-panel">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-indigo"><QrCode size={18} /></div>
+              <div><h3>Hızlı Etiket Tarama</h3><p>Barkod veya cihaz ID tarayarak hızlı işlem yapın</p></div>
+            </div>
+            <div className="esl-form-body">
+              <ScanInput
+                value={scanValue}
+                onChange={(value) => {
+                  setScanValue(value);
+                  if (scanError) setScanError('');
+                }}
+                onSubmit={handleScanSubmit}
+                placeholder="Barkod, QR, ESL cihaz ID veya MAC okutun"
+                loading={scanLoading}
+                buttonText="Bul"
+              />
+
+              {scanError && <div className="esl-scan-error">{scanError}</div>}
+
+              {scanMatch && (
+                <div className="esl-scan-result">
+                  <div className="esl-scan-result-head">
+                    <span className="esl-scan-kind">
+                      {scanMatch.kind === 'device' ? <Monitor size={13} /> : <ScanLine size={13} />}
+                      {scanMatch.kind === 'device' ? 'Etiket/Cihaz Eşleşti' : 'Ürün Barkodu Eşleşti'}
+                    </span>
+                    <button type="button" className="text-button" onClick={clearScanResult}>Temizle</button>
+                  </div>
+
+                  <div className="esl-scan-grid">
+                    <div><span>Ürün Adı</span><strong>{formatUnit(resolvedScanProduct?.name || '-')}</strong></div>
+                    <div><span>Barkod</span><strong>{resolvedScanProduct?.barcode || '-'}</strong></div>
+                    <div><span>Etikete Gidecek Fiyat</span><strong>₺{resolveEslDisplayPricing(resolvedScanProduct).displayPrice.toFixed(2)}</strong></div>
+                    <div><span>Mevcut Etiket Tipi</span><strong>{scanTemplateLabel}</strong></div>
+                    <div><span>ESL Cihaz ID</span><strong>{resolvedScanDevice?.id || '-'}</strong></div>
+                    <div><span>Reyon / Lokasyon</span><strong>{cleanSectionDisplayName(resolvedScanProduct?.sectionName || resolvedScanDevice?.location || '-')}</strong></div>
+                    <div><span>Son Güncelleme</span><strong>{formatDate(resolvedScanDevice?.lastSyncAt || resolvedScanProduct?.updatedAt)}</strong></div>
+                  </div>
+
+                  <div className="esl-scan-actions">
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-standard" onClick={() => handleQuickTemplateApply('standard')} disabled={!selectedDeviceId || !selectedProductId}>
+                      <LayoutTemplate size={14} /> Standart Etiket Uygula
+                    </button>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-campaign" onClick={() => handleQuickTemplateApply('campaign')} disabled={!selectedDeviceId || !selectedProductId}>
+                      Fırsat Etiketi Uygula
+                    </button>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-discount" onClick={() => handleQuickTemplateApply('discount')} disabled={!selectedDeviceId || !selectedProductId}>
+                      İndirim Etiketi Uygula
+                    </button>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-resend" onClick={() => handleSendToDevice()} disabled={!selectedDeviceId || !selectedProductId}>
+                      Etiketi Yeniden Gönder
+                    </button>
+                    <button type="button" className="btn esl-quick-action-btn esl-quick-action-match" onClick={() => {
+                      if (resolvedScanDevice?.id) setSelectedDeviceId(resolvedScanDevice.id);
+                      if (resolvedScanProduct?.id) setSelectedProductId(resolvedScanProduct.id);
+                    }} disabled={!resolvedScanDevice && !resolvedScanProduct}>
+                      <Link2 size={14} /> Eşleştirmeyi Güncelle
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Product Selection */}
+          <div className="mod-card" id="esl-product-selection">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-blue"><Package size={18} /></div>
+              <div><h3>Ürün Seçimi</h3><p>Etikete basılacak ürünü seçin</p></div>
+              <span className={`esl-section-status ${isProductSelected ? 'selected' : 'pending'}`}>
+                {isProductSelected ? <><CheckCircle2 size={14} /> Ürün seçimi yapıldı</> : <><AlertCircle size={14} /> Ürün seçimi bekleniyor</>}
+              </span>
+            </div>
+            <div className="esl-form-body">
+              <label className="field-group">
+                <span>Ürün Ara</span>
+                <div className="esl-search-input">
+                  <Search size={16} />
+                  <input
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="SKU, ürün adı veya barkod..."
+                  />
+                </div>
+              </label>
+              {productSearch.trim() && (
+                <div className="esl-search-results">
+                  {productSearchLoading && filteredProducts.length === 0 && (
+                    <div className="esl-search-empty">
+                      <RefreshCw size={16} className="spin" /> Ürünler aranıyor...
+                    </div>
+                  )}
+                  {filteredProducts.slice(0, 8).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`esl-search-item ${p.id === selectedProductId ? 'selected' : ''}`}
+                      onClick={() => handleProductSelect(p)}
+                    >
+                      <div className="esl-search-item-info">
+                        <strong>{getProductNameLabel(p)}</strong>
+                        <small>{getProductSkuLabel(p)} · {getProductBarcodeLabel(p)}</small>
+                      </div>
+                      <span className="esl-search-item-price">{getProductPriceLabel(resolveEslDisplayPricing(p))}</span>
+                    </button>
+                  ))}
+                  {productSearchLoading && filteredProducts.length > 0 && (
+                    <div className="esl-search-empty">
+                      <RefreshCw size={16} className="spin" /> Sonuçlar güncelleniyor...
+                    </div>
+                  )}
+                  {!productSearchLoading && filteredProducts.length === 0 && productSearch.trim().length >= 2 && (
+                    <div className="esl-search-empty">
+                      <AlertCircle size={16} /> Arama kriterine uygun ürün bulunamadı.
+                    </div>
+                  )}
+                </div>
+              )}
+              {previewProduct && previewPricing && (
+                <div className="esl-selected-product">
+                  <CheckCircle2 size={16} />
+                  <div>
+                    <strong>{getProductNameLabel(previewProduct)}</strong>
+                    <small>{getProductSkuLabel(previewProduct)} · {getProductPriceLabel(previewPricing)}</small>
+                  </div>
+                </div>
+              )}
+              {!selectedProduct && (
+                <label className="field-group esl-manual-select-group">
+                  <span>veya listeden seçin</span>
+                  <select value={selectedProductId} onChange={(e) => setSelectedProductId(e.target.value)}>
+                    <option value="">Ürün seçin...</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>{getProductNameLabel(p)} ({getProductSkuLabel(p)})</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </div>
+
+          {/* Device Selection */}
+          <div className="mod-card" id="esl-device-selection" ref={deviceSelectionRef}>
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-green"><Monitor size={18} /></div>
+              <div><h3>Cihaz Seçimi</h3><p>Hedef etiketi seçin</p></div>
+              <span className={`esl-section-status ${isDeviceSelected ? 'selected' : 'pending'}`}>
+                {isDeviceSelected ? 'Cihaz seçili' : <><AlertCircle size={14} /> Cihaz seçimi bekleniyor</>}
+              </span>
+            </div>
+            <div className="esl-form-body">
+              <div className="esl-device-grid">
+                {devices.map((device) => (
+                  <button
+                    key={device.id}
+                    type="button"
+                    className={`esl-device-card ${device.id === selectedDeviceId ? 'selected' : ''} ${device.status !== 'online' ? 'offline' : ''}`}
+                    onClick={() => handleDeviceSelect(device.id)}
+                  >
+                    <div className="esl-device-card-header">
+                      <span className={`esl-device-status-chip ${device.status}`}>
+                        {device.status === 'online' ? <Wifi size={13} /> : <WifiOff size={13} />}
+                        {device.status === 'online' ? 'Çevrimiçi' : 'Çevrimdışı'}
+                      </span>
+                      <span className="esl-device-signal-time">{formatDate(device.lastSeenAt || device.lastSyncAt)}</span>
+                    </div>
+
+                    <div className="esl-device-main">
+                      <strong>{device.name}</strong>
+                      <small>{getLabelLocationDisplay(device)}</small>
+                    </div>
+
+                    <div className="esl-device-meta">
+                      <span className="esl-device-meta-pill esl-device-battery-pill">
+                        <Battery size={12} /> %{device.batteryLevel}
+                      </span>
+                      <span className="esl-device-meta-pill esl-device-mac">{device.macAddress}</span>
+                    </div>
+
+                    {device.product && (
+                      <div className="esl-device-assigned">
+                        <Tag size={11} /> {getProductNameLabel(device.product)}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Template Selection */}
+          <div className="mod-card">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-violet"><Tag size={18} /></div>
+              <div><h3>Şablon Seçimi</h3><p>Etiket düzenini belirleyin</p></div>
+              <span className={`esl-section-status ${isTemplateSelected ? 'selected' : 'pending'}`}>
+                {isTemplateSelected ? <><CheckCircle2 size={14} /> Şablon seçimi yapıldı</> : <><AlertCircle size={14} /> Şablon seçimi bekleniyor</>}
+              </span>
+            </div>
+            <div className="esl-form-body">
+              <div className="esl-template-grid esl-template-grid-compact">
+                {TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    className={`esl-template-card esl-template-card-compact ${tpl.id === effectiveSelectedTemplate ? 'selected' : ''}`}
+                    onClick={() => handleTemplateSelect(tpl.id)}
+                  >
+                    <div className="esl-template-icon">
+                      {tpl.id === 'campaign' || tpl.id === 'discount' ? <Megaphone size={20} /> : <LayoutTemplate size={20} />}
+                    </div>
+                    <div className="esl-template-info">
+                      <strong>{tpl.label}</strong>
+                      <small>{tpl.desc}</small>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT: Preview + Actions */}
+        <div className="esl-preview-panel">
+          <div className="mod-card">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-amber"><Eye size={18} /></div>
+              <div><h3>Etiket Önizleme</h3><p>E-paper görünümünün canlı simülasyonu</p></div>
+            </div>
+            <div className="esl-preview-container">
+              <ESLPreview
+                key={`${selectedDeviceId || 'no-device'}-${selectedProductId || deviceLabelPreview?.product?.id || 'empty'}-${previewTemplate || 'standard'}-${previewNonce}`}
+                product={previewProduct && previewPricing ? {
+                  name: getProductNameLabel(previewProduct),
+                  barcode: getProductBarcodeLabel(previewProduct),
+                  salePrice: previewPricing.displayPrice,
+                  previousSalePrice: previewProduct.previousSalePrice || (previewPricing.hasActiveCampaign ? previewPricing.regularPrice : 0),
+                  origin: previewProduct.origin || 'Türkiye',
+                  expiryDate: previewProduct.lastPriceChangeDate || previewProduct.lastPriceChangeAt || '',
+                } : null}
+                template={previewTemplate}
+              />
+
+              <div className="esl-preview-info">
+                <div className="esl-preview-info-row">
+                  <span>Ürün:</span>
+                  <strong>{previewProduct ? getProductNameLabel(previewProduct) : previewEmptyMessage}</strong>
+                </div>
+                <div className="esl-preview-info-row">
+                  <span>SKU:</span>
+                  <strong>{previewProduct ? getProductSkuLabel(previewProduct) : '-'}</strong>
+                </div>
+                <div className="esl-preview-info-row">
+                  <span>Barkod:</span>
+                  <strong>{previewProduct ? getProductBarcodeLabel(previewProduct) : '-'}</strong>
+                </div>
+                <div className="esl-preview-info-row">
+                  <span>Etikete gidecek fiyat:</span>
+                  <strong>{previewPricing ? getProductPriceLabel(previewPricing) : '-'}</strong>
+                </div>
+                {previewPricing?.hasActiveCampaign ? (
+                  <div className="esl-preview-info-row">
+                    <span>Normal fiyat:</span>
+                    <strong>₺{previewPricing.regularPrice.toFixed(2)}</strong>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="esl-action-buttons">
+                <button
+                  className="btn esl-preview-action-btn esl-preview-refresh-btn"
+                  onClick={() => {
+                    setPreviewNonce((current) => current + 1);
+                  }}
+                  disabled={!previewProduct}
+                >
+                  <RefreshCw size={16} /> Önizlemeyi Güncelle
+                </button>
+                <button
+                  className="btn btn-primary esl-send-btn"
+                  onClick={() => handleSendToDevice()}
+                  disabled={!selectedProduct || !selectedDeviceId || (selectedDevice && selectedDevice.status !== 'online')}
+                >
+                  <Send size={16} /> {selectedDevice && selectedDevice.status !== 'online' ? 'Cihaz Çevrimdışı' : 'Cihaza Gönder'}
+                </button>
+                <button
+                  className="btn btn-danger-outline"
+                  onClick={() => setConfirmClearLabelOpen(true)}
+                  disabled={(!selectedDeviceId && !selectedProductId && !scanMatch) || sending}
+                >
+                  <XCircle size={16} /> Etiketi Temizle
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Selected Device Info */}
+          <div className="mod-card esl-device-info-card">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-green"><Cpu size={18} /></div>
+              <div><h3>Cihaz Bilgisi</h3><p>{hasSelectedDevice ? selectedDevice.name : '-'}</p></div>
+            </div>
+            <div className="esl-device-detail esl-device-detail-modern">
+              <div className="esl-device-hero">
+                <div className="esl-device-hero-title">
+                  <strong>{hasSelectedDevice ? selectedDevice.name : '-'}</strong>
+                  <span>{hasSelectedDevice ? selectedDevice.model : '-'}</span>
+                </div>
+                <div className="esl-device-hero-badges">
+                  <span className={`esl-device-status-chip ${hasSelectedDevice ? selectedDevice.status : 'pending'}`}>
+                    {hasSelectedDevice ? (selectedDevice.status === 'online' ? <Wifi size={13} /> : <WifiOff size={13} />) : <WifiOff size={13} />}
+                    {hasSelectedDevice ? (selectedDevice.status === 'online' ? 'Çevrimiçi' : 'Çevrimdışı') : '-'}
+                  </span>
+                  <span className="esl-device-battery-chip">
+                    <Battery size={13} />
+                    {hasSelectedDevice ? `%${selectedDevice.batteryLevel}` : '-'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="esl-device-grid">
+                <div className="esl-device-info-item">
+                  <span>Model</span>
+                  <strong>{hasSelectedDevice ? selectedDevice.model : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>Firmware</span>
+                  <strong>{hasSelectedDevice ? `v${selectedDevice.firmwareVersion}` : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>MAC Adresi</span>
+                  <strong>{hasSelectedDevice ? selectedDevice.macAddress : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>IP Adresi</span>
+                  <strong>{hasSelectedDevice ? (selectedDevice.ipAddress || '-') : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>Konum</span>
+                  <strong>{hasSelectedDevice ? getLabelLocationDisplay(selectedDevice) : '-'}</strong>
+                </div>
+                <div className="esl-device-info-item">
+                  <span>Son Senkron</span>
+                  <strong>{hasSelectedDevice ? formatDate(selectedDevice.lastSyncAt) : '-'}</strong>
+                </div>
+              </div>
+
+              <div className="esl-battery-panel">
+                <div className="esl-battery-panel-head">
+                  <span>Pil Seviyesi</span>
+                  <strong>{hasSelectedDevice ? `%${selectedDevice.batteryLevel}` : '-'}</strong>
+                </div>
+                <div className="esl-battery-bar esl-battery-bar-wide">
+                  <div
+                    className="esl-battery-fill"
+                    style={{ width: hasSelectedDevice ? `${selectedDevice.batteryLevel}%` : '0%' }}
+                    data-level={hasSelectedDevice ? (selectedDevice.batteryLevel > 50 ? 'high' : selectedDevice.batteryLevel > 20 ? 'mid' : 'low') : 'low'}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* History Table */}
+      <div className="mod-card esl-history-section">
+        <div className="mod-card-header">
+          <div className="mod-card-icon mod-icon-slate"><History size={18} /></div>
+          <div><h3>Güncelleme Geçmişi</h3><p>Cihazlara gönderilen etiket kayıtları</p></div>
+          {history.length > 0 && (
+            <button
+              className="btn btn-ghost btn-sm esl-clear-history-btn"
+              onClick={() => setConfirmClearOpen(true)}
+              title="Geçmişi temizle"
+            >
+              <Trash2 size={15} /> Temizle
+            </button>
+          )}
+        </div>
+        <div className="table-wrapper">
+          <table className="esl-history-table">
+            <thead>
+              <tr>
+                <th>Tarih</th>
+                <th>Cihaz</th>
+                <th>Ürün</th>
+                <th>SKU</th>
+                <th className="text-right">Fiyat</th>
+                <th>Şablon</th>
+                <th>Durum</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>
+                    <div className="esl-empty-history">
+                      <History size={32} />
+                      <p>Henüz etiket gönderimi yapılmadı.</p>
+                      <span>Yapılan etiket güncellemeleri burada listelenecektir.</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                pagedHistory.map((entry, index) => (
+                  <tr key={entry.id || `history-${index}`}>
+                    <td>{formatDate(entry.createdAt)}</td>
+                    <td>{entry.deviceName || '-'}</td>
+                    <td>{getProductNameLabel({ name: entry.productName })}</td>
+                    <td><code>{entry.productSku || 'SKU yok'}</code></td>
+                    <td className="text-right">{getProductPriceLabel({ displayPrice: entry.salePrice })}</td>
+                    <td>
+                      <span className="esl-template-badge-sm">{entry.template}</span>
+                    </td>
+                    <td>
+                      <span className={`status-badge ${entry.status === 'success' ? 'active' : 'critical'}`}>
+                        {entry.status === 'success' ? 'Başarılı' : 'Hata'}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        {history.length > 0 ? (
+          <div className="table-pagination">
+            <div className="table-pagination-summary-block">
+              <div className="table-pagination-summary">
+                <strong>Sayfa {historyPage} / {historyTotalPages}</strong>
+                <span className="table-pagination-total">· {historyStart}-{historyEnd} / {history.length} kayıt</span>
+              </div>
+            </div>
+            <div className="table-pagination-actions">
+              <button className="ghost-button" type="button" onClick={() => setHistoryPage((current) => Math.max(1, current - 1))} disabled={historyPage === 1}>Önceki</button>
+              <button className="primary-button" type="button" onClick={() => setHistoryPage((current) => Math.min(historyTotalPages, current + 1))} disabled={historyPage === historyTotalPages}>Sonraki</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <ConfirmModal
+        isOpen={confirmClearOpen}
+        title="Güncelleme Geçmişini Temizle"
+        description="Tüm güncelleme geçmişi silinsin mi? Bu işlem geri alınamaz."
+        confirmText="Geçmişi Sil"
+        cancelText="İptal"
+        tone="danger"
+        onConfirm={handleClearHistory}
+        onCancel={() => setConfirmClearOpen(false)}
+      />
+
+      <ConfirmModal
+        isOpen={confirmClearLabelOpen}
+        title="Mevcut Etiketi Temizle"
+        description={`"${selectedDevice?.name || ''}" cihazına atanmış etiket kaldırılsın mı? Cihaz bir sonraki senkronizasyonda boş ekran gösterecektir.`}
+        confirmText="Etiketi Temizle"
+        cancelText="İptal"
+        tone="danger"
+        onConfirm={handleClearLabel}
+        onCancel={() => setConfirmClearLabelOpen(false)}
+      />
+    </div>
+  );
+}

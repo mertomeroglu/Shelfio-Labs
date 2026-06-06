@@ -1,0 +1,180 @@
+.desktop-warning-card {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  right: 20px;
+  z-index: 100000;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-hover);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 500px;
+  margin: 0 auto;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.desktop-warning-close-icon {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.desktop-warning-close-icon:hover {
+  background-color: var(--surface-3);
+  color: var(--text);
+}
+
+.desktop-warning-content {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding-right: 16px;
+}
+
+.desktop-warning-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background-color: var(--warning-soft);
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.desktop-warning-text-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.desktop-warning-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.desktop-warning-description {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.desktop-warning-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.desktop-warning-btn {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: none;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+}
+
+.desktop-warning-btn:active {
+  transform: scale(0.97);
+}
+
+.desktop-warning-btn.primary {
+  background-color: var(--primary);
+  color: #ffffff;
+}
+
+.desktop-warning-btn.primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.desktop-warning-btn.secondary {
+  background-color: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.desktop-warning-btn.secondary:hover {
+  background-color: var(--bg);
+}
+
+/* Animations */
+@keyframes slide-up-warning {
+  from {
+    transform: translate3d(0, 30px, 0);
+    opacity: 0;
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up-warning 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Media Queries */
+@media (min-width: 769px) {
+  /* Center on desktop/tablets just in case, but usually hidden */
+  .desktop-warning-card {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 24px;
+    margin: 0;
+  }
+  @keyframes slide-up-warning {
+    from {
+      transform: translate3d(-50%, 30px, 0);
+      opacity: 0;
+    }
+    to {
+      transform: translate3d(-50%, 0, 0);
+      opacity: 1;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .desktop-warning-card {
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    padding: 16px;
+    gap: 12px;
+  }
+  
+  .desktop-warning-actions {
+    width: 100%;
+  }
+  
+  .desktop-warning-btn {
+    flex: 1;
+    min-height: 40px;
+  }
+}
