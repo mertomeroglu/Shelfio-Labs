@@ -1,4 +1,4 @@
-﻿import { ArrowLeft, Heart, MapPin, Sparkles, Tag, Activity, Layers, CalendarClock, Package, ShieldCheck, Shapes } from 'lucide-react';
+import { ArrowLeft, Heart, MapPin, Sparkles, Tag, Activity, Layers, CalendarClock, Package, ShieldCheck, Shapes } from 'lucide-react';
 import { Minus, Plus } from 'lucide-react';
 import { cleanSectionDisplayName, formatCurrency } from '../../services/formatters.js';
 import { getProductDisplayPrice } from '../../services/productService.js';
@@ -282,13 +282,33 @@ export default function CustomerProductDetail({
           {hasDiscount ? <span className="campaign-tag"><Tag size={12} /> {campaignInfo || 'Kampanya'}</span> : null}
         </div>
         <div className="customer-detail-action-row">
-          {currentCartQuantity > 0 ? (
+          {!stockPresentation.inStore ? (
+            <button
+              type="button"
+              className="primary-button detail-add-btn customer-detail-add-btn"
+              disabled
+              style={{
+                opacity: 0.6,
+                cursor: 'not-allowed',
+                backgroundColor: '#cbd5e1',
+                borderColor: '#cbd5e1',
+                color: '#64748b'
+              }}
+            >
+              Bu ürün şu an stokta bulunmamaktadır
+            </button>
+          ) : currentCartQuantity > 0 ? (
             <div className="customer-detail-qty-control" aria-label="Sepetteki ürün adedi">
               <button type="button" onClick={() => onUpdateCartQuantity?.(product.id, currentCartQuantity - 1)} aria-label="Adedi azalt">
                 <Minus size={17} />
               </button>
               <strong>{currentCartQuantity}</strong>
-              <button type="button" onClick={() => onUpdateCartQuantity?.(product.id, currentCartQuantity + 1)} aria-label="Adedi artır">
+              <button
+                type="button"
+                disabled={currentCartQuantity >= stockPresentation.canonicalAvailableStock}
+                onClick={() => onUpdateCartQuantity?.(product.id, currentCartQuantity + 1)}
+                aria-label="Adedi artır"
+              >
                 <Plus size={17} />
               </button>
             </div>
@@ -310,12 +330,12 @@ export default function CustomerProductDetail({
       </section>
 
       <section className="customer-section customer-product-info-grid-wrap">
-        <h3 className="customer-product-section-head"><MapPin size={18} color="#3b82f6" /> {'Ma\u011faza ve \u00dcr\u00fcn Durumu'}</h3>
+        <h3 className="customer-product-section-head"><MapPin size={18} color="#3b82f6" /> {'Mağaza ve Ürün Durumu'}</h3>
         <div className="customer-product-info-grid">
           <ProductInfoCard icon={Shapes} label="Kategori" value={resolveDisplayCategory(product)} />
           <ProductInfoCard icon={Package} label="Birim" value={product.unit || 'Adet'} />
           <ProductInfoCard icon={MapPin} label="Reyon" value={cleanSectionDisplayName(product.shelfCode || product.defaultShelfLocationCode || product.sectionName || '-')} />
-          <ProductInfoCard icon={CalendarClock} label={'Tahmini stok biti\u015fi'} value={stockPresentation.estimatedStockoutLabel} />
+          <ProductInfoCard icon={CalendarClock} label={'Tahmini stok bitişi'} value={stockPresentation.estimatedStockoutLabel} />
           <ProductInfoCard icon={CalendarClock} label="Son yenilenme" value={stockPresentation.replenishmentLabel} />
           <ProductInfoCard icon={ShieldCheck} label="Stok Durumu" value={stockPresentation.stockStatusLabel} valueClassName={stockPresentation.stockStatusClassName} />
         </div>

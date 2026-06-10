@@ -16,6 +16,9 @@ import {
   resolveCustomerCampaignTitle,
 } from './campaignPricingService.js';
 import { productService } from './productService.js';
+import { getActiveTenantId } from '../tenant/tenantContext.js';
+import { getBarcodeCandidates, normalizeBarcodeInput } from '../utils/barcode.js';
+import { storeLayoutService } from './storeLayoutService.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STOCKOUT_LOOKBACK_DAYS = 30;
@@ -23,6 +26,31 @@ const MAX_STOCKOUT_DAYS = 180;
 const REPLENISHMENT_FALLBACK_DAYS = 30;
 const CUSTOMER_CAMPAIGN_PRODUCT_SCAN_LIMIT = 180;
 const CUSTOMER_CAMPAIGN_PRODUCT_RETURN_LIMIT = 60;
+
+export const matchesCustomerCatalogBarcode = (product = {}, value = '') => {
+  if (product?.isListed === false || product?.isActive === false) return false;
+
+  const candidates = new Set(getBarcodeCandidates(value).map(normalizeBarcodeInput).filter(Boolean));
+  if (candidates.size === 0) return false;
+
+  const supplierProducts = Array.isArray(product?.supplierProducts) ? product.supplierProducts : [];
+  const exactValues = [
+    product?.barcode,
+    product?.sku,
+    product?.supplierBarcode,
+    product?.supplierSku,
+    product?.supplierProductCode,
+    ...supplierProducts
+      .filter((supplierProduct) => supplierProduct?.isActive !== false)
+      .flatMap((supplierProduct) => [
+        supplierProduct?.barcode,
+        supplierProduct?.supplierSku,
+        supplierProduct?.supplierProductCode,
+      ]),
+  ].map(normalizeBarcodeInput).filter(Boolean);
+
+  return exactValues.some((candidate) => candidates.has(candidate));
+};
 
 const normalizeListResult = (result) => {
   if (Array.isArray(result)) {
@@ -902,6 +930,78 @@ const listCatalogCampaignProducts = async () => {
 };
 
 const listCatalogCategories = async () => {
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    const tenantId = getActiveTenantId();
+
+    const categories = await prisma.category.findMany({
+      where: {
+        tenantId,
+        isActive: { not: false },
+      },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        payload: true,
+      },
+    });
+
+    const productCounts = await prisma.product.groupBy({
+      by: ['categoryId'],
+      where: {
+        tenantId,
+        isActive: { not: false },
+        isListed: { not: false },
+        stock: {
+          available: { gt: 0 },
+        },
+      },
+      _count: {
+        id: true,
+      },
+    });
+
+    const countMap = new Map();
+    productCounts.forEach((item) => {
+      if (item.categoryId) {
+        countMap.set(item.categoryId, item._count.id);
+      }
+    });
+
+    const seenIds = new Set();
+    const mapped = categories.map((category) => {
+      seenIds.add(category.id);
+      const payload = category.payload && typeof category.payload === 'object' ? category.payload : {};
+      const categoryEtiketler = dedupeTags([
+        ...normalizeTagList(payload.etiketler || category.etiketler),
+        ...normalizeTagList(payload.tags || category.tags),
+        ...normalizeTagList(payload.labels || category.labels),
+      ]);
+      return {
+        id: category.id,
+        name: category.name,
+        productCount: countMap.get(category.id) || 0,
+        isActive: category.isActive !== false,
+        etiketler: categoryEtiketler,
+      };
+    });
+
+    for (const [catId, count] of countMap.entries()) {
+      if (!seenIds.has(catId)) {
+        mapped.push({
+          id: catId,
+          name: 'Kategori',
+          productCount: count,
+          isActive: true,
+          etiketler: [],
+        });
+      }
+    }
+
+    return mapped.sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''), 'tr'));
+  }
+
   const [products, categories] = await Promise.all([
     listAllCatalogProducts({ includeGeneralCampaigns: false }),
     categoryRepo.getAll(),
@@ -1005,11 +1105,716 @@ export const customerCatalogService = {
     };
   },
 
+  async getProductByBarcode(value) {
+    const normalized = normalizeBarcodeInput(value);
+    if (!normalized) {
+      throw new AppError(400, 'Geçerli bir barkod girin');
+    }
+    const exactCandidates = getBarcodeCandidates(value);
+
+    let productId = '';
+    if (config.dataStore === 'postgres') {
+      const prisma = await getPrisma();
+      const tenantId = getActiveTenantId();
+      const product = await withPostgresQueryLogging('GET /api/customer-auth/catalog/barcode/:barcode', () => (
+        prisma.product.findFirst({
+          where: {
+            tenantId,
+            isListed: { not: false },
+            isActive: { not: false },
+            OR: [
+              { barcode: { in: exactCandidates } },
+              { sku: { in: exactCandidates } },
+              {
+                supplierProducts: {
+                  some: {
+                    isActive: { not: false },
+                    OR: [
+                      { barcode: { in: exactCandidates } },
+                      { supplierSku: { in: exactCandidates } },
+                      { supplierProductCode: { in: exactCandidates } },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          select: { id: true },
+        })
+      ));
+      productId = product?.id || '';
+    } else {
+      const products = await productRepo.getAll();
+      const product = products.find((row) => matchesCustomerCatalogBarcode(row, value));
+      productId = product?.id || '';
+    }
+
+    if (!productId) {
+      throw new AppError(404, 'Ürün bulunamadı');
+    }
+    return this.getProductById(productId);
+  },
+
   async getProductStockForecast(id) {
     const product = await productService.getById(id, { includeGeneralCampaigns: false });
     if (!product || product.isListed === false || product.isActive === false) {
       throw new AppError(404, 'Ürün bulunamadı');
     }
     return buildCustomerStockForecast(toCustomerProduct(product));
+  },
+
+  async getCartRoutePlan(items) {
+    const prisma = await getPrisma();
+    const tenantId = getActiveTenantId();
+
+    const productIds = items.map((it) => it.productId);
+    const quantityMap = new Map(items.map((it) => [it.productId, it.quantity]));
+
+    // Query active/listed products
+    const dbProducts = await prisma.product.findMany({
+      where: {
+        tenantId,
+        id: { in: productIds },
+        isListed: { not: false },
+        isActive: { not: false },
+      },
+      include: {
+        section: {
+          select: {
+            id: true,
+            name: true,
+            number: true,
+          },
+        },
+      },
+    });
+
+    const activeProductIds = new Set(dbProducts.map((p) => p.id));
+
+    // Non-existent or inactive products go to missingLocation immediately
+    const missingItems = [];
+    for (const item of items) {
+      if (!activeProductIds.has(item.productId)) {
+        missingItems.push({
+          productId: item.productId,
+          productName: "Geçersiz Ürün",
+          quantity: item.quantity,
+          unit: "adet",
+          imageUrl: "",
+          sectionName: "Lokasyon bilgisi eksik",
+          sectionNumber: null,
+          readableLocation: "Lokasyon bilgisi eksik",
+          locationCode: "",
+          routeOrder: null,
+          groupLabel: "Lokasyon bilgisi eksik",
+          locationType: "unknown",
+        });
+      }
+    }
+
+    // Load layout
+    const activeLayout = await storeLayoutService.getActiveLayout();
+    const layoutItems = activeLayout?.items || [];
+    const layoutSource = activeLayout?.source || 'fallback';
+
+    // Helper: compute item center
+    const getItemCenter = (item) => ({
+      x: item.x + item.width / 2,
+      y: item.y + item.height / 2,
+    });
+
+    // Helper: manhattan distance between two center points
+    const manhattanDist = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
+    // Helper: resolve nearby landmark for a given target point (returns label + center coords)
+    const resolveNearbyLandmark = (targetX, targetY) => {
+      // Landmarks considered: entrance, cashier, section, section_common_area
+      const LANDMARK_TYPES = new Set(['entrance', 'cashier', 'section', 'section_common_area']);
+      const LANDMARK_SEARCH_RADIUS = 400; // canvas units
+      let closest = null;
+      let closestDist = Infinity;
+      for (const item of layoutItems) {
+        if (!LANDMARK_TYPES.has(item.objectType)) continue;
+        const center = getItemCenter(item);
+        const dist = manhattanDist({ x: targetX, y: targetY }, center);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closest = { item, dist, center };
+        }
+      }
+      if (!closest || closest.dist > LANDMARK_SEARCH_RADIUS) return null;
+      const { item, center } = closest;
+      const label = item.label || item.properties?.label || '';
+      let type = item.objectType;
+      let resolvedLabel = label;
+      if (type === 'entrance') resolvedLabel = label || 'Mağaza Girişi';
+      else if (type === 'cashier') resolvedLabel = label || 'Kasa';
+      else if (type === 'section' || type === 'section_common_area') resolvedLabel = label || item.metadata?.sectionName || 'Reyon';
+      return { type, label: resolvedLabel, centerX: center.x, centerY: center.y };
+    };
+
+    // Helper: generate Turkish instruction text from layout coordinate + landmark
+    // Returns { short, details } — short is max ~1 landmark, details is verbose
+    const buildInstructionText = (targetX, targetY, layoutItem, product, sectionName, sectionNumber) => {
+      const coreParts = [];
+
+      // 1. Section / reyon identifier
+      if (sectionNumber != null) {
+        coreParts.push(`Reyon ${sectionNumber}`);
+      } else if (sectionName) {
+        coreParts.push(sectionName);
+      }
+
+      // 2. Shelf side + no (combined for brevity)
+      const shelfSide = String(product.shelfSide || '').trim().toUpperCase();
+      const shelfSideLabel = shelfSide === 'L' ? 'Sol' : shelfSide === 'R' ? 'Sağ' : '';
+      if (shelfSideLabel && product.shelfNo != null) {
+        coreParts.push(`${shelfSideLabel} Raf ${product.shelfNo}`);
+      } else if (shelfSideLabel) {
+        coreParts.push(`${shelfSideLabel} Raf`);
+      } else if (product.shelfNo != null) {
+        coreParts.push(`Raf ${product.shelfNo}`);
+      }
+
+      // 3. Shelf level
+      if (product.shelfLevel != null) {
+        coreParts.push(`${product.shelfLevel}. kat`);
+      }
+
+      // 4. Spatial relation to nearest landmark (at most 1)
+      let landmarkText = '';
+      const landmark = resolveNearbyLandmark(targetX, targetY);
+      if (landmark) {
+        const itemCenter = getItemCenter(layoutItem);
+        const dx = itemCenter.x - landmark.centerX;
+        const dy = itemCenter.y - landmark.centerY;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        if (absDx > absDy) {
+          landmarkText = dx > 0 ? `${landmark.label} sağında` : `${landmark.label} solunda`;
+        } else if (absDy > 0) {
+          landmarkText = `${landmark.label} yakınında`;
+        }
+      }
+
+      // Build details (verbose, all parts)
+      const detailParts = [...coreParts];
+      if (landmarkText) detailParts.push(landmarkText);
+      const details = detailParts.length > 0 ? detailParts.join(' · ') : null;
+
+      // Build short text: core parts + at most 1 landmark, capped at 4 segments
+      const shortParts = [...coreParts];
+      if (landmarkText && shortParts.length < 3) {
+        shortParts.push(landmarkText);
+      }
+      const short = shortParts.length > 0 ? shortParts.join(' · ') : null;
+
+      return { short, details };
+    };
+
+    const resolveNearbyLandmarkV2 = (targetX, targetY, targetItemId = '') => {
+      const landmarkTypes = new Set([
+        'section',
+        'section_common_area',
+        'cashier',
+        'entrance',
+        'exit',
+        'warehouse_door',
+        'service_area',
+        'warehouse_common_area',
+      ]);
+      let closest = null;
+      let closestDist = Infinity;
+      for (const item of layoutItems) {
+        if (targetItemId && String(item.id || '') === String(targetItemId)) continue;
+        if (!landmarkTypes.has(item.objectType)) continue;
+        const center = getItemCenter(item);
+        const distance = manhattanDist({ x: targetX, y: targetY }, center);
+        if (distance < closestDist) {
+          closestDist = distance;
+          closest = { item, center, distance };
+        }
+      }
+      if (!closest) return null;
+
+      const { item, center, distance } = closest;
+      const metadata = { ...(item.properties?.metadata || {}), ...(item.metadata || {}) };
+      const rawLabel = item.label || item.properties?.label || metadata.sectionName || '';
+      const type = item.objectType;
+      let label = rawLabel;
+      if (type === 'entrance') label = rawLabel || 'Mağaza Girişi';
+      else if (type === 'exit') label = rawLabel || 'Mağaza Çıkışı';
+      else if (type === 'cashier') label = rawLabel || 'Kasa';
+      else if (type === 'warehouse_door') label = rawLabel || 'Depo Kapısı';
+      else if (type === 'warehouse_common_area') label = rawLabel || 'Ortak Depo Alanı';
+      else if (type === 'service_area') label = rawLabel || 'Servis Alanı';
+      else if (type === 'section' || type === 'section_common_area') label = rawLabel || 'Reyon';
+
+      const dx = Number(targetX || 0) - center.x;
+      const dy = Number(targetY || 0) - center.y;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+      let direction = 'yakınında';
+      if (distance <= 80) direction = 'yanında';
+      else if (distance <= 180) direction = 'yakınında';
+      else if (absDx > absDy) direction = dx > 0 ? 'sağında' : 'solunda';
+      else direction = dy > 0 ? 'altında' : 'üstünde';
+
+      return {
+        label,
+        direction,
+        distance: Math.round(distance),
+        type,
+      };
+    };
+
+    const buildCoordinateAwareLocationText = (targetX, targetY, layoutItem, readableLocation) => {
+      const landmark = resolveNearbyLandmarkV2(targetX, targetY, layoutItem?.id || '');
+      if (!landmark?.label) {
+        const fallbackText = readableLocation || 'Raf konumu bulundu';
+        return {
+          shortText: fallbackText,
+          instructionText: fallbackText,
+          nearbyLandmark: null,
+        };
+      }
+
+      const shortText = `${landmark.label} ${landmark.direction}`;
+      return {
+        shortText,
+        instructionText: readableLocation ? `${readableLocation} · ${shortText}` : shortText,
+        nearbyLandmark: landmark,
+      };
+    };
+
+    const getLayoutMetadata = (layoutItem = {}) => ({
+      ...(layoutItem.properties?.metadata || {}),
+      ...(layoutItem.metadata || {}),
+    });
+
+    const resolveLayoutSectionId = (layoutItem = {}) => {
+      const metadata = getLayoutMetadata(layoutItem);
+      return layoutItem.linkedSectionId
+        || layoutItem.sectionId
+        || metadata.sectionId
+        || metadata.linkedSectionId
+        || layoutItem.properties?.linkedSectionId
+        || layoutItem.properties?.sectionId
+        || null;
+    };
+
+    // Helper functions for matching
+    const matchShelf = (layoutItem, product) => {
+      // Match both 'shelf' and 'shelf_stack' objectTypes
+      if (layoutItem.objectType !== 'shelf' && layoutItem.objectType !== 'shelf_stack') return false;
+
+      // Match by shelfCode if available
+      if (product.shelfCode && (layoutItem.locationCodeSnapshot === product.shelfCode || layoutItem.label === product.shelfCode)) {
+        return true;
+      }
+
+      const metadata = getLayoutMetadata(layoutItem);
+      // Match section first
+      const sectionMatch = String(resolveLayoutSectionId(layoutItem) || '') === String(product.sectionId || '');
+      if (!sectionMatch || !product.sectionId) return false;
+
+      // Match shelfSide, shelfNo, shelfLevel
+      const itemSide = String(layoutItem.properties?.shelfSide || metadata.shelfSide || metadata.side || '').trim().toUpperCase();
+      const prodSide = String(product.shelfSide || '').trim().toUpperCase();
+      if (itemSide !== prodSide || !prodSide) return false;
+
+      const itemNo = Number(layoutItem.properties?.shelfNo ?? metadata.shelfNo ?? -1);
+      const prodNo = Number(product.shelfNo ?? -2);
+      if (itemNo !== prodNo) return false;
+
+      if (layoutItem.objectType === 'shelf') {
+        const itemLevel = Number(layoutItem.properties?.shelfLevel ?? metadata.shelfLevel ?? -1);
+        const prodLevel = Number(product.shelfLevel ?? -2);
+        if (itemLevel !== prodLevel) return false;
+      }
+
+      return true;
+    };
+
+    const matchSection = (layoutItem, product) => {
+      if (layoutItem.objectType !== 'section') return false;
+      return String(resolveLayoutSectionId(layoutItem) || '') === String(product.sectionId || '');
+    };
+
+    // Map each active product to coordinates/layout items or identify as missing
+    const locatedProducts = []; // items with coordinates
+    const fallbackProducts = []; // items without coordinates but with DB location info
+    const missingProducts = []; // items with no location info
+
+    for (const product of dbProducts) {
+      const quantity = quantityMap.get(product.id) || 1;
+      const unit = product.unit || 'adet';
+      const imageUrl = product.payload?.imageUrl || product.payload?.productImageUrl || product.payload?.thumbnailUrl || product.payload?.gorselUrl || "";
+      const sectionName = cleanSectionDisplayName(product.section?.name, '');
+      const sectionNumber = product.section?.number ?? null;
+      const locationCode = product.shelfCode || "";
+
+      // Determine locationType and readableLocation first
+      let locationType = "unknown";
+      if (product.sectionId) {
+        locationType = "section";
+        if (product.shelfSide || product.shelfNo !== null || product.shelfLevel !== null) {
+          locationType = "shelf";
+        }
+      } else if (product.depotLocationCode) {
+        locationType = "warehouse";
+      } else if (product.isVirtualLocation === true || product.depotAssignmentType === 'virtual_overflow') {
+        locationType = "warehouse_common";
+      }
+
+      // Turkish readable location
+      let readableLocation = "Lokasyon bilgisi eksik";
+      if (locationType === "shelf") {
+        const parts = [];
+        if (sectionNumber != null) {
+          parts.push(`Reyon ${sectionNumber}`);
+        } else if (sectionName) {
+          parts.push(sectionName);
+        }
+        
+        let sideText = '';
+        if (product.shelfSide) {
+          const side = String(product.shelfSide).trim().toUpperCase();
+          sideText = side === 'L' ? 'Sol' : side === 'R' ? 'Sağ' : side;
+        }
+        
+        if (sideText && product.shelfNo != null) {
+          parts.push(`${sideText} Raf ${product.shelfNo}`);
+        } else {
+          if (sideText) parts.push(`${sideText} Raf`);
+          if (product.shelfNo != null) parts.push(`Raf ${product.shelfNo}`);
+        }
+        
+        if (product.shelfLevel != null) {
+          parts.push(`Kat ${product.shelfLevel}`);
+          parts.push(`Göz ${product.shelfLevel}`);
+        }
+        readableLocation = parts.join(' · ');
+      } else if (locationType === "section") {
+        readableLocation = sectionNumber != null ? `Reyon ${sectionNumber} · Ortak Alan` : `${sectionName || "Reyon"} · Ortak Alan`;
+      } else if (locationType === "warehouse") {
+        readableLocation = `Depo · ${product.depotLocationCode}`;
+      } else if (locationType === "warehouse_common") {
+        readableLocation = "Ortak Depo Alanı";
+      }
+
+      const groupLabel = sectionNumber != null ? `Reyon ${sectionNumber}` : (sectionName || "Diğer");
+
+      // Try finding coordinate match
+      let coordinateItem = null;
+
+      // 1. Try Shelf coordinate match
+      if (locationType === "shelf") {
+        coordinateItem = layoutItems.find((item) => matchShelf(item, product));
+      }
+
+      // 2. Try Section fallback coordinate match
+      if (!coordinateItem && product.sectionId) {
+        coordinateItem = layoutItems.find((item) => matchSection(item, product));
+        if (coordinateItem) {
+          locationType = "section";
+        }
+      }
+
+      const productItem = {
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unit,
+        imageUrl,
+        sectionName,
+        sectionNumber,
+        readableLocation,
+        locationCode,
+        groupLabel,
+        locationType,
+      };
+
+      if (coordinateItem && locationType !== "warehouse" && locationType !== "warehouse_common") {
+        // Compute center coordinates
+        const x = coordinateItem.x + coordinateItem.width / 2;
+        const y = coordinateItem.y + coordinateItem.height / 2;
+
+        // Build enriched instruction text from current published layout position + nearby landmarks.
+        const instructionResult = buildCoordinateAwareLocationText(x, y, coordinateItem, readableLocation);
+
+        // Confidence: 'high' for direct shelf/shelf_stack match, 'medium' for section fallback
+        const matchedDirectly = locationType === 'shelf' && (coordinateItem.objectType === 'shelf' || coordinateItem.objectType === 'shelf_stack');
+        const routeConfidence = matchedDirectly ? 'high' : 'medium';
+
+        locatedProducts.push({
+          ...productItem,
+          x,
+          y,
+          layoutItemId: coordinateItem.id || null,
+          nearbyLandmark: instructionResult.nearbyLandmark,
+          shortText: instructionResult.shortText,
+          instructionText: instructionResult.instructionText,
+          routeConfidence,
+          layoutItem: coordinateItem,
+        });
+      } else if (locationType !== "unknown") {
+        if (locationType === "warehouse" || locationType === "warehouse_common") {
+          productItem.groupLabel = "Depo";
+        }
+        fallbackProducts.push({
+          ...productItem,
+          x: null,
+          y: null,
+          layoutItemId: null,
+          nearbyLandmark: null,
+          shortText: productItem.readableLocation,
+          instructionText: productItem.readableLocation,
+          routeConfidence: 'low',
+        });
+      } else {
+        productItem.groupLabel = "Reyon bilgisi yok";
+        missingProducts.push(productItem);
+      }
+    }
+
+    let route = [];
+    let finalSource = layoutSource;
+    let routeMode = 'coordinates';
+
+    // Build a product lookup map for O(1) access during sorting
+    const dbProductById = new Map(dbProducts.map((p) => [p.id, p]));
+
+    // Deterministic sort comparator for products at the same coordinate
+    const compareProductsInGroup = (a, b) => {
+      const pa = dbProductById.get(a.productId) || {};
+      const pb = dbProductById.get(b.productId) || {};
+      const secA = a.sectionNumber ?? Infinity;
+      const secB = b.sectionNumber ?? Infinity;
+      if (secA !== secB) return secA - secB;
+      const sideA = String(pa.shelfSide || '').toUpperCase();
+      const sideB = String(pb.shelfSide || '').toUpperCase();
+      if (sideA !== sideB) {
+        if (sideA === 'L') return -1;
+        if (sideB === 'L') return 1;
+        return sideA.localeCompare(sideB, 'tr');
+      }
+      const noA = pa.shelfNo ?? 0;
+      const noB = pb.shelfNo ?? 0;
+      if (noA !== noB) return noA - noB;
+      const lvA = pa.shelfLevel ?? 0;
+      const lvB = pb.shelfLevel ?? 0;
+      if (lvA !== lvB) return lvA - lvB;
+      return (a.productName || '').localeCompare(b.productName || '', 'tr');
+    };
+
+    // Route calculation
+    if (locatedProducts.length > 0) {
+      // Find entrance start point
+      const entrance = layoutItems.find((item) => item.objectType === 'entrance');
+      let currentX, currentY;
+      if (entrance) {
+        currentX = entrance.x + entrance.width / 2;
+        currentY = entrance.y + entrance.height / 2;
+      } else {
+        // Fallback: topmost-leftmost layout item center
+        let minSum = Infinity;
+        let fallbackItem = null;
+        for (const li of layoutItems) {
+          const cx = li.x + li.width / 2;
+          const cy = li.y + li.height / 2;
+          if (cx + cy < minSum) {
+            minSum = cx + cy;
+            fallbackItem = li;
+          }
+        }
+        currentX = fallbackItem ? (fallbackItem.x + fallbackItem.width / 2) : 0;
+        currentY = fallbackItem ? (fallbackItem.y + fallbackItem.height / 2) : 0;
+      }
+
+      // Group products by coordinates (exact same coordinates = same stop)
+      const coordinateGroups = [];
+      for (const item of locatedProducts) {
+        const key = `${item.x},${item.y}`;
+        let group = coordinateGroups.find((g) => g.key === key);
+        if (!group) {
+          group = {
+            key,
+            x: item.x,
+            y: item.y,
+            products: [],
+          };
+          coordinateGroups.push(group);
+        }
+        group.products.push(item);
+      }
+
+      // Greedy nearest-neighbor routing of coordinate groups
+      // Deterministic tiebreaker: sectionNumber → shelfSide → shelfNo → productName
+      const unvisitedGroups = [...coordinateGroups];
+      const sortedGroups = [];
+      const groupDistances = []; // distance from previous stop
+
+      while (unvisitedGroups.length > 0) {
+        let bestIndex = 0;
+        let minDistance = Infinity;
+
+        for (let i = 0; i < unvisitedGroups.length; i++) {
+          const group = unvisitedGroups[i];
+          const dist = Math.abs(currentX - group.x) + Math.abs(currentY - group.y);
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestIndex = i;
+          } else if (dist === minDistance) {
+            // Deterministic tiebreaker: compare first product in each group
+            const curBest = unvisitedGroups[bestIndex];
+            const a = curBest.products[0] || {};
+            const b = group.products[0] || {};
+            if (compareProductsInGroup(b, a) < 0) {
+              bestIndex = i;
+            }
+          }
+        }
+
+        const nextGroup = unvisitedGroups.splice(bestIndex, 1)[0];
+        groupDistances.push(minDistance);
+        sortedGroups.push(nextGroup);
+        currentX = nextGroup.x;
+        currentY = nextGroup.y;
+      }
+
+      // Flatten groups and sort products inside each group stably
+      let orderIndex = 1;
+      for (let gi = 0; gi < sortedGroups.length; gi++) {
+        const group = sortedGroups[gi];
+        const distFromPrev = groupDistances[gi] || 0;
+        const sortedProductsInGroup = group.products.sort(compareProductsInGroup);
+
+        for (const item of sortedProductsInGroup) {
+          const cleanItem = {
+            productId: item.productId,
+            productName: item.productName,
+            quantity: item.quantity,
+            unit: item.unit,
+            imageUrl: item.imageUrl,
+            sectionName: item.sectionName,
+            sectionNumber: item.sectionNumber,
+            readableLocation: item.readableLocation,
+            locationCode: item.locationCode,
+            routeOrder: orderIndex,
+            groupLabel: item.groupLabel,
+            locationType: item.locationType,
+            location: {
+              type: item.locationType,
+              x: item.x ?? null,
+              y: item.y ?? null,
+              layoutItemId: item.layoutItemId ?? null,
+              readableLocation: item.readableLocation,
+              shortText: item.shortText ?? item.instructionText ?? item.readableLocation,
+              nearbyLandmark: item.nearbyLandmark ?? null,
+              instructionText: item.instructionText ?? null,
+              details: item.instructionText ?? item.readableLocation,
+              pickOrder: orderIndex,
+              routeDistanceFromPrevious: Math.round(distFromPrev),
+              routeConfidence: item.routeConfidence || 'high',
+            },
+          };
+          route.push(cleanItem);
+          orderIndex++;
+        }
+      }
+
+      // Append fallbackProducts at the end of the route
+      if (fallbackProducts.length > 0) {
+        const sortedFallback = fallbackProducts.sort(compareProductsInGroup);
+        for (const item of sortedFallback) {
+          const cleanItem = {
+            productId: item.productId,
+            productName: item.productName,
+            quantity: item.quantity,
+            unit: item.unit,
+            imageUrl: item.imageUrl,
+            sectionName: item.sectionName,
+            sectionNumber: item.sectionNumber,
+            readableLocation: item.readableLocation,
+            locationCode: item.locationCode,
+            routeOrder: orderIndex,
+            groupLabel: item.groupLabel,
+            locationType: item.locationType,
+            location: {
+              type: item.locationType,
+              x: null,
+              y: null,
+              layoutItemId: null,
+              readableLocation: item.readableLocation,
+              shortText: item.shortText ?? item.instructionText ?? item.readableLocation,
+              nearbyLandmark: null,
+              instructionText: item.instructionText ?? null,
+              details: null,
+              pickOrder: orderIndex,
+              routeDistanceFromPrevious: null,
+              routeConfidence: 'low',
+            },
+          };
+          route.push(cleanItem);
+          orderIndex++;
+        }
+      }
+    } else if (fallbackProducts.length > 0) {
+      // Fallback: no coordinate data available, sort by static fields
+      const sortedFallback = fallbackProducts.sort(compareProductsInGroup);
+
+      let orderIndex = 1;
+      for (const item of sortedFallback) {
+        const cleanItem = {
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          unit: item.unit,
+          imageUrl: item.imageUrl,
+          sectionName: item.sectionName,
+          sectionNumber: item.sectionNumber,
+          readableLocation: item.readableLocation,
+          locationCode: item.locationCode,
+          routeOrder: orderIndex,
+          groupLabel: item.groupLabel,
+          locationType: item.locationType,
+          location: {
+            type: item.locationType,
+            x: null,
+            y: null,
+            layoutItemId: null,
+            readableLocation: item.readableLocation,
+            shortText: item.shortText ?? item.instructionText ?? item.readableLocation,
+            nearbyLandmark: null,
+            instructionText: item.instructionText ?? null,
+            details: null,
+            pickOrder: orderIndex,
+            routeDistanceFromPrevious: null,
+            routeConfidence: 'low',
+          },
+        };
+        route.push(cleanItem);
+        orderIndex++;
+      }
+
+      finalSource = 'fallback';
+      routeMode = 'fallback_code';
+    }
+
+    const missingLocation = [...missingProducts, ...missingItems];
+
+    return {
+      success: true,
+      source: finalSource,
+      route,
+      missingLocation,
+      summary: {
+        totalItems: route.length + missingLocation.length,
+        locatedItems: route.length,
+        missingLocationCount: missingLocation.length,
+        routeMode,
+      },
+    };
   },
 };

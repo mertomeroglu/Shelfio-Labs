@@ -503,6 +503,10 @@ const deliverNotification = async ({
     beaconDeviceId: context.beaconDeviceId,
     status: SHOWN_STATUS,
     dedupeKey,
+    locationZoneId: context.locationZoneId,
+    beaconDeviceId: context.beaconDeviceId,
+    status: SHOWN_STATUS,
+    dedupeKey,
   });
 
   return { shouldNotify: true, notification: mapNotificationForClient(created.notification) };
@@ -548,13 +552,13 @@ const buildCustomerCampaignCandidate = async ({ context }) => {
     maxPerVisit: 1,
     notification: {
       type: 'PROXIMITY_CAMPAIGN',
-      title: matched.customerTitle || matched.publicName || matched.displayName || matched.name || 'YakÄ±ndaki kampanya',
+      title: matched.customerTitle || matched.publicName || matched.displayName || matched.name || 'Yakındaki kampanya',
       body: firstProduct?.name
-        ? `${firstProduct.name} ve bu bÃ¶lgedeki seÃ§ili Ã¼rÃ¼nlerde kampanya var.`
-        : 'Bu bÃ¶lgede aktif kampanya var.',
+        ? `${firstProduct.name} ve bu bölgedeki seçili ürünlerde kampanya var.`
+        : 'Bu bölgede aktif kampanya var.',
       severity: 'success',
       actionType: 'campaign',
-      actionLabel: 'KampanyayÄ± GÃ¶r',
+      actionLabel: 'Kampanyayı Gör',
       actionUrl: categoryId ? `/musteri/kategori/${encodeURIComponent(String(categoryId))}` : '/musteri/kampanyalar',
       payload: {
         campaignId: matched.id,
@@ -586,11 +590,11 @@ const buildCustomerCategoryCandidate = async ({ context }) => {
     cooldownMinutes: DEFAULT_CUSTOMER_DOMAIN_COOLDOWN_MINUTES,
     notification: {
       type: 'PROXIMITY_CATEGORY',
-      title: product.category?.name ? `${product.category.name} reyonundasÄ±n` : 'YakÄ±ndaki Ã¼rÃ¼nler',
-      body: `Bu bÃ¶lgede ${product.name || 'seÃ§ili Ã¼rÃ¼nler'} gibi Ã¼rÃ¼nleri inceleyebilirsin.`,
+      title: product.category?.name ? `${product.category.name} reyonundasın` : 'Yakındaki ürünler',
+      body: `Bu bölgede ${product.name || 'seçili ürünler'} gibi ürünleri inceleyebilirsin.`,
       severity: 'info',
       actionType: 'route',
-      actionLabel: 'ÃœrÃ¼nleri GÃ¶r',
+      actionLabel: 'Ürünleri Gör',
       actionUrl: `/musteri/kategori/${encodeURIComponent(product.category?.code || product.categoryId)}`,
       payload: {
         categoryId: product.categoryId,
@@ -1329,7 +1333,7 @@ const genericRuleToCandidate = (rule) => {
       body: rule.body,
       severity: payload.severity || 'info',
       actionType: rule.actionType || payload.actionType || 'route',
-      actionLabel: payload.actionLabel || 'Ä°ncele',
+      actionLabel: payload.actionLabel || 'İncele',
       actionUrl: isCustomerActionUrl(actionUrl) ? actionUrl : '/musteri',
       payload,
     },

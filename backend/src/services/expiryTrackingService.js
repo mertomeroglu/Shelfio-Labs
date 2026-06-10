@@ -5,6 +5,7 @@ import { normalizeDateOnly } from '../utils/batchExpiry.js';
 import { parsePagePagination, resolveWhitelistedSort } from '../utils/pagination.js';
 import { resolveSktPolicy, SKT_POLICIES } from '../utils/sktPolicy.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
+import { config } from '../config/config.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 10;
@@ -21,16 +22,30 @@ const normalizeQueryDate = (value) => {
   return VALID_DATE_ONLY.test(normalized) ? normalized : '';
 };
 
+const currentStoreDate = (now = new Date()) => {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: config.timezone || 'Europe/Istanbul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${byType.year}-${byType.month}-${byType.day}`;
+  } catch {
+    return normalizeQueryDate(now);
+  }
+};
+
 const positiveQuantityWhere = {
   OR: [
-    { totalQuantity: { gt: 0 } },
     { warehouseQuantity: { gt: 0 } },
     { shelfQuantity: { gt: 0 } },
   ],
 };
 
 export const buildActiveExpiryBatchWhere = ({ today, expiredOnly = false, includeToday = false } = {}) => {
-  const date = normalizeQueryDate(today || new Date());
+  const date = normalizeQueryDate(today || currentStoreDate());
   return {
     ...positiveQuantityWhere,
     skt: expiredOnly
@@ -75,7 +90,7 @@ const buildFilteredBatchCte = ({ filters, tenantId, today }) => {
     Prisma.sql`COALESCE(p.is_active, TRUE) <> FALSE`,
     Prisma.sql`COALESCE(p.is_listed, TRUE) <> FALSE`,
     Prisma.sql`b.skt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`,
-    Prisma.sql`(COALESCE(b.total_quantity, 0) > 0 OR COALESCE(b.warehouse_quantity, 0) > 0 OR COALESCE(b.shelf_quantity, 0) > 0)`,
+    Prisma.sql`(COALESCE(b.warehouse_quantity, 0) > 0 OR COALESCE(b.shelf_quantity, 0) > 0 OR COALESCE(b.total_quantity, 0) > 0)`,
   ];
 
   if (filters.search) {
@@ -106,6 +121,7 @@ const buildFilteredBatchCte = ({ filters, tenantId, today }) => {
         COALESCE(b.warehouse_quantity, 0)::int AS "warehouseQuantity",
         COALESCE(b.shelf_quantity, 0)::int AS "shelfQuantity",
         GREATEST(COALESCE(b.total_quantity, 0), COALESCE(b.warehouse_quantity, 0) + COALESCE(b.shelf_quantity, 0))::int AS "totalQuantity",
+        COALESCE(b.total_quantity, 0)::int AS "declaredTotalQuantity",
         COALESCE(c.name, '-') AS "categoryName",
         COALESCE(c.code, '') AS "categoryCode",
         COALESCE(s.name, '-') AS "supplierName",
@@ -179,13 +195,53 @@ const mapRow = (row = {}) => {
     warehouseQuantity: Number(row.warehouseQuantity || 0),
     shelfQuantity: Number(row.shelfQuantity || 0),
     totalQuantity: Number(row.totalQuantity || 0),
+    declaredTotalQuantity: Number(row.declaredTotalQuantity || 0),
+    hasQuantityMismatch: Number(row.declaredTotalQuantity || 0) !== Number(row.totalQuantity || 0),
+    disposalEligible: daysToExpiry < 0
+      && sktPolicy.policy === SKT_POLICIES.REQUIRED
+      && Number(row.totalQuantity || 0) > 0,
     unitCost: Number(row.unitCost || 0),
     sktPolicy: sktPolicy.policy,
     sktPolicyReason: sktPolicy.reason || '',
-    isSktApplicable: sktPolicy.policy !== SKT_POLICIES.NOT_APPLICABLE,
+    isSktApplicable: sktPolicy.policy === SKT_POLICIES.REQUIRED,
     ...riskMeta(daysToExpiry),
   };
 };
+
+const requiredOnly = (row = {}) => row.sktPolicy === SKT_POLICIES.REQUIRED;
+
+const paginateRows = (rows = [], pagination) => rows.slice(pagination.skip, pagination.skip + pagination.limit);
+
+const buildSummary = (rows = []) => rows.reduce((acc, row) => {
+  const days = Number(row.daysToExpiry || 0);
+  acc.totalRows += 1;
+  if (days < 0) acc.expired += 1;
+  else if (days === 0) acc.today += 1;
+  else if (days <= 3) acc.in3 += 1;
+  else if (days <= 7) acc.in7 += 1;
+  else acc.later += 1;
+  if (days <= 7) acc.riskValue += Number(row.unitCost || 0) * Number(row.totalQuantity || 0);
+  return acc;
+}, { totalRows: 0, expired: 0, today: 0, in3: 0, in7: 0, later: 0, riskValue: 0 });
+
+const buildCategoryBuckets = (rows = []) => {
+  const buckets = new Map();
+  rows
+    .filter((row) => Number(row.daysToExpiry || 0) <= 7)
+    .forEach((row) => {
+      const label = row.categoryName || 'Kategori yok';
+      buckets.set(label, (buckets.get(label) || 0) + 1);
+    });
+  return [...buckets.entries()]
+    .map(([label, value]) => ({ label, value, tone: 'primary' }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, 'tr'))
+    .slice(0, 5);
+};
+
+const buildOptions = (rows = []) => ({
+  categories: [...new Set(rows.map((row) => row.categoryName).filter((value) => value && value !== '-'))].sort((a, b) => a.localeCompare(b, 'tr')),
+  suppliers: [...new Set(rows.map((row) => row.supplierName).filter((value) => value && value !== '-'))].sort((a, b) => a.localeCompare(b, 'tr')),
+});
 
 const paginationMeta = (pagination, total) => ({
   mode: 'offset',
@@ -202,7 +258,7 @@ export const expiryTrackingService = {
   async getReadModel(query = {}) {
     const prisma = await getPrisma();
     const tenantId = getActiveTenantId();
-    const today = normalizeQueryDate(query.today || new Date());
+    const today = normalizeQueryDate(query.today || currentStoreDate());
     const filters = normalizeFilters(query);
     const expiredPagination = parsePagePagination(
       { page: query.expiredPage, limit: query.expiredLimit },
@@ -217,76 +273,45 @@ export const expiryTrackingService = {
     const cte = buildFilteredBatchCte({ filters, tenantId, today });
 
     const [
-      expiredRows,
-      trackingRows,
-      summaryRows,
-      categoryBuckets,
-      optionRows,
+      expiredRawRows,
+      trackingRawRows,
     ] = await withPostgresQueryLogging('GET /api/stock/expiry-tracking', () => Promise.all([
       prisma.$queryRaw`${cte}
         SELECT * FROM filtered
         WHERE "daysToExpiry" < 0
-        ORDER BY ${SORT_SQL[expiredSort]}
-        LIMIT ${expiredPagination.limit} OFFSET ${expiredPagination.skip}`,
+        ORDER BY ${SORT_SQL[expiredSort]}`,
       prisma.$queryRaw`${cte}
         SELECT * FROM filtered
         WHERE "daysToExpiry" >= 0
-        ORDER BY ${SORT_SQL[trackingSort]}
-        LIMIT ${trackingPagination.limit} OFFSET ${trackingPagination.skip}`,
-      prisma.$queryRaw`${cte}
-        SELECT
-          COUNT(*)::int AS "totalRows",
-          COUNT(*) FILTER (WHERE "daysToExpiry" < 0)::int AS expired,
-          COUNT(*) FILTER (WHERE "daysToExpiry" = 0)::int AS today,
-          COUNT(*) FILTER (WHERE "daysToExpiry" BETWEEN 1 AND 3)::int AS "in3",
-          COUNT(*) FILTER (WHERE "daysToExpiry" BETWEEN 4 AND 7)::int AS "in7",
-          COUNT(*) FILTER (WHERE "daysToExpiry" > 7)::int AS later,
-          COALESCE(SUM("unitCost" * "totalQuantity") FILTER (WHERE "daysToExpiry" <= 7), 0)::numeric AS "riskValue"
-        FROM filtered`,
-      prisma.$queryRaw`${cte}
-        SELECT "categoryName" AS label, COUNT(*)::int AS value
-        FROM filtered
-        WHERE "daysToExpiry" <= 7
-        GROUP BY "categoryName"
-        ORDER BY value DESC, label ASC
-        LIMIT 5`,
-      prisma.$queryRaw`${cte}
-        SELECT
-          ARRAY_REMOVE(ARRAY_AGG(DISTINCT "categoryName" ORDER BY "categoryName"), '-') AS categories,
-          ARRAY_REMOVE(ARRAY_AGG(DISTINCT "supplierName" ORDER BY "supplierName"), '-') AS suppliers
-        FROM filtered`,
+        ORDER BY ${SORT_SQL[trackingSort]}`,
     ]));
 
-    const summary = summaryRows[0] || {};
-    const expiredTotal = Number(summary.expired || 0);
-    const trackingTotal = Math.max(0, Number(summary.totalRows || 0) - expiredTotal);
+    const expiredRequiredRows = expiredRawRows.map(mapRow).filter(requiredOnly);
+    const trackingRequiredRows = trackingRawRows.map(mapRow).filter(requiredOnly);
+    const allRequiredRows = [...expiredRequiredRows, ...trackingRequiredRows];
+    const summary = buildSummary(allRequiredRows);
+    const expiredTotal = expiredRequiredRows.length;
+    const trackingTotal = trackingRequiredRows.length;
     return {
-      expiredRows: expiredRows.map(mapRow),
-      trackingRows: trackingRows.map(mapRow),
+      expiredRows: paginateRows(expiredRequiredRows, expiredPagination),
+      trackingRows: paginateRows(trackingRequiredRows, trackingPagination),
       pagination: {
         expired: paginationMeta(expiredPagination, expiredTotal),
         tracking: paginationMeta(trackingPagination, trackingTotal),
       },
       summary: {
-        totalRows: Number(summary.totalRows || 0),
-        expired: Number(summary.expired || 0),
-        today: Number(summary.today || 0),
-        in3: Number(summary.in3 || 0),
-        in7: Number(summary.in7 || 0),
-        later: Number(summary.later || 0),
+        totalRows: summary.totalRows,
+        expired: summary.expired,
+        today: summary.today,
+        in3: summary.in3,
+        in7: summary.in7,
+        later: summary.later,
         riskValue: Number(summary.riskValue || 0),
       },
       charts: {
-        categoryBuckets: categoryBuckets.map((item) => ({
-          label: item.label || 'Kategori yok',
-          value: Number(item.value || 0),
-          tone: 'primary',
-        })),
+        categoryBuckets: buildCategoryBuckets(allRequiredRows),
       },
-      options: {
-        categories: optionRows[0]?.categories || [],
-        suppliers: optionRows[0]?.suppliers || [],
-      },
+      options: buildOptions(allRequiredRows),
       filters,
       sort: { expired: expiredSort, tracking: trackingSort },
     };

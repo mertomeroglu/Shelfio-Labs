@@ -19,6 +19,7 @@ import { logisticsTariffService } from './logisticsTariffService.js';
 import { warehouseService } from './warehouseService.js';
 import { config } from '../config/config.js';
 import { getPrisma } from '../providers/postgresProvider.js';
+import { getActiveTenantId } from '../tenant/tenantContext.js';
 import { createPostgresRepository } from '../repositories/postgresRepository.js';
 import { withPostgresQueryLogging } from '../utils/performanceLogger.js';
 import { decodeCursor, encodeCursor, parseBooleanQuery, parseLimit, parsePagePagination, resolvePaginationMode, resolveWhitelistedSort } from '../utils/pagination.js';
@@ -34,6 +35,17 @@ import {
   buildPurchaseOrderStatusMirrors,
   canTransitionPurchaseOrderStatus,
 } from '../domain/purchaseOrderLifecycle.js';
+import {
+  PURCHASE_SUGGESTION_REASON_TEXT,
+  decidePurchaseSuggestion,
+  hasRequiredOrderData,
+} from '../domain/purchaseSuggestionPolicy.js';
+import {
+  addCalendarDays,
+  buildPurchaseSalesSignalsMap,
+  createEmptyDemandSignals,
+  getPurchaseSalesWindow,
+} from '../domain/purchaseSuggestionDemand.js';
 
 const ORDER_STATUSES = PURCHASE_ORDER_STATUSES;
 const AUTO_MANAGED_SEQUENCE = PURCHASE_ORDER_AUTO_SEQUENCE;
@@ -107,8 +119,13 @@ const PROCUREMENT_STATUS_NOTIFICATION_POLICY = Object.freeze({
 
 const SUGGESTION_STATUS_LABELS = {
   pending: 'Bekliyor',
+  manual_evaluation: 'Manuel değerlendirme',
+  skipped: 'Öneriye alınmadı',
   approved: 'Onaylandı',
   rejected: 'Reddedildi',
+  converted: 'Siparişe dönüştü',
+  cancelled: 'İptal edildi',
+  expired: 'Süresi doldu',
   stale: 'Yeniden hesap gerekli',
 };
 
@@ -127,12 +144,6 @@ const toDateKey = (value) => {
   const parsed = normalizeDate(value);
   if (!parsed) return null;
   return parsed.toISOString().slice(0, 10);
-};
-
-const addDays = (baseDate, days) => {
-  const target = new Date(baseDate);
-  target.setDate(target.getDate() + Math.max(0, Math.floor(Number(days) || 0)));
-  return target;
 };
 
 const isWithinDateRange = (date, start, end) => {
@@ -217,81 +228,6 @@ const normalizeGenerationOptions = (options = {}) => {
     safetyDays,
     coverageDays,
   };
-};
-
-const getDemandSignals = ({ sold7, sold14, sold30, avg7, avg14, avg30 }) => {
-  const weighted = Number((avg7 * 0.5 + avg14 * 0.3 + avg30 * 0.2).toFixed(3));
-  const trendRatio = avg14 > 0 ? Number(((avg7 - avg14) / avg14).toFixed(3)) : avg7 > 0 ? 1 : 0;
-
-  let trendDirection = 'flat';
-  if (trendRatio >= 0.12) trendDirection = 'up';
-  else if (trendRatio <= -0.12) trendDirection = 'down';
-
-  let salesSpeed = 'normal';
-  if (avg7 >= Math.max(1.2, avg30 * 1.18)) salesSpeed = 'fast';
-  else if (avg7 <= Math.max(0.25, avg30 * 0.72)) salesSpeed = 'slow';
-
-  return {
-    sold7,
-    sold14,
-    sold30,
-    avg7,
-    avg14,
-    avg30,
-    weighted,
-    trendRatio,
-    trendDirection,
-    salesSpeed,
-  };
-};
-
-const buildSalesSignalsMap = (sales = [], baseDate = new Date()) => {
-  const start30 = addDays(baseDate, -29);
-  start30.setHours(0, 0, 0, 0);
-  const end = new Date(baseDate);
-  end.setHours(23, 59, 59, 999);
-
-  const start14 = addDays(baseDate, -13);
-  start14.setHours(0, 0, 0, 0);
-
-  const start7 = addDays(baseDate, -6);
-  start7.setHours(0, 0, 0, 0);
-
-  const totals = new Map();
-
-  for (const sale of sales) {
-    const createdAt = normalizeDate(sale.createdAt);
-    if (!isWithinDateRange(createdAt, start30, end)) continue;
-
-    const sign = String(sale.type || '').toLowerCase() === 'return' ? -1 : 1;
-    const items = Array.isArray(sale.items) ? sale.items : [];
-    for (const item of items) {
-      const productId = normalizeString(item?.productId);
-      if (!productId || productId === '__bag__') continue;
-      const qty = Number(item?.quantity || 0) * sign;
-      if (!Number.isFinite(qty) || qty === 0) continue;
-
-      const row = totals.get(productId) || { sold7: 0, sold14: 0, sold30: 0 };
-      row.sold30 += qty;
-      if (createdAt >= start14) row.sold14 += qty;
-      if (createdAt >= start7) row.sold7 += qty;
-      totals.set(productId, row);
-    }
-  }
-
-  const result = new Map();
-  for (const [productId, totalsRow] of totals.entries()) {
-    const sold7 = Math.max(0, Number(totalsRow.sold7.toFixed(2)));
-    const sold14 = Math.max(0, Number(totalsRow.sold14.toFixed(2)));
-    const sold30 = Math.max(0, Number(totalsRow.sold30.toFixed(2)));
-    const avg7 = Number((sold7 / 7).toFixed(3));
-    const avg14 = Number((sold14 / 14).toFixed(3));
-    const avg30 = Number((sold30 / 30).toFixed(3));
-
-    result.set(productId, getDemandSignals({ sold7, sold14, sold30, avg7, avg14, avg30 }));
-  }
-
-  return result;
 };
 
 const normalizeCampaignItem = (campaign = {}) => {
@@ -396,7 +332,18 @@ const resolveCampaignContext = ({ product, signals, overStockRatio, campaigns, o
 };
 
 const resolveRounding = ({ quantity, minimumOrderQty, unitsPerCase, unitsPerPallet, roundingStrategy }) => {
+  const isBelowMoq = Number(quantity || 0) < Number(minimumOrderQty || 1);
   const baseQty = Math.max(Number(quantity || 0), Number(minimumOrderQty || 1));
+
+  if (isBelowMoq) {
+    const step = Math.max(1, Number(unitsPerCase || 1));
+    return {
+      suggestedQty: roundUpByStep(baseQty, step),
+      roundedFromQty: Math.ceil(Number(quantity || 0)),
+      roundingUnit: 'koli',
+      applied: true,
+    };
+  }
 
   if (roundingStrategy === 'none') {
     return {
@@ -687,23 +634,63 @@ const createSuggestionGenerationSummary = () => ({
   suppressedByInactiveSupplierCount: 0,
   suppressedByNeedQtyZeroCount: 0,
   skippedByModeOrRiskCount: 0,
+  missingSupplierMappingCount: 0,
+  missingMoqOrCaseDataCount: 0,
+  reasonCounts: {},
 });
 
-const getSkipReason = ({ productOptions = [], inactiveSupplierOptionCount = 0, currentStock = 0, criticalStock = 0, targetStock = 0, needQty = 0, inbound = {}, signals = {}, shouldCreate = false }) => {
-  if (!productOptions.length) return inactiveSupplierOptionCount > 0 ? 'inactive_supplier' : 'missing_supplier_mapping';
-  if (Number(inbound.effectiveQty || 0) > 0 && targetStock > 0 && (currentStock + Number(inbound.effectiveQty || 0)) >= targetStock) return 'inbound_covered';
-  if (needQty <= 0) return 'need_qty_zero';
-  if (signals.sold30 <= 0 && currentStock > Math.max(criticalStock, targetStock)) return 'no_recent_sales_sufficient_stock';
-  return shouldCreate ? 'created' : 'mode_or_risk_guard';
+const recordSuggestionReason = (summary, reason) => {
+  if (!reason) return;
+  summary.reasonCounts[reason] = Number(summary.reasonCounts[reason] || 0) + 1;
 };
 
 const applySkipToSummary = (summary, reason) => {
   summary.skippedCount += 1;
+  recordSuggestionReason(summary, reason);
+  if (reason === 'missing_supplier_mapping') summary.missingSupplierMappingCount += 1;
   if (reason === 'inactive_supplier') summary.suppressedByInactiveSupplierCount += 1;
+  if (reason === 'missing_moq_or_case_data') summary.missingMoqOrCaseDataCount += 1;
   if (reason === 'inbound_covered') summary.suppressedByInboundCount += 1;
-  if (reason === 'need_qty_zero') summary.suppressedByNeedQtyZeroCount += 1;
+  if (reason === 'stock_sufficient') summary.suppressedByNeedQtyZeroCount += 1;
   if (reason === 'mode_or_risk_guard') summary.skippedByModeOrRiskCount += 1;
-  if (reason === 'need_qty_zero' || reason === 'no_recent_sales_sufficient_stock') summary.sufficientStockCount += 1;
+  if (reason === 'stock_sufficient') summary.sufficientStockCount += 1;
+};
+
+const getSuggestionConfidenceScore = ({
+  demandDataAvailable,
+  sold30,
+  minimumStockAvailable,
+  leadTimeAvailable,
+  orderDataComplete,
+  supplierMappingExists,
+} = {}) => {
+  let score = 90;
+  if (!demandDataAvailable) score -= 45;
+  else if (Number(sold30 || 0) < 3) score -= 15;
+  if (!supplierMappingExists) score -= 25;
+  if (!minimumStockAvailable) score -= 15;
+  if (!leadTimeAvailable) score -= 20;
+  if (!orderDataComplete) score -= 20;
+  return Math.max(10, Math.min(95, score));
+};
+
+const finalizeSuggestionGenerationSummary = (summary, baseDate = new Date()) => {
+  const window = getPurchaseSalesWindow(baseDate);
+  return {
+    ...summary,
+    lookbackDays: 30,
+    salesWindow: {
+      start: window.start30.toISOString(),
+      end: window.end.toISOString(),
+    },
+    reasonBreakdown: Object.entries(summary.reasonCounts || {})
+      .map(([code, count]) => ({
+        code,
+        count: Number(count || 0),
+        text: PURCHASE_SUGGESTION_REASON_TEXT[code] || code,
+      }))
+      .sort((left, right) => right.count - left.count || left.code.localeCompare(right.code)),
+  };
 };
 
 const buildSuggestionGenerationBreakdown = async (options = {}) => {
@@ -735,7 +722,8 @@ const buildSuggestionGenerationBreakdown = async (options = {}) => {
     current.push(row);
     allSupplierProductsByProduct.set(row.productId, current);
   });
-  const salesSignalsMap = buildSalesSignalsMap(sales, new Date());
+  const now = new Date();
+  const salesSignalsMap = buildPurchaseSalesSignalsMap(sales, now);
   const activeCampaigns = resolveActiveCampaigns(settings);
   const inboundSupplyMap = buildInboundSupplyMap({ orders: purchaseOrders, orderItems: purchaseOrderItems });
   const summary = createSuggestionGenerationSummary();
@@ -743,28 +731,35 @@ const buildSuggestionGenerationBreakdown = async (options = {}) => {
   summary.highRiskCount = suggestions.filter((row) => row.status === 'pending' && ['critical', 'high'].includes(String(row.riskLevel || '').toLowerCase())).length;
 
   for (const product of products) {
-    if (product.isActive === false) continue;
     if (normalizedOptions.mode === 'category' && normalizedOptions.categoryId && product.categoryId !== normalizedOptions.categoryId) continue;
 
     summary.totalEvaluated += 1;
+    if (product.isActive === false) {
+      applySkipToSummary(summary, 'product_inactive');
+      continue;
+    }
+
     const stock = stockMap.get(product.id);
     const currentStock = getTotalStock(stock);
     const criticalStock = Number(product.criticalStock || 0);
-    if (criticalStock <= 0) summary.missingMinStockCount += 1;
+    const minimumStockAvailable = criticalStock > 0;
+    if (!minimumStockAvailable) summary.missingMinStockCount += 1;
 
     const productOptions = activeSupplierProducts.filter((row) => row.productId === product.id);
     const inactiveSupplierOptionCount = (allSupplierProductsByProduct.get(product.id) || []).length - productOptions.length;
-    if (!productOptions.some((row) => Number(row.leadTimeDays || 0) > 0)) summary.missingLeadTimeCount += 1;
+    const leadTimeAvailable = productOptions.some((row) => Number(row.leadTimeDays || 0) > 0);
+    if (!leadTimeAvailable) summary.missingLeadTimeCount += 1;
 
-    const signals = salesSignalsMap.get(product.id) || getDemandSignals({ sold7: 0, sold14: 0, sold30: 0, avg7: 0, avg14: 0, avg30: 0 });
+    const signals = salesSignalsMap.get(product.id) || createEmptyDemandSignals();
     if (signals.sold30 <= 0) summary.noRecentSalesCount += 1;
 
     if (!productOptions.length) {
-      applySkipToSummary(summary, getSkipReason({ productOptions, inactiveSupplierOptionCount }));
+      applySkipToSummary(summary, inactiveSupplierOptionCount > 0 ? 'inactive_supplier' : 'missing_supplier_mapping');
       continue;
     }
 
     let selectedMeta = selectSupplierProductForSuggestion({ productOptions, product, needQty: 0 });
+    let selected = selectedMeta.row;
     let leadTimeDays = selectedMeta.leadTimeDays;
     const maxStock = Number(product.maxStock || 0);
     const overStockRatio = maxStock > 0 ? currentStock / maxStock : 0;
@@ -787,16 +782,62 @@ const buildSuggestionGenerationBreakdown = async (options = {}) => {
     const inbound = inboundSupplyMap.get(product.id) || { effectiveQty: 0, nearTermQty: 0 };
     const needQty = Math.max(0, Math.ceil(targetStock - (currentStock + Number(inbound.effectiveQty || 0))));
     selectedMeta = selectSupplierProductForSuggestion({ productOptions, product, needQty });
+    selected = selectedMeta.row;
     leadTimeDays = selectedMeta.leadTimeDays;
     const daysToStockout = demandDaily > 0 ? Number(((currentStock + Number(inbound.nearTermQty || 0)) / demandDaily).toFixed(1)) : null;
     const riskLevel = getRiskLevel({ currentStock, criticalStock, daysToStockout, leadTimeDays });
-    const shouldCreate = shouldCreateSuggestionByMode({ options: normalizedOptions, product, campaignContext, signals, riskLevel, needQty, currentStock, criticalStock, inbound, targetStock });
-    if (!shouldCreate) {
-      applySkipToSummary(summary, getSkipReason({ productOptions, inactiveSupplierOptionCount, currentStock, criticalStock, targetStock, needQty, inbound, signals, shouldCreate }));
+    const rawUnitsPerCase = product.unitsPerCase ?? selected.unitsPerCase;
+    const rawMinimumOrderQty = selected.minimumOrderQty ?? selected.minOrderQty;
+    const rawMinimumOrderUnit = selected.minOrderUnit || selected.defaultOrderUnit || selected.priceUnit || 'adet';
+    const orderDataComplete = hasRequiredOrderData({
+      minimumOrderQty: rawMinimumOrderQty,
+      minimumOrderUnit: rawMinimumOrderUnit,
+      unitsPerCase: rawUnitsPerCase,
+    });
+    const modeEligible = shouldCreateSuggestionByMode({
+      options: normalizedOptions,
+      product,
+      campaignContext,
+      signals,
+      riskLevel,
+      needQty,
+      currentStock,
+      criticalStock,
+      inbound,
+      targetStock,
+    });
+    let decision = decidePurchaseSuggestion({
+      productActive: true,
+      supplierMappingExists: true,
+      activeSupplierMappingExists: true,
+      minimumStockAvailable,
+      leadTimeAvailable,
+      orderDataComplete,
+      demandDataAvailable: salesSignalsMap.has(product.id),
+      inboundCoversNeed: targetStock > 0 && (currentStock + Number(inbound.effectiveQty || 0)) >= targetStock,
+      currentStock,
+      reorderPoint: Math.max(criticalStock, Math.ceil((demandDaily * leadTimeDays) + (criticalStock * 0.4))),
+      salesSpeed: signals.salesSpeed,
+      sold30: signals.sold30,
+    });
+    if (decision.status === 'pending' && !modeEligible) {
+      decision = {
+        status: 'skipped',
+        reasonTag: 'mode_or_risk_guard',
+        reasonText: PURCHASE_SUGGESTION_REASON_TEXT.mode_or_risk_guard,
+      };
+    }
+    if (decision.status === 'skipped') {
+      applySkipToSummary(summary, decision.reasonTag);
+    } else if (decision.status === 'manual_evaluation') {
+      recordSuggestionReason(summary, decision.reasonTag);
     }
   }
 
-  return { ...summary, options: normalizedOptions };
+  return {
+    ...finalizeSuggestionGenerationSummary(summary, now),
+    options: normalizedOptions,
+  };
 };
 
 const getAdmins = async () => {
@@ -926,7 +967,7 @@ const createAutomationTaskIfNeeded = async ({ suggestion, product, actorUserId, 
     description: `${product.name} için otomatik üretilen talep önerisi incelensin. Risk: ${suggestion.riskLevel}.`,
     assignedTo: assignee,
     priority: suggestion.riskLevel === 'critical' ? 'high' : 'medium',
-    dueDate: addDays(new Date(), 1).toISOString().slice(0, 10),
+    dueDate: addCalendarDays(new Date(), 1).toISOString().slice(0, 10),
     status: 'pending',
     comments: [],
     createdBy: actorUserId || 'system',
@@ -995,10 +1036,77 @@ const buildOrderNumber = async (existingRows = null) => {
 const sortByNewest = (rows) => [...rows].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 const DEFAULT_SUGGESTIONS_LIMIT = 20;
 const MAX_SUGGESTIONS_LIMIT = 200;
-const ACTIVE_SUGGESTION_STATUSES = new Set(['pending']);
-const ARCHIVE_SUGGESTION_STATUSES = new Set(['approved', 'rejected', 'archived', 'stale']);
+const ACTIVE_SUGGESTION_STATUSES = new Set(['pending', 'manual_evaluation', 'skipped']);
+const ARCHIVE_SUGGESTION_STATUSES = new Set(['approved', 'rejected', 'converted', 'cancelled', 'expired', 'archived', 'stale']);
 const SUGGESTION_SUMMARY_CACHE_TTL_MS = 60_000;
 const suggestionSummaryCache = new Map();
+
+const getSuggestionSupplierProductId = (row = {}) => (
+  row.supplierProductId
+  || row.payload?.calculation?.supplierProductId
+  || null
+);
+
+const getActiveSuggestionsForProduct = (rows = [], productId) => (
+  rows.filter((row) => (
+    String(row.productId || '') === String(productId || '')
+    && ACTIVE_SUGGESTION_STATUSES.has(String(row.status || 'pending'))
+  ))
+);
+
+const persistGeneratedSuggestion = async ({
+  suggestions,
+  payload,
+  nowIso,
+  dryRun = false,
+}) => {
+  const activeRows = getActiveSuggestionsForProduct(suggestions, payload.productId);
+  const supplierProductId = getSuggestionSupplierProductId(payload);
+  const existing = activeRows.find(
+    (row) => getSuggestionSupplierProductId(row) === supplierProductId
+  ) || activeRows[0] || null;
+
+  let persisted;
+  let operation;
+  if (existing) {
+    const updated = { ...existing, ...payload, updatedAt: nowIso };
+    persisted = dryRun ? updated : await purchaseSuggestionRepo.updateById(existing.id, updated);
+    operation = 'updated';
+    const index = suggestions.findIndex((row) => row.id === existing.id);
+    if (index >= 0) suggestions[index] = persisted;
+  } else {
+    const created = {
+      id: uuidv4(),
+      ...payload,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    persisted = dryRun ? created : await purchaseSuggestionRepo.create(created);
+    operation = 'created';
+    suggestions.push(persisted);
+  }
+
+  if (!persisted?.id) {
+    throw new AppError(500, `Sipariş önerisi kaydedilemedi: ${payload.productId}`);
+  }
+
+  const duplicates = activeRows.filter((row) => row.id !== existing?.id);
+  for (const duplicate of duplicates) {
+    const expired = {
+      ...duplicate,
+      status: 'expired',
+      reason: 'Aynı ürün için daha güncel aktif öneri oluşturuldu.',
+      reasonText: 'Aynı ürün için daha güncel aktif öneri oluşturuldu.',
+      reasonTags: ['duplicate_superseded'],
+      updatedAt: nowIso,
+    };
+    if (!dryRun) await purchaseSuggestionRepo.updateById(duplicate.id, expired);
+    const index = suggestions.findIndex((row) => row.id === duplicate.id);
+    if (index >= 0) suggestions[index] = expired;
+  }
+
+  return { persisted, operation, expiredDuplicateCount: duplicates.length };
+};
 
 const resolveSuggestionInboundStatus = (row = {}) => {
   const totals = row.inboundStatusTotals && typeof row.inboundStatusTotals === 'object' ? row.inboundStatusTotals : {};
@@ -1069,12 +1177,15 @@ const buildFilteredSuggestionSummary = (rows = [], maps = {}) => {
   return {
     totalCount: safeRows.length,
     pendingCount: safeRows.filter((row) => row.status === 'pending').length,
+    manualEvaluationCount: safeRows.filter((row) => row.status === 'manual_evaluation').length,
+    skippedCount: safeRows.filter((row) => row.status === 'skipped').length,
     approvedCount: safeRows.filter((row) => row.status === 'approved').length,
+    convertedCount: safeRows.filter((row) => row.status === 'converted').length,
     rejectedCount: safeRows.filter((row) => row.status === 'rejected').length,
     archivedCount: safeRows.filter((row) => row.status === 'archived').length,
     staleCount: safeRows.filter((row) => row.status === 'stale').length,
-    activeCount: safeRows.filter((row) => row.status === 'pending').length,
-    archiveCount: safeRows.filter((row) => ['approved', 'rejected', 'archived', 'stale'].includes(String(row.status || ''))).length,
+    activeCount: safeRows.filter((row) => ['pending', 'manual_evaluation', 'skipped'].includes(row.status)).length,
+    archiveCount: safeRows.filter((row) => ARCHIVE_SUGGESTION_STATUSES.has(String(row.status || ''))).length,
     highRiskCount: safeRows.filter((row) => ['critical', 'high'].includes(String(row.riskLevel || '').toLowerCase())).length,
     inboundCount: safeRows.filter((row) => resolveSuggestionInboundStatus(row) !== 'no_inbound').length,
     missingDataCount: safeRows.filter((row) => resolveSuggestionMissingData(row, {
@@ -1703,6 +1814,64 @@ const enrichOrder = (order, { supplierMap, itemsByOrderId, userMap }) => {
   };
 };
 
+const enrichSingleOrderOptimized = async (order) => {
+  const prisma = await getPrisma();
+  
+  let supplierName = '-';
+  if (order.supplierId) {
+    if (config.dataStore === 'postgres') {
+      const supplier = await prisma.supplier.findUnique({
+        where: { id: order.supplierId },
+        select: { name: true }
+      });
+      if (supplier) supplierName = supplier.name;
+    } else {
+      const supplier = await supplierRepo.findById(order.supplierId);
+      if (supplier) supplierName = supplier.name;
+    }
+  }
+
+  let createdByName = null;
+  if (order.createdBy) {
+    if (config.dataStore === 'postgres') {
+      const u = await prisma.user.findUnique({
+        where: { id: order.createdBy },
+        select: { name: true }
+      });
+      if (u) createdByName = u.name;
+    } else {
+      const u = await userRepo.findById(order.createdBy);
+      if (u) createdByName = u.name;
+    }
+  }
+
+  let itemCount = 0;
+  let totalItemQty = 0;
+  if (config.dataStore === 'postgres') {
+    const items = await prisma.purchaseOrderItem.findMany({
+      where: { orderId: order.id },
+      select: { quantity: true }
+    });
+    itemCount = items.length;
+    totalItemQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  } else {
+    const allItems = await purchaseOrderItemRepo.getAll();
+    const items = allItems.filter(item => item.orderId === order.id);
+    itemCount = items.length;
+    totalItemQty = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  }
+
+  return {
+    ...order,
+    supplierName,
+    itemCount,
+    totalItemQty,
+    statusLabel: getPurchaseOrderStatusLabel(order.status),
+    deliveryStatus: getPurchaseOrderStatusLabel(order.status),
+    createdByName,
+  };
+};
+
 const buildMaps = async () => {
   const [products, suppliers, stocks, users] = await Promise.all([
     productRepo.getAll(),
@@ -1850,10 +2019,35 @@ const setCachedSuggestionSummary = (key, value) => {
 
 const clearSuggestionSummaryCache = () => suggestionSummaryCache.clear();
 
+const isRowStockoutEligible = (row, maps = {}) => {
+  const stock = maps.stockMap?.get(row.productId);
+  const currentStock = row.currentStock ?? (stock ? (Number(stock.warehouseQuantity || 0) + Number(stock.shelfQuantity || 0)) : 0);
+  if (currentStock !== 0) return false;
+
+  const rowStatus = String(row.status || 'pending').toLowerCase();
+  if (!['pending', 'manual_evaluation', 'skipped'].includes(rowStatus)) return false;
+
+  const product = maps.productMap?.get(row.productId);
+  if (product && product.isActive === false) return false;
+
+  const supplier = maps.supplierMap?.get(row.supplierId);
+  if (supplier && supplier.isActive === false) return false;
+
+  const reasonTags = Array.isArray(row.reasonTags) ? row.reasonTags : [];
+  if (reasonTags.includes('product_inactive')) return false;
+  if (reasonTags.includes('inbound_covered')) return false;
+  if (reasonTags.includes('missing_supplier_mapping')) return false;
+  if (reasonTags.includes('inactive_supplier')) return false;
+
+  if (!row.supplierId) return false;
+
+  return true;
+};
+
 const normalizeSuggestionQueryFilters = (query = {}) => {
-  const status = normalizeString(query.status);
+  const status = normalizeString(query.status).toLowerCase();
   const requestedStatuses = status
-    ? status.split(',').map((item) => normalizeString(item)).filter(Boolean)
+    ? status.split(',').map((item) => normalizeString(item).toLowerCase()).filter(Boolean)
     : [];
   const statusGroup = normalizeString(query.statusGroup).toLowerCase();
   return {
@@ -1872,140 +2066,9 @@ const normalizeSuggestionQueryFilters = (query = {}) => {
     netNeedBand: normalizeString(query.netNeedBand).toLowerCase(),
     moqEffect: normalizeString(query.moqEffect).toLowerCase(),
     preset: normalizeString(query.preset).toLowerCase(),
+    stockoutEligible: query.stockoutEligible === 'true',
   };
 };
-
-const canUsePostgresSuggestionList = (query = {}) => (
-  config.dataStore === 'postgres'
-  && !normalizeString(query.preset)
-  && !normalizeString(query.mode || query.generationMode)
-  && !normalizeString(query.campaignType)
-  && !normalizeString(query.leadTimeBand)
-  && !normalizeString(query.inboundStatus)
-  && !normalizeString(query.missingData)
-  && !normalizeString(query.netNeedBand)
-  && !normalizeString(query.moqEffect)
-  && !parseBooleanQuery(query.includeSummary, false)
-);
-
-const hasAdvancedSuggestionFilters = (filters = {}) => Boolean(
-  filters.mode
-  || filters.campaignType
-  || filters.leadTimeBand
-  || filters.inboundStatus
-  || filters.missingData
-  || filters.netNeedBand
-  || filters.moqEffect
-  || filters.preset
-);
-
-const buildPostgresSuggestionWhere = (filters = {}) => {
-  const where = {};
-  if (filters.requestedStatuses?.length) {
-    where.status = { in: filters.requestedStatuses };
-  } else if (filters.statusGroup === 'active') {
-    where.status = { in: [...ACTIVE_SUGGESTION_STATUSES] };
-  } else if (filters.statusGroup === 'archive') {
-    where.status = { in: [...ARCHIVE_SUGGESTION_STATUSES] };
-  }
-  if (filters.productId) where.productId = filters.productId;
-  if (filters.supplierId) where.supplierId = filters.supplierId;
-  if (filters.riskLevel) where.riskLevel = filters.riskLevel;
-  if (filters.normalizedSearch) {
-    const rawSearch = filters.normalizedSearch;
-    where.OR = [
-      { reason: { contains: rawSearch, mode: 'insensitive' } },
-      { product: { is: { normalizedSearch: { contains: rawSearch } } } },
-      { product: { is: { sku: { contains: rawSearch, mode: 'insensitive' } } } },
-      { product: { is: { barcode: { contains: rawSearch, mode: 'insensitive' } } } },
-      { supplier: { is: { normalizedSearch: { contains: rawSearch } } } },
-    ];
-  }
-  return where;
-};
-
-const mapPurchaseSuggestionPrismaRow = (row = {}) => {
-  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
-  const calculation = payload.calculation && typeof payload.calculation === 'object' ? payload.calculation : {};
-  const workflow = payload.workflow && typeof payload.workflow === 'object' ? payload.workflow : {};
-  return {
-    ...payload,
-    ...calculation,
-    ...workflow,
-    id: row.id,
-    productId: row.productId,
-    categoryId: row.categoryId,
-    supplierId: row.supplierId,
-    currentStock: Number(row.currentStock || calculation.currentStock || 0),
-    criticalStock: Number(row.criticalStock || calculation.criticalStock || 0),
-    suggestedQty: Number(row.suggestedQty || calculation.suggestedQty || 0),
-    unitPrice: Number(row.unitPrice || calculation.unitPrice || 0),
-    totalPrice: Number(row.totalPrice || calculation.totalPrice || 0),
-    status: row.status || workflow.status || 'pending',
-    reason: row.reason || calculation.reason || '',
-    riskLevel: row.riskLevel || calculation.riskLevel || 'low',
-    createdAt: row.createdAt ? row.createdAt.toISOString() : payload.createdAt || null,
-    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : payload.updatedAt || null,
-    productName: row.product?.name || payload.productName || '-',
-    sku: row.product?.sku || payload.sku || '-',
-    barcode: row.product?.barcode || payload.barcode || '-',
-    supplierName: row.supplier?.name || payload.supplierName || '-',
-  };
-};
-
-const listSuggestionsPostgres = async (query = {}) => {
-  const pagination = parsePagePagination(query, {
-    defaultLimit: DEFAULT_SUGGESTIONS_LIMIT,
-    maxLimit: MAX_SUGGESTIONS_LIMIT,
-  });
-  const filters = normalizeSuggestionQueryFilters(query);
-  const prisma = await getPrisma();
-  const where = buildPostgresSuggestionWhere(filters);
-
-  const [total, rows] = await Promise.all([
-    prisma.purchaseSuggestion.count({ where }),
-    prisma.purchaseSuggestion.findMany({
-      where,
-      include: {
-        product: { select: { id: true, name: true, sku: true, barcode: true, categoryId: true } },
-        supplier: { select: { id: true, name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    }),
-  ]);
-
-  return {
-    items: rows.map(mapPurchaseSuggestionPrismaRow),
-    pagination: {
-      mode: 'offset',
-      page: pagination.page,
-      limit: pagination.limit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pagination.limit)),
-      hasNextPage: pagination.skip + rows.length < total,
-      hasPreviousPage: pagination.page > 1,
-    },
-    filters,
-    sort: { field: 'createdAt', direction: 'desc' },
-    summary: null,
-  };
-};
-
-const listSuggestionCandidatesPostgres = async (filters = {}) => {
-  const prisma = await getPrisma();
-  const rows = await prisma.purchaseSuggestion.findMany({
-    where: buildPostgresSuggestionWhere(filters),
-    include: {
-      product: { select: { id: true, name: true, sku: true, barcode: true, categoryId: true } },
-      supplier: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-  return rows.map(mapPurchaseSuggestionPrismaRow);
-};
-
 
 const suggestionMatchesFilters = (row = {}, filters = {}, maps = {}) => {
   const product = maps.productMap?.get(row.productId);
@@ -2041,7 +2104,24 @@ const suggestionMatchesFilters = (row = {}, filters = {}, maps = {}) => {
     row.campaignName,
     ...reasonTags,
   ].filter(Boolean).some((value) => includesSearchText(value, filters.normalizedSearch));
-  return matchesProduct && matchesSupplier && matchesMode && matchesRisk && matchesCampaignType && matchesLeadTime && matchesInbound && matchesMissingData && matchesNetNeed && matchesMoq && matchesPreset && matchesSearch;
+
+  const rowStatus = normalizeString(row.status || 'pending').toLowerCase();
+  let matchesStatus = true;
+  if (filters.requestedStatuses && filters.requestedStatuses.length > 0) {
+    matchesStatus = filters.requestedStatuses.includes(rowStatus);
+  }
+  let matchesStatusGroup = true;
+  if (filters.statusGroup === 'active') {
+    matchesStatusGroup = ACTIVE_SUGGESTION_STATUSES.has(rowStatus);
+  } else if (filters.statusGroup === 'archive') {
+    matchesStatusGroup = ARCHIVE_SUGGESTION_STATUSES.has(rowStatus);
+  }
+
+  if (filters.stockoutEligible && !isRowStockoutEligible(row, maps)) {
+    return false;
+  }
+
+  return matchesStatus && matchesStatusGroup && matchesProduct && matchesSupplier && matchesMode && matchesRisk && matchesCampaignType && matchesLeadTime && matchesInbound && matchesMissingData && matchesNetNeed && matchesMoq && matchesPreset && matchesSearch;
 };
 
 const resolvePolicyAwareReceiptBatchFields = ({ item = {}, product = {}, category = null } = {}) => {
@@ -2763,9 +2843,11 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
       const txSuggestionRepo = createPurchaseSuggestionRepository(tx);
       await txSuggestionRepo.updateById(linkedSuggestion.id, {
         ...linkedSuggestion,
-        status: 'approved',
+        status: 'converted',
         approvedBy: userId,
         approvedAt: now,
+        convertedBy: userId,
+        convertedAt: now,
         linkedOrderId: orderId,
         reasonTags: Array.from(new Set([...(linkedSuggestion.reasonTags || []), 'compose_order_created'])),
         reasonDetails: [
@@ -2793,6 +2875,7 @@ const createOrderFromSupplierProductPostgres = async (payload, userId) => {
     },
   });
   const mappedCreated = mapPurchaseOrderRow(created);
+  if (linkedSuggestion) clearSuggestionSummaryCache();
   await notifyPurchaseOrderLifecycle({ order: mappedCreated, status, actorUserId: userId });
   return mappedCreated;
 };
@@ -2864,13 +2947,19 @@ const mapSupplierProductRow = (row) => ({
 const listSupplierProductsFromPostgres = async (query = {}) => {
   const prisma = await getPrisma();
   const page = parsePagePagination(query, { defaultLimit: 50, maxLimit: 250 });
-  const sort = resolveWhitelistedSort(query.sort, ['createdAt_desc', 'productName_asc', 'supplierName_asc'], 'createdAt_desc', { context: 'GET /api/procurement/supplier-products' });
+  const sort = resolveWhitelistedSort(query.sort, ['createdAt_desc', 'createdAt_asc', 'productName_asc', 'productName_desc', 'supplierName_asc', 'supplierName_desc'], 'createdAt_desc', { context: 'GET /api/procurement/supplier-products' });
   const where = buildSupplierProductWhere(query);
   const orderBy = sort === 'productName_asc'
     ? [{ product: { name: 'asc' } }, { id: 'asc' }]
+    : sort === 'productName_desc'
+      ? [{ product: { name: 'desc' } }, { id: 'desc' }]
     : sort === 'supplierName_asc'
       ? [{ supplier: { name: 'asc' } }, { id: 'asc' }]
-      : [{ createdAt: 'desc' }, { id: 'desc' }];
+      : sort === 'supplierName_desc'
+        ? [{ supplier: { name: 'desc' } }, { id: 'desc' }]
+        : sort === 'createdAt_asc'
+          ? [{ createdAt: 'asc' }, { id: 'asc' }]
+          : [{ createdAt: 'desc' }, { id: 'desc' }];
 
   const [total, rows] = await withPostgresQueryLogging('GET /api/procurement/supplier-products', () => Promise.all([
     prisma.supplierProduct.count({ where }),
@@ -2926,6 +3015,52 @@ const listSupplierProductsFromPostgres = async (query = {}) => {
       search: String(query.search || query.q || '').trim() || null,
     },
     sort: { key: sort },
+  };
+};
+
+const getMatchesSummaryFromPostgres = async () => {
+  const prisma = await getPrisma();
+  const tenantId = getActiveTenantId();
+  const [totalMatches, activeMatches, matchedProducts, totalProducts, supplierCount, lastChanged, recentRows] = await withPostgresQueryLogging('GET /api/procurement/matches/summary', () => Promise.all([
+    prisma.supplierProduct.count(),
+    prisma.supplierProduct.count({ where: { isActive: { not: false } } }),
+    prisma.$queryRaw`SELECT COUNT(DISTINCT "product_id")::int AS "count" FROM "supplier_products" WHERE "tenant_id" = ${tenantId} AND "product_id" IS NOT NULL`,
+    prisma.product.count({ where: { isListed: { not: false }, isActive: { not: false } } }),
+    prisma.supplier.count({ where: { isActive: { not: false } } }),
+    prisma.supplierProduct.findFirst({
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      select: { updatedAt: true, createdAt: true },
+    }),
+    prisma.supplierProduct.findMany({
+      orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: 5,
+      select: {
+        id: true,
+        productId: true,
+        supplierId: true,
+        purchasePrice: true,
+        currency: true,
+        isDefault: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        product: { select: { id: true, name: true, sku: true, barcode: true, categoryId: true, requiredStorageType: true } },
+        supplier: { select: { id: true, name: true, supplierCode: true, code: true } },
+      },
+    }),
+  ]));
+
+  const matchedProductCount = Number(Array.isArray(matchedProducts) ? matchedProducts[0]?.count || 0 : 0);
+  return {
+    totalMatches,
+    activeMatches,
+    inactiveMatches: Math.max(0, totalMatches - activeMatches),
+    matchedProductCount,
+    unmatchedProductCount: Math.max(0, totalProducts - matchedProductCount),
+    totalProducts,
+    supplierCount,
+    lastChangedAt: fromDateValue(lastChanged?.updatedAt || lastChanged?.createdAt || null),
+    recentChanges: recentRows.map(mapSupplierProductRow),
   };
 };
 
@@ -3548,9 +3683,11 @@ const approveSuggestionPostgres = async (id, payload = {}, userId) => {
       suggestedQty: edited.suggestedQty,
       unitPrice: edited.unitPrice,
       totalPrice: edited.totalPrice,
-      status: 'approved',
+      status: 'converted',
       approvedBy: userId,
       approvedAt: now,
+      convertedBy: userId,
+      convertedAt: now,
       linkedOrderId: order.id,
       updatedAt: now,
       updatedBy: userId,
@@ -3673,6 +3810,35 @@ export const procurementService = {
         search: String(query.search || query.q || '').trim() || null,
       },
       sort: { key: 'createdAt_desc' },
+    };
+  },
+
+  async getMatchesSummary() {
+    if (config.dataStore === 'postgres') {
+      return getMatchesSummaryFromPostgres();
+    }
+
+    const [{ productMap, supplierMap }, supplierProducts, products, suppliers] = await Promise.all([
+      buildProductSupplierMaps(),
+      supplierProductRepo.getAll(),
+      productRepo.getAll(),
+      supplierRepo.getAll(),
+    ]);
+    const activeRows = supplierProducts.filter((row) => row.isActive !== false);
+    const matchedProductIds = new Set(supplierProducts.map((row) => String(row.productId || '')).filter(Boolean));
+    const listedProducts = products.filter((row) => row.isListed !== false && row.isActive !== false);
+    const recentChanges = sortByNewest(supplierProducts).slice(0, 5).map((item) => enrichSupplierProduct(item, productMap, supplierMap));
+
+    return {
+      totalMatches: supplierProducts.length,
+      activeMatches: activeRows.length,
+      inactiveMatches: Math.max(0, supplierProducts.length - activeRows.length),
+      matchedProductCount: matchedProductIds.size,
+      unmatchedProductCount: Math.max(0, listedProducts.length - matchedProductIds.size),
+      totalProducts: listedProducts.length,
+      supplierCount: suppliers.filter((row) => row.isActive !== false).length,
+      lastChangedAt: recentChanges[0]?.updatedAt || recentChanges[0]?.createdAt || null,
+      recentChanges,
     };
   },
 
@@ -3936,7 +4102,7 @@ export const procurementService = {
     const activeSupplierProducts = supplierProducts.filter((row) => row.isActive !== false && supplierMap.get(row.supplierId)?.isActive !== false);
     const now = new Date();
     const nowIso = now.toISOString();
-    const salesSignalsMap = buildSalesSignalsMap(sales, now);
+    const salesSignalsMap = buildPurchaseSalesSignalsMap(sales, now);
     const activeCampaigns = resolveActiveCampaigns(settings);
     const automation = getAutomationSettings(settings);
     const inboundSupplyMap = buildInboundSupplyMap({ orders: purchaseOrders, orderItems: purchaseOrderItems });
@@ -3956,27 +4122,136 @@ export const procurementService = {
     });
 
     for (const product of products) {
-      if (product.isActive === false) continue;
+      const stock = stockMap.get(product.id);
+      const currentStock = getTotalStock(stock);
+      const criticalStock = Number(product.criticalStock || 0);
+      if (product.isActive === false) {
+        const decision = decidePurchaseSuggestion({ productActive: false });
+        applySkipToSummary(summary, decision.reasonTag);
+        const result = await persistGeneratedSuggestion({
+          suggestions,
+          nowIso,
+          dryRun,
+          payload: {
+            productId: product.id,
+            categoryId: product.categoryId || '',
+            supplierId: null,
+            supplierProductId: null,
+            currentStock,
+            criticalStock,
+            suggestedQty: 0,
+            unitPrice: 0,
+            totalPrice: 0,
+            status: decision.status,
+            reason: decision.reasonText,
+            reasonText: decision.reasonText,
+            reasonTags: [decision.reasonTag],
+            reasonDetails: [decision.reasonText],
+            riskLevel: 'low',
+            calculatedAt: nowIso,
+            calculationVersion: PURCHASE_SUGGESTION_CALCULATION_VERSION,
+            generatedBy: actorUser?.id || 'system',
+            generationMode: normalizedOptions.mode,
+            confidenceScore: 10,
+            eligibility: {
+              eligible: false,
+              status: decision.status,
+              reasonCode: decision.reasonTag,
+              reasonText: decision.reasonText,
+              demandDataAvailable: false,
+              minimumStockAvailable: criticalStock > 0,
+              leadTimeAvailable: false,
+              orderDataComplete: false,
+              inboundCoversNeed: false,
+              modeEligible: false,
+            },
+          },
+        });
+        generated.push(result.persisted);
+        summary[result.operation === 'created' ? 'createdCount' : 'updatedCount'] += 1;
+        continue;
+      }
 
       if (normalizedOptions.mode === 'category' && normalizedOptions.categoryId && product.categoryId !== normalizedOptions.categoryId) {
         continue;
       }
 
       summary.totalEvaluated += 1;
-      const stock = stockMap.get(product.id);
-      const currentStock = getTotalStock(stock);
-      const criticalStock = Number(product.criticalStock || 0);
-      if (criticalStock <= 0) summary.missingMinStockCount += 1;
+      const minimumStockAvailable = criticalStock > 0;
+      if (!minimumStockAvailable) summary.missingMinStockCount += 1;
 
       const productOptions = activeSupplierProducts
         .filter((row) => row.productId === product.id);
       const inactiveSupplierOptionCount = (allSupplierProductsByProduct.get(product.id) || []).length - productOptions.length;
 
-      if (!productOptions.some((row) => Number(row.leadTimeDays || 0) > 0)) summary.missingLeadTimeCount += 1;
+      const leadTimeAvailable = productOptions.some((row) => Number(row.leadTimeDays || 0) > 0);
+      if (!leadTimeAvailable) summary.missingLeadTimeCount += 1;
+      const signals = salesSignalsMap.get(product.id) || createEmptyDemandSignals();
+      const demandDataAvailable = salesSignalsMap.has(product.id);
+      if (signals.sold30 <= 0) summary.noRecentSalesCount += 1;
 
       if (!productOptions.length) {
-        const reason = getSkipReason({ productOptions, inactiveSupplierOptionCount });
-        applySkipToSummary(summary, reason);
+        const decision = decidePurchaseSuggestion({
+          productActive: true,
+          supplierMappingExists: inactiveSupplierOptionCount > 0,
+          activeSupplierMappingExists: false,
+        });
+        applySkipToSummary(summary, decision.reasonTag);
+        const result = await persistGeneratedSuggestion({
+          suggestions,
+          nowIso,
+          dryRun,
+          payload: {
+            productId: product.id,
+            categoryId: product.categoryId || '',
+            supplierId: null,
+            supplierProductId: null,
+            currentStock,
+            criticalStock,
+            suggestedQty: 0,
+            unitPrice: 0,
+            totalPrice: 0,
+            status: decision.status,
+            reason: decision.reasonText,
+            reasonText: decision.reasonText,
+            reasonTags: [decision.reasonTag],
+            reasonDetails: [decision.reasonText],
+            riskLevel: 'low',
+            sold7: signals.sold7,
+            sold14: signals.sold14,
+            sold30: signals.sold30,
+            avgDaily7: signals.avg7,
+            avgDaily14: signals.avg14,
+            avgDaily30: signals.avg30,
+            calculatedAt: nowIso,
+            calculationVersion: PURCHASE_SUGGESTION_CALCULATION_VERSION,
+            generatedBy: actorUser?.id || 'system',
+            generationMode: normalizedOptions.mode,
+            confidenceScore: getSuggestionConfidenceScore({
+              demandDataAvailable,
+              sold30: signals.sold30,
+              minimumStockAvailable: criticalStock > 0,
+              leadTimeAvailable: false,
+              orderDataComplete: false,
+              supplierMappingExists: inactiveSupplierOptionCount > 0,
+            }),
+            eligibility: {
+              eligible: false,
+              status: decision.status,
+              reasonCode: decision.reasonTag,
+              reasonText: decision.reasonText,
+              demandDataAvailable,
+              minimumStockAvailable: criticalStock > 0,
+              leadTimeAvailable: false,
+              orderDataComplete: false,
+              inboundCoversNeed: false,
+              modeEligible: false,
+            },
+          },
+        });
+        generated.push(result.persisted);
+        summary[result.operation === 'created' ? 'createdCount' : 'updatedCount'] += 1;
+
         skipped.push({
           productId: product.id,
           productName: product.name,
@@ -3986,7 +4261,7 @@ export const procurementService = {
           grossNeedQty: 0,
           netNeedQty: 0,
           inboundEffectiveQty: 0,
-          reason,
+          reason: decision.reasonTag,
         });
         continue;
       }
@@ -3994,16 +4269,6 @@ export const procurementService = {
       let selectedMeta = selectSupplierProductForSuggestion({ productOptions, product, needQty: 0 });
       let selected = selectedMeta.row;
       let leadTimeDays = selectedMeta.leadTimeDays;
-
-      const signals = salesSignalsMap.get(product.id) || getDemandSignals({
-        sold7: 0,
-        sold14: 0,
-        sold30: 0,
-        avg7: 0,
-        avg14: 0,
-        avg30: 0,
-      });
-      if (signals.sold30 <= 0) summary.noRecentSalesCount += 1;
 
       const maxStock = Number(product.maxStock || 0);
       const overStockRatio = maxStock > 0 ? currentStock / maxStock : 0;
@@ -4057,9 +4322,17 @@ export const procurementService = {
       leadTimeDays = selectedMeta.leadTimeDays;
       const daysToStockout = demandDaily > 0 ? Number(((currentStock + Number(inbound.nearTermQty || 0)) / demandDaily).toFixed(1)) : null;
       const riskLevel = getRiskLevel({ currentStock, criticalStock, daysToStockout, leadTimeDays });
-      const existingPending = suggestions.find((row) => row.productId === product.id && row.status === 'pending');
-
-      const shouldCreate = shouldCreateSuggestionByMode({
+      const inboundEffectiveQty = Number(inbound.effectiveQty || 0);
+      const inboundCoversTarget = targetStock > 0 && (currentStock + inboundEffectiveQty) >= targetStock;
+      const rawUnitsPerCase = product.unitsPerCase ?? selected.unitsPerCase;
+      const rawMinimumOrderQty = selected.minimumOrderQty ?? selected.minOrderQty;
+      const rawMinimumOrderUnit = selected.minOrderUnit || selected.defaultOrderUnit || selected.priceUnit || 'adet';
+      const orderDataComplete = hasRequiredOrderData({
+        minimumOrderQty: rawMinimumOrderQty,
+        minimumOrderUnit: rawMinimumOrderUnit,
+        unitsPerCase: rawUnitsPerCase,
+      });
+      const modeEligible = shouldCreateSuggestionByMode({
         options: normalizedOptions,
         product,
         campaignContext,
@@ -4071,31 +4344,34 @@ export const procurementService = {
         inbound,
         targetStock,
       });
+      let decision = decidePurchaseSuggestion({
+        productActive: true,
+        supplierMappingExists: true,
+        activeSupplierMappingExists: true,
+        minimumStockAvailable,
+        leadTimeAvailable,
+        orderDataComplete,
+        demandDataAvailable,
+        inboundCoversNeed: inboundCoversTarget,
+        currentStock,
+        reorderPoint,
+        salesSpeed: signals.salesSpeed,
+        sold30: signals.sold30,
+      });
+      if (decision.status === 'pending' && !modeEligible) {
+        decision = {
+          status: 'skipped',
+          reasonTag: 'mode_or_risk_guard',
+          reasonText: PURCHASE_SUGGESTION_REASON_TEXT.mode_or_risk_guard,
+        };
+      }
+      const status = decision.status;
+      const reasonOverride = decision.reasonText;
+      const reasonTagsOverride = [decision.reasonTag];
+      const reasonDetailsOverride = [decision.reasonText];
 
-      if (!shouldCreate) {
-        const reason = getSkipReason({ productOptions, inactiveSupplierOptionCount, currentStock, criticalStock, targetStock, needQty, inbound, signals, shouldCreate });
-        applySkipToSummary(summary, reason);
-        if (existingPending && !dryRun) {
-          await purchaseSuggestionRepo.updateById(existingPending.id, {
-            ...existingPending,
-            status: 'stale',
-            reason: Number(inbound.effectiveQty || 0) > 0
-              ? 'Açık/yoldaki siparişler ihtiyacı karşıladığı için öneri pasifleştirildi.'
-              : 'Yeni hesapta net sipariş ihtiyacı kalmadı.',
-            reasonText: 'Yeni procurement-aware hesapta net sipariş ihtiyacı kalmadı.',
-            reasonTags: Number(inbound.effectiveQty || 0) > 0 ? ['inbound_covered'] : ['net_need_cleared'],
-            reasonDetails: Number(inbound.effectiveQty || 0) > 0
-              ? [`Efektif inbound miktar: ${Number(inbound.effectiveQty || 0).toFixed(1)} adet.`]
-              : ['Mevcut stok ve talep sinyalleri yeni sipariş gerektirmiyor.'],
-            calculatedAt: nowIso,
-            calculationVersion: PURCHASE_SUGGESTION_CALCULATION_VERSION,
-            inboundConfirmedQty: inbound.confirmedQty,
-            inboundEffectiveQty: inbound.effectiveQty,
-            inboundNearTermQty: inbound.nearTermQty,
-            inboundStatusTotals: inbound.statusTotals,
-            updatedAt: nowIso,
-          });
-        }
+      if (status === 'skipped') {
+        applySkipToSummary(summary, decision.reasonTag);
         skipped.push({
           productId: product.id,
           productName: product.name,
@@ -4105,14 +4381,15 @@ export const procurementService = {
           grossNeedQty,
           netNeedQty: needQty,
           inboundEffectiveQty: inbound.effectiveQty,
-          reason,
+          reason: decision.reasonTag,
         });
-        continue;
+      } else if (status === 'manual_evaluation') {
+        recordSuggestionReason(summary, decision.reasonTag);
       }
 
       const unitsPerPack = Math.max(1, Number(product.unitsPerPack || selected.unitsPerPack || 1));
       const unitsPerBox = Math.max(1, Number(product.unitsPerBox || selected.unitsPerBox || product.unitsPerCase || selected.unitsPerCase || 1));
-      const unitsPerCase = Math.max(1, Number(product.unitsPerCase || selected.unitsPerCase || 1));
+      const unitsPerCase = Math.max(1, Number(rawUnitsPerCase || 1));
       const unitsPerPallet = Math.max(
         1,
         Number(product.unitsPerPallet || selected.unitsPerPallet || (unitsPerCase * Math.max(1, Number(product.casesPerPallet || selected.casesPerPallet || 1))))
@@ -4128,7 +4405,7 @@ export const procurementService = {
         roundingStrategy: normalizedOptions.roundingStrategy,
       });
 
-      const suggestedQty = Math.max(1, rounding.suggestedQty);
+      const suggestedQty = (status === 'skipped') ? 0 : Math.max(1, rounding.suggestedQty);
       const suggestedCases = unitsPerCase > 1 ? Math.ceil(suggestedQty / unitsPerCase) : null;
       const palletQty = unitsPerPallet > 1 ? Number((suggestedQty / unitsPerPallet).toFixed(3)) : null;
       const unitPrice = resolvePricePerBaseUnit({ supplierProduct: selected, unitInfo });
@@ -4152,6 +4429,7 @@ export const procurementService = {
         productId: product.id,
         categoryId: product.categoryId || '',
         supplierId: selected.supplierId,
+        supplierProductId: selected.id,
         currentStock,
         criticalStock,
         reorderPoint,
@@ -4168,11 +4446,11 @@ export const procurementService = {
         roundingUnit: rounding.roundingUnit,
         unitPrice,
         totalPrice,
-        status: 'pending',
-        reason: reasonModel.reasonText || 'Talep analizi sonucu sipariş önerisi',
-        reasonText: reasonModel.reasonText,
-        reasonTags: reasonModel.reasonTags,
-        reasonDetails: reasonModel.reasonDetails,
+        status: status,
+        reason: reasonOverride || reasonModel.reasonText || 'Talep analizi sonucu sipariş önerisi',
+        reasonText: reasonOverride || reasonModel.reasonText,
+        reasonTags: reasonTagsOverride || reasonModel.reasonTags,
+        reasonDetails: reasonDetailsOverride || reasonModel.reasonDetails,
         riskLevel,
         daysToStockout,
         leadTimeDays,
@@ -4206,30 +4484,36 @@ export const procurementService = {
         generationOptions: normalizedOptions,
         supplierSelectionScore: selectedMeta.score,
         supplierSelectionReason: selectedMeta.supplierSelectionReason,
+        confidenceScore: getSuggestionConfidenceScore({
+          demandDataAvailable,
+          sold30: signals.sold30,
+          minimumStockAvailable,
+          leadTimeAvailable,
+          orderDataComplete,
+          supplierMappingExists: true,
+        }),
+        eligibility: {
+          eligible: status === 'pending',
+          status,
+          reasonCode: decision.reasonTag,
+          reasonText: decision.reasonText,
+          demandDataAvailable,
+          minimumStockAvailable,
+          leadTimeAvailable,
+          orderDataComplete,
+          inboundCoversNeed: inboundCoversTarget,
+          modeEligible,
+        },
       };
 
-      if (existingPending) {
-        const updated = {
-          ...existingPending,
-          ...payload,
-          updatedAt: nowIso,
-        };
-        const persisted = dryRun ? updated : await purchaseSuggestionRepo.updateById(existingPending.id, updated);
-        if (!persisted) throw new AppError(500, `Sipariş önerisi güncellenemedi: ${existingPending.id}`);
-        summary.updatedCount += 1;
-        generated.push(persisted);
-      } else {
-        const created = {
-          id: uuidv4(),
-          ...payload,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        };
-        const persisted = dryRun ? created : await purchaseSuggestionRepo.create(created);
-        if (!persisted?.id) throw new AppError(500, `Sipariş önerisi oluşturulamadı: ${product.id}`);
-        summary.createdCount += 1;
-        generated.push(persisted);
-      }
+      const result = await persistGeneratedSuggestion({
+        suggestions,
+        payload,
+        nowIso,
+        dryRun,
+      });
+      summary[result.operation === 'created' ? 'createdCount' : 'updatedCount'] += 1;
+      generated.push(result.persisted);
 
       const latestSuggestion = generated[generated.length - 1];
       if (!dryRun) {
@@ -4253,12 +4537,16 @@ export const procurementService = {
     const items = generated.map((row) => enrichSuggestion(row, maps));
     const latestSuggestions = dryRun ? suggestions : await purchaseSuggestionRepo.getAll();
     summary.pendingCount = latestSuggestions.filter((row) => row.status === 'pending').length;
+    summary.manualEvaluationCount = latestSuggestions.filter((row) => row.status === 'manual_evaluation').length;
+    summary.skippedCount = latestSuggestions.filter((row) => row.status === 'skipped').length;
     summary.highRiskCount = latestSuggestions.filter((row) => row.status === 'pending' && ['critical', 'high'].includes(String(row.riskLevel || '').toLowerCase())).length;
+    const generatedSkippedCount = items.filter((row) => row.status === 'skipped').length;
+    const finalizedSummary = finalizeSuggestionGenerationSummary(summary, now);
     console.info('[purchase-suggestions:generate]', {
       dryRun,
-      ...summary,
+      ...finalizedSummary,
       generatedCount: items.length,
-      skippedCount: skipped.length,
+      generatedSkippedCount,
     });
     const execution = {
       mode: 'sync',
@@ -4275,9 +4563,9 @@ export const procurementService = {
         items,
         skipped,
         summary: {
-          ...summary,
+          ...finalizedSummary,
           generatedCount: items.length,
-          skippedCount: skipped.length,
+          generatedSkippedCount,
         },
       };
     }
@@ -4287,9 +4575,9 @@ export const procurementService = {
       items,
       skipped,
       summary: {
-        ...summary,
+        ...finalizedSummary,
         generatedCount: items.length,
-        skippedCount: skipped.length,
+        generatedSkippedCount,
       },
     };
   },
@@ -4299,43 +4587,55 @@ export const procurementService = {
     const cached = getCachedSuggestionSummary(cacheKey);
     if (cached) return cached;
 
-    const [suggestions, maps] = await Promise.all([
+    const [suggestions, maps, generationBreakdown] = await Promise.all([
       purchaseSuggestionRepo.getAll(),
-      buildProductSupplierMaps(),
+      buildProductSupplierStockMaps(),
+      buildSuggestionGenerationBreakdown({
+        mode: query.mode || 'critical',
+        roundingStrategy: query.roundingStrategy || 'auto',
+        safetyDays: query.safetyDays,
+        coverageDays: query.coverageDays,
+      }),
     ]);
 
     const filters = normalizeSuggestionQueryFilters(query);
+    const summaryFilters = { ...filters, status: '', requestedStatuses: [], statusGroup: '' };
     const activeRows = [];
     const archiveRows = [];
     for (const row of suggestions) {
-      if (!suggestionMatchesFilters(row, filters, maps)) continue;
+      if (!suggestionMatchesFilters(row, summaryFilters, maps)) continue;
       const rowStatus = String(row.status || 'pending');
       if (ACTIVE_SUGGESTION_STATUSES.has(rowStatus)) activeRows.push(row);
       if (ARCHIVE_SUGGESTION_STATUSES.has(rowStatus)) archiveRows.push(row);
     }
 
+    let stockoutCount = 0;
+    for (const row of suggestions) {
+      if (isRowStockoutEligible(row, maps)) {
+        stockoutCount++;
+      }
+    }
+
     return setCachedSuggestionSummary(cacheKey, {
+      ...generationBreakdown,
       generatedAt: new Date().toISOString(),
       active: buildFilteredSuggestionSummary(activeRows, maps),
       archive: buildFilteredSuggestionSummary(archiveRows, maps),
-      pendingCount: activeRows.length,
+      pendingCount: activeRows.filter((row) => row.status === 'pending').length,
+      manualEvaluationCount: activeRows.filter((row) => row.status === 'manual_evaluation').length,
+      skippedCount: activeRows.filter((row) => row.status === 'skipped').length,
       highRiskCount: activeRows.filter((row) => ['critical', 'high'].includes(String(row.riskLevel || '').toLowerCase())).length,
       archiveCount: archiveRows.length,
+      stockoutCount,
     });
   },
 
   async listSuggestions(query = {}) {
-    if (canUsePostgresSuggestionList(query)) {
-      return listSuggestionsPostgres(query);
-    }
-
     const includeSummary = parseBooleanQuery(query.includeSummary, false);
     const filters = normalizeSuggestionQueryFilters(query);
     const [suggestions, maps, generationSummary] = await Promise.all([
-      config.dataStore === 'postgres'
-        ? listSuggestionCandidatesPostgres(filters)
-        : purchaseSuggestionRepo.getAll(),
-      includeSummary ? buildProductSupplierStockMaps() : buildProductSupplierMaps(),
+      purchaseSuggestionRepo.getAll(),
+      (includeSummary || filters.stockoutEligible) ? buildProductSupplierStockMaps() : buildProductSupplierMaps(),
       includeSummary ? buildSuggestionGenerationBreakdown(query.generationOptions || {}) : Promise.resolve(null),
     ]);
     const pagination = parsePagePagination(query, {
@@ -4345,9 +4645,7 @@ export const procurementService = {
 
     const filtered = suggestions.filter((row) => suggestionMatchesFilters(row, filters, maps));
 
-    const sorted = config.dataStore === 'postgres' && hasAdvancedSuggestionFilters(filters)
-      ? filtered
-      : sortByNewest(filtered);
+    const sorted = sortByNewest(filtered);
     const pageRows = sorted.slice(pagination.skip, pagination.skip + pagination.limit);
     const items = pageRows.map((row) => enrichSuggestion(row, maps));
     const total = sorted.length;
@@ -4518,9 +4816,11 @@ export const procurementService = {
       suggestedQty: edited.suggestedQty,
       unitPrice: edited.unitPrice,
       totalPrice: edited.totalPrice,
-      status: 'approved',
+      status: 'converted',
       approvedBy: userId,
       approvedAt: now,
+      convertedBy: userId,
+      convertedAt: now,
       linkedOrderId: order.id,
       updatedAt: now,
     });
@@ -4904,9 +5204,11 @@ export const procurementService = {
     if (linkedSuggestion) {
       await purchaseSuggestionRepo.updateById(linkedSuggestion.id, {
         ...linkedSuggestion,
-        status: 'approved',
+        status: 'converted',
         approvedBy: userId,
         approvedAt: now,
+        convertedBy: userId,
+        convertedAt: now,
         linkedOrderId: order.id,
         reasonTags: Array.from(new Set([...(linkedSuggestion.reasonTags || []), 'compose_order_created'])),
         reasonDetails: [
@@ -4915,6 +5217,7 @@ export const procurementService = {
         ],
         updatedAt: now,
       });
+      clearSuggestionSummaryCache();
     }
 
     const allItems = await purchaseOrderItemRepo.getAll();
@@ -5097,14 +5400,7 @@ export const procurementService = {
         await notifyPurchaseOrderLifecycle({ order: updated, status: notificationStatus, actorUserId: userId });
       }
 
-      const [maps, allItems] = await Promise.all([buildMaps(), purchaseOrderItemRepo.getAll()]);
-      const itemsByOrderId = new Map();
-      for (const row of allItems) {
-        if (!itemsByOrderId.has(row.orderId)) itemsByOrderId.set(row.orderId, []);
-        itemsByOrderId.get(row.orderId).push(row);
-      }
-
-      return enrichOrder(updated, { supplierMap: maps.supplierMap, itemsByOrderId });
+      return await enrichSingleOrderOptimized(updated);
     });
   },
 };

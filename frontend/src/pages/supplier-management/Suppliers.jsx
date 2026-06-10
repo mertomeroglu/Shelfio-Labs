@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import './SupplierManagement.css';
 import { useLocation } from 'react-router-dom';
 import { Truck, Award, Zap, Clock, Timer, Filter, Plus, Link2, TrendingUp, TrendingDown, ShoppingCart } from 'lucide-react';
@@ -86,6 +86,28 @@ const initialMatchFilters = {
   supplierId: '',
   supplierSearch: '',
   isActive: '',
+};
+
+const MATCH_SUPPLIER_PRODUCTS_PAGE_SIZE = 25;
+const initialSupplierProductsPagination = {
+  mode: 'offset',
+  page: 1,
+  limit: MATCH_SUPPLIER_PRODUCTS_PAGE_SIZE,
+  total: 0,
+  totalPages: 1,
+  hasNextPage: false,
+  hasPreviousPage: false,
+};
+
+  const initialMatchSortConfig = { key: 'createdAt', direction: 'desc' };
+
+const getArrayPaginationMeta = (rows) => rows?.meta?.pagination || null;
+
+const toSupplierProductSortParam = (sortConfig = initialMatchSortConfig) => {
+  const direction = sortConfig?.direction === 'asc' ? 'asc' : 'desc';
+  if (sortConfig?.key === 'productName') return `productName_${direction}`;
+  if (sortConfig?.key === 'supplierName') return `supplierName_${direction}`;
+  return `createdAt_${direction}`;
 };
 
 const initialMatchForm = {
@@ -664,6 +686,10 @@ export default function Suppliers({ mode = 'suppliers' }) {
   const [depotMatchForm, setDepotMatchForm] = useState(initialDepotMatchForm);
   const [reyonMatchForm, setReyonMatchForm] = useState(initialReyonMatchForm);
   const [supplierProducts, setSupplierProducts] = useState([]);
+  const [supplierProductsPagination, setSupplierProductsPagination] = useState(initialSupplierProductsPagination);
+  const [matchSortConfig, setMatchSortConfig] = useState(initialMatchSortConfig);
+  const [matchSummary, setMatchSummary] = useState(null);
+  const [isSupplierProductsLoading, setIsSupplierProductsLoading] = useState(false);
   const [warehouseLocations, setWarehouseLocations] = useState([]);
   const [isMatchReferenceLoading, setIsMatchReferenceLoading] = useState(false);
   const [toast, setToast] = useState(null);
@@ -682,11 +708,57 @@ export default function Suppliers({ mode = 'suppliers' }) {
   const [batchEditForm, setBatchEditForm] = useState(initialBatchEditForm);
   const [depotEditForm, setDepotEditForm] = useState(initialDepotEditForm);
   const [reyonEditForm, setReyonEditForm] = useState(initialReyonEditForm);
+  const skipInitialMatchQueryRef = useRef(true);
 
   const isAdmin = user?.role === 'admin';
 
+  const buildSupplierProductQuery = ({ page = 1, filters = matchFilters, sortConfig = matchSortConfig } = {}) => ({
+    page,
+    limit: supplierProductsPagination.limit || MATCH_SUPPLIER_PRODUCTS_PAGE_SIZE,
+    search: String(filters.search || filters.supplierSearch || '').trim(),
+    supplierId: filters.supplierId || undefined,
+    isActive: filters.isActive || undefined,
+    sort: toSupplierProductSortParam(sortConfig),
+  });
+
+  const applySupplierProductList = (rows) => {
+    setSupplierProducts(Array.isArray(rows) ? rows : []);
+    const pagination = getArrayPaginationMeta(rows);
+    setSupplierProductsPagination(pagination || initialSupplierProductsPagination);
+  };
+
+  const loadSupplierProductsPage = async ({ page = supplierProductsPagination.page || 1, filters = matchFilters, sortConfig = matchSortConfig, silent = false } = {}) => {
+    try {
+      if (!silent) setIsSupplierProductsLoading(true);
+      const rows = await procurementService.listSupplierProducts(buildSupplierProductQuery({ page, filters, sortConfig }));
+      applySupplierProductList(rows);
+    } catch (error) {
+      setToast({ type: 'error', title: 'Eşleşmeler', message: error.message || 'Ürün-tedarikçi eşleşmeleri yüklenemedi.' });
+    } finally {
+      if (!silent) setIsSupplierProductsLoading(false);
+    }
+  };
+
   const loadData = async () => {
     try {
+      if (isMatchesModule) {
+        setIsLoading(true);
+        const [supplierList, sectionList, warehouseResult, summary, supplierProductList] = await Promise.all([
+          supplierService.list(),
+          sectionService.list(),
+          warehouseService.listLocations({ includeShelfDetails: false }).catch(() => ({ rows: [] })),
+          procurementService.getMatchesSummary().catch(() => null),
+          procurementService.listSupplierProducts(buildSupplierProductQuery({ page: 1, filters: matchFilters, sortConfig: matchSortConfig })),
+        ]);
+
+        setSuppliers(supplierList || []);
+        setSections(Array.isArray(sectionList) ? sectionList : []);
+        setWarehouseLocations(Array.isArray(warehouseResult?.rows) ? warehouseResult.rows : []);
+        setMatchSummary(summary || null);
+        applySupplierProductList(supplierProductList);
+        return;
+      }
+
       const hasWarmCache =
         supplierService.hasListCache()
         && productService.hasListCache({ universe: 'listed_active', includeUnlisted: false })
@@ -722,6 +794,20 @@ export default function Suppliers({ mode = 'suppliers' }) {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!isMatchesModule) return undefined;
+    if (skipInitialMatchQueryRef.current) {
+      skipInitialMatchQueryRef.current = false;
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      loadSupplierProductsPage({ page: 1, filters: matchFilters, sortConfig: matchSortConfig });
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [isMatchesModule, matchFilters.search, matchFilters.supplierId, matchFilters.supplierSearch, matchFilters.isActive, matchSortConfig]);
 
   const productTaxonomyById = useMemo(() => {
     const map = new Map();
@@ -946,6 +1032,35 @@ export default function Suppliers({ mode = 'suppliers' }) {
     setIsModalOpen(true);
   };
 
+  const loadMatchReferenceData = async ({ includeStocks = false } = {}) => {
+    if (!isMatchesModule) return;
+    const needsProducts = products.length === 0;
+    const needsStocks = includeStocks && stocks.length === 0;
+    const needsSections = sections.length === 0;
+    const needsWarehouse = warehouseLocations.length === 0;
+
+    if (!needsProducts && !needsStocks && !needsSections && !needsWarehouse) return;
+
+    try {
+      setIsMatchReferenceLoading(true);
+      const [productList, stockList, sectionList, warehouseResult] = await Promise.all([
+        needsProducts ? productService.list({ universe: 'listed_active', includeUnlisted: false, fetchAll: true, includeListDetails: true }) : Promise.resolve(products),
+        needsStocks ? stockService.getStocks({ fetchAll: true, includeBatches: includeStocks }) : Promise.resolve(stocks),
+        needsSections ? sectionService.list() : Promise.resolve(sections),
+        needsWarehouse ? warehouseService.listLocations({ includeShelfDetails: false }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: warehouseLocations }),
+      ]);
+
+      if (needsProducts) setProducts(productList || []);
+      if (needsStocks) setStocks(Array.isArray(stockList) ? stockList : []);
+      if (needsSections) setSections(Array.isArray(sectionList) ? sectionList : []);
+      if (needsWarehouse) setWarehouseLocations(Array.isArray(warehouseResult?.rows) ? warehouseResult.rows : []);
+    } catch (error) {
+      setToast({ type: 'error', title: 'Eşleşmeler', message: error.message || 'Referans veriler yüklenemedi.' });
+    } finally {
+      setIsMatchReferenceLoading(false);
+    }
+  };
+
   const openCreateMatchModal = async () => {
     setMatchCreateMode(MATCH_CREATE_MODES.PRODUCT_SUPPLIER);
     setMatchForm(initialMatchForm);
@@ -954,9 +1069,19 @@ export default function Suppliers({ mode = 'suppliers' }) {
     setReyonMatchForm(initialReyonMatchForm);
     setIsMatchModalOpen(true);
 
-    setIsMatchReferenceLoading(true);
-    setIsMatchReferenceLoading(false);
+    await loadMatchReferenceData();
   };
+
+  useEffect(() => {
+    if (!isMatchesModule) return;
+    if (matchModuleTab === MATCH_MODULE_TABS.PRODUCT_DEPOT || matchModuleTab === MATCH_MODULE_TABS.PRODUCT_REYON) {
+      loadMatchReferenceData();
+      return;
+    }
+    if (matchModuleTab === MATCH_MODULE_TABS.PRODUCT_BATCH) {
+      loadMatchReferenceData({ includeStocks: true });
+    }
+  }, [isMatchesModule, matchModuleTab]);
 
   const openEditModal = (row) => {
     const currentType = String(row.tedarikciTuru || '').trim();
@@ -1308,6 +1433,35 @@ export default function Suppliers({ mode = 'suppliers' }) {
          canSaveDepotMatch
         : canSaveReyonMatch;
 
+  const refreshSupplierMatches = () => {
+    loadSupplierProductsPage({ page: 1, filters: matchFilters, sortConfig: matchSortConfig });
+  };
+
+  const resetSupplierMatchFilters = () => {
+    setMatchFilters(initialMatchFilters);
+  };
+
+  const handleSupplierMatchesPageChange = (page) => {
+    loadSupplierProductsPage({ page, filters: matchFilters, sortConfig: matchSortConfig });
+  };
+
+  const handleSupplierMatchesSortChange = (nextSort) => {
+    const normalizedSort = nextSort || initialMatchSortConfig;
+    skipInitialMatchQueryRef.current = true;
+    setMatchSortConfig(normalizedSort);
+    loadSupplierProductsPage({ page: 1, filters: matchFilters, sortConfig: normalizedSort });
+  };
+
+  const loadSupplierProductGroup = async (productId) => {
+    const rows = await procurementService.listSupplierProducts({
+      productId,
+      page: 1,
+      limit: 250,
+      sort: 'createdAt_desc',
+    });
+    return Array.isArray(rows) ? rows : [];
+  };
+
   const handleMatchProductChange = (productId) => {
     const selectedProduct = products.find((item) => String(item.id) === String(productId));
     const suggestedSupplierCode = String(selectedProduct?.sku || '').trim();
@@ -1374,7 +1528,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
     }
 
     const finalNote = String(matchForm.note || '').trim();
-    const group = groupedMatchesByProduct.get(String(matchForm.productId || '')) || [];
+    const group = await loadSupplierProductGroup(matchForm.productId);
 
     if (matchForm.isPrimary && group.some((item) => item.isPrimary || item.isPreferred)) {
       await Promise.all(
@@ -1661,7 +1815,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
       setMatchEditSubmitting(true);
 
       const product = products.find((item) => String(item.id) === String(supplierMatchEditForm.productId));
-      const group = groupedMatchesByProduct.get(String(supplierMatchEditForm.productId)) || [];
+      const group = await loadSupplierProductGroup(supplierMatchEditForm.productId);
       const selectedMatch = group.find((item) => String(item.supplierId) === String(supplierMatchEditForm.supplierId)) || null;
 
       if (selectedMatch?.id) {
@@ -2087,6 +2241,41 @@ export default function Suppliers({ mode = 'suppliers' }) {
   ]);
 
   const supplierMatchesTableRows = useMemo(() => {
+    if (isMatchesModule) {
+      return supplierProductTableRows.map((item) => ({
+        ...item,
+        id: item.id,
+        productId: item.productId,
+        productName: item.productName || item.supplierProductName || '-',
+        productSku: item.productSku || item.sku || item.supplierSku || '-',
+        barcode: item.productBarcode || item.barcode || '-',
+        mainCategoryName: item.mainCategoryName || item.categoryName || '-',
+        subCategoryName: item.subCategoryName || '',
+        supplierId: item.supplierId || '',
+        supplierName: item.supplierName || '-',
+        purchasePrice: item.purchasePrice != null ? Number(item.purchasePrice || 0) : null,
+        currency: item.currency || 'TRY',
+        leadTimeDays: item.leadTimeDays != null ? Number(item.leadTimeDays || 0) : null,
+        hasDefaultMatch: true,
+        totalSupplierCount: 1,
+        alternativeSupplierCount: 0,
+        alternativeSupplierNames: [],
+        isActive: item.isActive !== false,
+        totalStock: 0,
+        marginRate: null,
+        supplierScore: null,
+        storageType: item.storageType || 'Ortam',
+        teslimatPerformansi: '',
+        gecikmeDurumu: '',
+        warehouseStock: 0,
+        warehouseMaxStock: 0,
+        shelfStock: 0,
+        shelfMaxStock: 0,
+        nearestExpiry: null,
+        criticalStock: 0,
+      }));
+    }
+
     const search = normalizeSearchText(matchFilters.search);
     const supplierSearch = normalizeSearchText(matchFilters.supplierSearch);
 
@@ -2160,13 +2349,13 @@ export default function Suppliers({ mode = 'suppliers' }) {
         return (matchesSearch && matchesSupplier && matchesSupplierSearch && matchesActive) ? row : null;
       })
       .filter(Boolean);
-  }, [groupedMatchesByProduct, matchFilters, productTaxonomyById, products, stockMap, suppliers]);
+  }, [groupedMatchesByProduct, isMatchesModule, matchFilters, productTaxonomyById, products, stockMap, supplierProductTableRows, suppliers]);
 
   const matchAnalytics = useMemo(() => {
     const rows = supplierMatchesTableRows;
-    const totalProducts = rows.length;
-    const matchedProducts = rows.filter((item) => item.hasDefaultMatch).length;
-    const activeMatches = rows.filter((item) => item.hasDefaultMatch && item.isActive).length;
+    const totalProducts = matchSummary?.totalProducts ?? rows.length;
+    const matchedProducts = matchSummary?.matchedProductCount ?? rows.filter((item) => item.hasDefaultMatch).length;
+    const activeMatches = matchSummary?.activeMatches ?? rows.filter((item) => item.hasDefaultMatch && item.isActive).length;
     const avgPurchasePrice = matchedProducts ?
        rows.filter((item) => item.purchasePrice != null).reduce((sum, item) => sum + Number(item.purchasePrice || 0), 0) / matchedProducts
       : 0;
@@ -2192,9 +2381,11 @@ export default function Suppliers({ mode = 'suppliers' }) {
       coverage,
       sparkline,
     };
-  }, [supplierMatchesTableRows]);
+  }, [matchSummary, supplierMatchesTableRows]);
 
   const productBatchRows = useMemo(() => {
+    if (isMatchesModule && matchModuleTab !== MATCH_MODULE_TABS.PRODUCT_BATCH) return [];
+
     const stockByProductId = new Map(
       (stocks || []).map((item) => [String(item.productId || item.id || ''), item])
     );
@@ -2282,7 +2473,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
         const rightTime = right.skt ? new Date(right.skt).getTime() : Number.POSITIVE_INFINITY;
         return leftTime - rightTime;
       });
-  }, [productTaxonomyById, products, stocks]);
+  }, [isMatchesModule, matchModuleTab, productTaxonomyById, products, stocks]);
 
   const filteredBatchRows = useMemo(() => {
     const search = normalizeSearchText(batchFilters.search);
@@ -2315,6 +2506,8 @@ export default function Suppliers({ mode = 'suppliers' }) {
   }, [batchExpiryFilters, productBatchRows]);
 
   const depotMatchRows = useMemo(() => {
+    if (isMatchesModule && matchModuleTab !== MATCH_MODULE_TABS.PRODUCT_DEPOT) return [];
+
     return products
       .flatMap((product) => {
         const taxonomy = productTaxonomyById.get(String(product.id)) || resolveProductTaxonomy(product);
@@ -2351,7 +2544,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
         }));
       })
       .sort((left, right) => String(left.locationCode || '').localeCompare(String(right.locationCode || ''), 'tr'));
-  }, [productTaxonomyById, products]);
+  }, [isMatchesModule, matchModuleTab, productTaxonomyById, products]);
 
   const filteredDepotRows = useMemo(() => {
     const search = normalizeSearchText(depotFilters.search);
@@ -2374,6 +2567,8 @@ export default function Suppliers({ mode = 'suppliers' }) {
   }, [reyonMatchForm.sectionId, reyonMatchForm.shelfLevel, reyonMatchForm.shelfNo, reyonMatchForm.shelfSide, sectionById]);
 
   const reyonMatchRows = useMemo(() => {
+    if (isMatchesModule && matchModuleTab !== MATCH_MODULE_TABS.PRODUCT_REYON) return [];
+
     return products
       .map((product) => {
         const productId = String(product.id || '');
@@ -2409,7 +2604,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
         };
       })
       .sort((left, right) => String(left.productName || '').localeCompare(String(right.productName || ''), 'tr'));
-  }, [productTaxonomyById, products, sectionById]);
+  }, [isMatchesModule, matchModuleTab, productTaxonomyById, products, sectionById]);
 
   const filteredReyonRows = useMemo(() => {
     const search = normalizeSearchText(reyonFilters.search);
@@ -2591,7 +2786,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
   }, [filteredDepotRows]);
 
   const recentSupplierMatchRows = useMemo(
-    () => supplierProductTableRows
+    () => (Array.isArray(matchSummary?.recentChanges) && matchSummary.recentChanges.length ? matchSummary.recentChanges : supplierProductTableRows)
       .slice()
       .sort((left, right) => {
         const leftTime = new Date(left.updatedAt || left.createdAt || 0).getTime();
@@ -2599,7 +2794,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
         return rightTime - leftTime;
       })
       .slice(0, 8),
-    [supplierProductTableRows]
+    [matchSummary, supplierProductTableRows]
   );
 
   const upcomingBatchRows = useMemo(
@@ -2608,17 +2803,17 @@ export default function Suppliers({ mode = 'suppliers' }) {
   );
 
   const matchHomeSummary = useMemo(() => {
-    const supplierMatchCount = supplierProductTableRows.length;
+    const supplierMatchCount = matchSummary?.totalMatches ?? supplierProductTableRows.length;
     const batchMatchCount = productBatchRows.length;
     const depotMatchCount = depotMatchRows.length;
     const reyonMatchCount = reyonMatchRows.length;
     const total = supplierMatchCount + batchMatchCount + depotMatchCount + reyonMatchCount;
-    const coveredProducts = new Set([
+    const coveredProducts = matchSummary?.matchedProductCount ?? new Set([
       ...supplierProductTableRows.map((item) => String(item.productId || '')),
       ...productBatchRows.map((item) => String(item.productId || '')),
       ...depotMatchRows.map((item) => String(item.productId || '')),
       ...reyonMatchRows.map((item) => String(item.productId || '')),
-    ].filter(Boolean));
+    ].filter(Boolean)).size;
 
     return {
       total,
@@ -2626,9 +2821,9 @@ export default function Suppliers({ mode = 'suppliers' }) {
       batchMatchCount,
       depotMatchCount,
       reyonMatchCount,
-      coveredProducts: coveredProducts.size,
+      coveredProducts,
     };
-  }, [depotMatchRows, productBatchRows, reyonMatchRows, supplierProductTableRows]);
+  }, [depotMatchRows, matchSummary, productBatchRows, reyonMatchRows, supplierProductTableRows]);
 
   const depotStorageTypeOptions = useMemo(
     () => [...new Set(depotMatchRows.map((row) => row.storageType).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr')),
@@ -2641,10 +2836,10 @@ export default function Suppliers({ mode = 'suppliers' }) {
   );
 
   const supplierProductColumns = [
-    { key: 'productSku', label: 'SKU' },
+    { key: 'productSku', label: 'SKU', sortable: false },
     { key: 'productName', label: 'Ürün' },
-    { key: 'mainCategoryName', label: 'Kategori' },
-    { key: 'subCategoryName', label: 'Alt Kategori', render: (row) => row.subCategoryName || '-' },
+    { key: 'mainCategoryName', label: 'Kategori', sortable: false },
+    { key: 'subCategoryName', label: 'Alt Kategori', render: (row) => row.subCategoryName || '-', sortable: false },
     {
       key: 'supplierName',
       label: 'Ana Tedarikçi',
@@ -2654,6 +2849,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
       key: 'storageType',
       label: 'Saklama Tipi',
       render: (row) => row.storageType || '-',
+      sortable: false,
     },
     {
       key: 'isActive',
@@ -3357,8 +3553,8 @@ export default function Suppliers({ mode = 'suppliers' }) {
               className="products-filter-bar-minimal suppliers-filter-bar-minimal"
               actions={(
                 <>
-                  <button className="primary-button" type="button" onClick={() => setMatchFilters((current) => ({ ...current }))}>Filtrele</button>
-                  <button className="ghost-button" type="button" onClick={() => setMatchFilters(initialMatchFilters)}>Temizle</button>
+                  <button className="primary-button" type="button" onClick={refreshSupplierMatches}>Filtrele</button>
+                  <button className="ghost-button" type="button" onClick={resetSupplierMatchFilters}>Temizle</button>
                 </>
               )}
             >
@@ -3377,10 +3573,14 @@ export default function Suppliers({ mode = 'suppliers' }) {
             <DataTable
               columns={supplierProductColumns}
               rows={supplierMatchesTableRows}
-              isLoading={isLoading}
+              isLoading={isLoading || isSupplierProductsLoading}
               emptyMessage="Ürün-tedarikçi eşleşmesi bulunmuyor."
-              initialSort={{ key: 'productName', direction: 'asc' }}
-              pageSize={10}
+              pageSize={MATCH_SUPPLIER_PRODUCTS_PAGE_SIZE}
+              serverPagination={supplierProductsPagination}
+              onPageChange={handleSupplierMatchesPageChange}
+              sortConfig={matchSortConfig}
+              onSortChange={handleSupplierMatchesSortChange}
+              manualSorting
             />
           </div>
         </>
@@ -3392,6 +3592,7 @@ export default function Suppliers({ mode = 'suppliers' }) {
           products={products}
           isAdmin={isAdmin}
           onDataRefresh={loadData}
+          onEnsureReferenceData={loadMatchReferenceData}
         />
       ) : null}
 

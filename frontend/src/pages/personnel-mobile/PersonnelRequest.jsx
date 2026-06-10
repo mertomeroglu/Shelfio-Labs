@@ -10,7 +10,26 @@ function resolveProductName(item) {
 }
 
 function resolveShelfCode(item) {
+  if (isSectionCommonProduct(item)) {
+    return resolveSectionCommonAreaLabel(item);
+  }
   return item?.shelfCode || item?.defaultShelfLocationCode || item?.sectionName || '-';
+}
+
+function isSectionCommonProduct(item) {
+  return Boolean(item?.sectionId && item?.isVirtualLocation === true);
+}
+
+function resolveSectionCommonAreaLabel(item) {
+  const sectionName = String(item?.sectionName || '').trim();
+  const sectionNumber = String(item?.sectionNumber || '').trim();
+  if (sectionName) return `${sectionName} Ortak Alanı`;
+  if (sectionNumber) return `Reyon ${sectionNumber} Ortak Alanı`;
+  return 'Ortak Reyon Alanı';
+}
+
+function resolveTargetLocationTypeLabel(item) {
+  return isSectionCommonProduct(item) ? 'Ortak Reyon Alanı' : 'Fiziksel Raf';
 }
 
 function resolveDepotCode(item) {
@@ -137,14 +156,16 @@ export default function PersonnelRequest() {
 
   const suggestedSlot = useMemo(() => {
     if (!selectedProduct) return '';
+    if (isSectionCommonProduct(selectedProduct)) return resolveSectionCommonAreaLabel(selectedProduct);
     const parsed = parseShelfMeta(requestForm.targetShelfCode || resolveShelfCode(selectedProduct));
     return buildShelfCode({ side: parsed.side || 'L', shelfNo: parsed.shelfNo || '1', levelNo: parsed.levelNo || '1', seed: resolveShelfCode(selectedProduct) });
   }, [requestForm.targetShelfCode, selectedProduct]);
 
   const targetShelfName = useMemo(() => {
     if (!requestForm.targetShelfCode) return '-';
+    if (isSectionCommonProduct(selectedProduct)) return resolveSectionCommonAreaLabel(selectedProduct);
     return `Reyon ${requestForm.targetShelfCode}`;
-  }, [requestForm.targetShelfCode]);
+  }, [requestForm.targetShelfCode, selectedProduct]);
 
   const canUseWarehouseToShelf = stock.warehouse > 0;
   const canUseShelfToWarehouse = stock.shelf > 0;
@@ -165,8 +186,9 @@ export default function PersonnelRequest() {
 
   const handleApplySuggestedTarget = () => {
     if (transferDirection === 'warehouse_to_shelf') {
-      if (!suggestedSlot) return;
-      setRequestForm((prev) => ({ ...prev, targetShelfCode: suggestedSlot }));
+      const target = isSectionCommonProduct(selectedProduct) ? resolveSectionCommonAreaLabel(selectedProduct) : suggestedSlot;
+      if (!target) return;
+      setRequestForm((prev) => ({ ...prev, targetShelfCode: target }));
       return;
     }
     if (!defaultDepotCode || defaultDepotCode === '-') return;
@@ -198,6 +220,11 @@ export default function PersonnelRequest() {
           sourceLocation: requestForm.sourceLocation,
           targetDepotCode: requestForm.targetDepotCode,
           targetShelfCode: requestForm.targetShelfCode,
+          transferTarget: {
+            targetLocationType: isSectionCommonProduct(selectedProduct) ? 'section_common_area' : 'physical_shelf',
+            targetLocationLabel: isSectionCommonProduct(selectedProduct) ? resolveSectionCommonAreaLabel(selectedProduct) : targetShelfName,
+            isVirtualLocation: selectedProduct.isVirtualLocation === true,
+          },
           transferDirection,
           requestedBy: user?.id || user?.username || 'personel',
         },
@@ -252,7 +279,7 @@ export default function PersonnelRequest() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
                         <strong style={{ fontSize: '0.95rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{resolveProductName(item)}</strong>
-                        <small style={{ color: '#64748b' }}>Barkod: {item.barcode || '-'} | Depo: {resolveDepotCode(item)} | Reyon: {resolveShelfCode(item)}</small>
+                        <small style={{ color: '#64748b' }}>Barkod: {item.barcode || '-'} | Depo: {resolveDepotCode(item)} | Hedef: {resolveShelfCode(item)}</small>
                       </div>
                       <ArrowRight size={16} color="#94a3b8" />
                     </div>
@@ -276,7 +303,7 @@ export default function PersonnelRequest() {
                       <span className={`personnel-badge ${resolveRequestStatusClass(item.status)}`}>{item.status || '-'}</span>
                     </div>
                     <div className="personnel-recent-request-meta">
-                      <span>Hedef Reyon: {item.sectionName || item.sectionNumber || '-'}</span>
+                      <span>Hedef: {item.targetLocationLabel || item.payload?.transferTarget?.targetLocationLabel || item.sectionName || item.sectionNumber || '-'}</span>
                       <span>Transfer: {Number(item.quantity || 0)} adet</span>
                       <span>{new Date(item.createdAt || Date.now()).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
@@ -349,10 +376,10 @@ export default function PersonnelRequest() {
 
             {transferDirection === 'warehouse_to_shelf' ? (
               <div className="personnel-form-group personnel-form-group-tight">
-                <span>Hedef Reyon Kodu</span>
+                <span>{isSectionCommonProduct(selectedProduct) ? 'Hedef Ortak Alan' : 'Hedef Reyon Kodu'}</span>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <input className="personnel-input" style={{ flex: 1 }} placeholder="Örn: 10L3-2" value={requestForm.targetShelfCode} onChange={(e) => setRequestForm((prev) => ({ ...prev, targetShelfCode: e.target.value.toUpperCase() }))} />
-                  <button type="button" className="secondary-button" style={{ whiteSpace: 'nowrap' }} onClick={handleApplySuggestedTarget}>Önerilen</button>
+                  <input className="personnel-input" style={{ flex: 1 }} placeholder={isSectionCommonProduct(selectedProduct) ? 'Ortak Reyon Alanı' : 'Örn: 10L3-2'} value={requestForm.targetShelfCode} readOnly={isSectionCommonProduct(selectedProduct)} onChange={(e) => setRequestForm((prev) => ({ ...prev, targetShelfCode: e.target.value.toUpperCase() }))} />
+                  <button type="button" className="secondary-button" style={{ whiteSpace: 'nowrap' }} onClick={handleApplySuggestedTarget}>{isSectionCommonProduct(selectedProduct) ? resolveTargetLocationTypeLabel(selectedProduct) : 'Önerilen'}</button>
                 </div>
               </div>
             ) : (

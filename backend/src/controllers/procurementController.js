@@ -30,6 +30,15 @@ export const procurementController = {
     }
   },
 
+  async getMatchesSummary(req, res, next) {
+    try {
+      const data = await procurementService.getMatchesSummary(req.query || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async createSupplierProduct(req, res, next) {
     try {
       const data = await procurementService.createSupplierProduct(req.body);
@@ -252,6 +261,24 @@ export const procurementController = {
   async listCatalogVersions(req, res, next) {
     try {
       const data = await catalogImportService.listCatalogVersions(req.query || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async listCatalogs(req, res, next) {
+    try {
+      const data = await catalogImportService.listCatalogs(req.query || {});
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async getCatalogItems(req, res, next) {
+    try {
+      const data = await catalogImportService.getCatalogItems(req.params.id, req.query || {});
       res.json({ success: true, data });
     } catch (error) {
       next(error);

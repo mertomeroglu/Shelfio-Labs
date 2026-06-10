@@ -192,6 +192,15 @@ export const settingsController = {
     }
   },
 
+  async getDeveloperLogDetail(req, res, next) {
+    try {
+      const data = await settingsService.getDeveloperLogDetail(req.params.id, req.user);
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async clearLogs(req, res, next) {
     try {
       const result = await settingsService.clearLogs(req.params.type, req.user);

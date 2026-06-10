@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Receipt, PackageCheck, Filter, Truck, Clock, CheckCircle2, FileText, FileSpreadsheet, Archive, AlertTriangle, CalendarDays, ClipboardList, CircleDollarSign, History, Route, Info } from 'lucide-react';
 import {
   Bar,
@@ -34,6 +34,11 @@ import {
   PURCHASE_ORDER_STATUSES,
   VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE,
 } from '../../utils/purchaseOrderLifecycle.js';
+import {
+  buildOrderDatePreset,
+  calculateLifecycleStageMetric,
+  isOrderWithinDateBounds,
+} from '../../utils/purchaseOrderMetrics.js';
 
 const normalizeMoneyInput = (value) => String(value ?? '').replace(',', '.');
 
@@ -75,6 +80,8 @@ const initialFilters = {
   status: '',
   orderDateFrom: '',
   orderDateTo: '',
+  orderDateFromTime: '',
+  orderDateToTime: '',
   amountMin: '',
   amountMax: '',
   createdBy: '',
@@ -508,7 +515,10 @@ function OrderStatusFlowPanel({ currentStatus, selectedStatus, onSelectStatus, i
     },
     [canonicalCurrentStatus, visibleCurrentStatus],
   );
-  const selectedVisibleStatus = mapPurchaseOrderStatusToVisibleStatus(selectedStatus);
+  const selectedVisibleStatus = useMemo(() => {
+    if (selectedStatus === 'approved') return 'supplier_notified';
+    return mapPurchaseOrderStatusToVisibleStatus(selectedStatus);
+  }, [selectedStatus]);
 
   if (isLoading) {
     return (
@@ -615,7 +625,7 @@ export default function PurchaseOrders() {
         supplierId: '',
       };
       const [orders, supplierList] = await Promise.all([
-        procurementService.listOrders(apiQuery),
+        procurementService.listAllOrders(apiQuery),
         supplierService.list(),
       ]);
       const normalizedOrders = (Array.isArray(orders) ? orders : []).map((order) => ({
@@ -779,10 +789,7 @@ export default function PurchaseOrders() {
       const createdAt = row.createdAt ? new Date(row.createdAt) : null;
       const estimatedDelivery = row.estimatedDeliveryDate ? new Date(row.estimatedDeliveryDate) : null;
 
-      const matchesOrderFrom = !filters.orderDateFrom
-        || (createdAt && createdAt >= new Date(filters.orderDateFrom));
-      const matchesOrderTo = !filters.orderDateTo
-        || (createdAt && createdAt <= new Date(filters.orderDateTo));
+      const matchesOrderDate = isOrderWithinDateBounds(createdAt, filters);
 
       const amount = Number(row.grandTotal ?? row.totalAmount ?? 0);
       const matchesAmountMin = !filters.amountMin || amount >= parseMoneyInput(filters.amountMin, 0);
@@ -793,8 +800,7 @@ export default function PurchaseOrders() {
         && matchesStatus
         && matchesSupplier
         && matchesCreatedBy
-        && matchesOrderFrom
-        && matchesOrderTo
+        && matchesOrderDate
         && matchesAmountMin
         && matchesAmountMax
       );
@@ -802,24 +808,7 @@ export default function PurchaseOrders() {
   }, [rows, filters]);
 
   const applyOrderDatePreset = (preset) => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const toISODate = (date) => date.toISOString().slice(0, 10);
-
-    if (preset === 'today') {
-      const value = toISODate(today);
-      setFilters((current) => ({ ...current, orderDateFrom: value, orderDateTo: value }));
-      return;
-    }
-
-    if (preset === 'last7') {
-      const from = new Date(today);
-      from.setDate(from.getDate() - 6);
-      setFilters((current) => ({ ...current, orderDateFrom: toISODate(from), orderDateTo: toISODate(today) }));
-      return;
-    }
-
-    setFilters((current) => ({ ...current, orderDateFrom: '', orderDateTo: '' }));
+    setFilters((current) => ({ ...current, ...buildOrderDatePreset(preset) }));
   };
 
   const handleCreatedByInputChange = (value) => {
@@ -1326,25 +1315,22 @@ export default function PurchaseOrders() {
   }, [filteredRows]);
 
   const lifecyclePerformance = useMemo(() => {
-    const collectAverageHours = (startStatus, endStatus) => {
-      const durations = filteredRows
-        .map((row) => {
-          const start = getStatusTimestamp(row, startStatus);
-          const end = getStatusTimestamp(row, endStatus);
-          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-          return (end - start) / (1000 * 60 * 60);
-        })
-        .filter((value) => Number.isFinite(value));
-
-      if (!durations.length) return null;
-      return durations.reduce((sum, value) => sum + value, 0) / durations.length;
-    };
+    const collectStage = (startStatus, endStatus) => calculateLifecycleStageMetric({
+      orders: filteredRows,
+      startStatus,
+      endStatus,
+      getStatusTimestamp,
+    });
 
     const total = filteredRows.length;
+    const approval = collectStage('submitted_for_approval', 'approved');
+    const supplierNotify = collectStage('approved', 'supplier_notified');
+    const delivery = collectStage('supplier_notified', 'goods_receipt_completed');
     return {
-      avgApprovalHours: collectAverageHours('submitted_for_approval', 'approved'),
-      avgSupplierNotifyHours: collectAverageHours('approved', 'supplier_notified'),
-      avgDeliveryHours: collectAverageHours('supplier_notified', 'goods_receipt_completed'),
+      avgApprovalHours: approval.averageHours,
+      avgSupplierNotifyHours: supplierNotify.averageHours,
+      avgDeliveryHours: delivery.averageHours,
+      approvalActiveCount: approval.activeCount,
       delayedRate: total ? (delayedSummary.count / total) * 100 : null,
       total,
     };
@@ -1361,24 +1347,22 @@ export default function PurchaseOrders() {
 
     return stageDefinitions
       .map((stage) => {
-        const durations = filteredRows
-          .map((row) => {
-            const start = getStatusTimestamp(row, stage.start);
-            const end = getStatusTimestamp(row, stage.end);
-            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-            return (end - start) / (1000 * 60 * 60);
-          })
-          .filter((value) => Number.isFinite(value));
+        const metric = calculateLifecycleStageMetric({
+          orders: filteredRows,
+          startStatus: stage.start,
+          endStatus: stage.end,
+          getStatusTimestamp,
+        });
 
-        if (!durations.length) {
+        if (!metric.sampleCount) {
           return null;
         }
 
-        const averageHours = durations.reduce((sum, value) => sum + value, 0) / durations.length;
         return {
           key: stage.key,
           name: stage.name,
-          value: Number(averageHours.toFixed(1)),
+          value: Number(metric.averageHours.toFixed(1)),
+          activeCount: metric.activeCount,
         };
       })
       .filter(Boolean);
@@ -1534,8 +1518,9 @@ export default function PurchaseOrders() {
             {lifecyclePerformance.total ? (
               <div className="purchase-orders-lifecycle-grid">
                 <div className="purchase-orders-lifecycle-metric">
-                  <span>Ortalama onay süresi</span>
+                  <span>Onaya Gönderildi / Onay Bekliyor</span>
                   <strong>{formatMetricHours(lifecyclePerformance.avgApprovalHours)}</strong>
+                  <small>{formatNumber(lifecyclePerformance.approvalActiveCount)} aktif sipariş</small>
                 </div>
                 <div className="purchase-orders-lifecycle-metric">
                   <span>Ortalama tedarikçiye iletme süresi</span>
@@ -1653,7 +1638,11 @@ export default function PurchaseOrders() {
               <input
                 type="date"
                 value={filters.orderDateFrom}
-                onChange={(event) => setFilters((current) => ({ ...current, orderDateFrom: event.target.value }))}
+                onChange={(event) => setFilters((current) => ({
+                  ...current,
+                  orderDateFrom: event.target.value,
+                  orderDateFromTime: '',
+                }))}
               />
             </label>
             <label className="field-group">
@@ -1661,7 +1650,11 @@ export default function PurchaseOrders() {
               <input
                 type="date"
                 value={filters.orderDateTo}
-                onChange={(event) => setFilters((current) => ({ ...current, orderDateTo: event.target.value }))}
+                onChange={(event) => setFilters((current) => ({
+                  ...current,
+                  orderDateTo: event.target.value,
+                  orderDateToTime: '',
+                }))}
               />
             </label>
             <label className="field-group purchase-orders-amount-field">
@@ -1738,6 +1731,7 @@ export default function PurchaseOrders() {
 
             <div className="purchase-orders-filter-actions">
               <button className="ghost-button purchase-orders-quick-button" type="button" onClick={() => applyOrderDatePreset('today')}>Bugün</button>
+              <button className="ghost-button purchase-orders-quick-button" type="button" onClick={() => applyOrderDatePreset('last24')}>Son 24 Saat</button>
               <button className="ghost-button purchase-orders-quick-button" type="button" onClick={() => applyOrderDatePreset('last7')}>Son 7 Gün</button>
               <button
                 className="ghost-button purchase-orders-clear-button"

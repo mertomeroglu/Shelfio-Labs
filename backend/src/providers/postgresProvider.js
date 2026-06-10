@@ -46,6 +46,8 @@ const TENANT_SCOPED_PRISMA_MODELS = new Set([
   'StockBatch',
   'StockMovement',
   'StockTransferRequest',
+  'StoreLayout',
+  'StoreLayoutItem',
   'Supplier',
   'SupplierCatalogVersion',
   'SupplierProduct',
@@ -118,7 +120,18 @@ export const getPrisma = async () => {
                 nextArgs.data = addTenantToData(nextArgs.data, tenantId);
               }
 
-              return query(nextArgs);
+              const result = await query(nextArgs);
+
+              if (!READ_OPERATIONS.has(operation)) {
+                try {
+                  const { clearDashboardCache } = await import('../services/reportService.js');
+                  clearDashboardCache(tenantId);
+                } catch (e) {
+                  // Ignore cache invalidation failures in standalone/testing scripts
+                }
+              }
+
+              return result;
             },
           },
         },

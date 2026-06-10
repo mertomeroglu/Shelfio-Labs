@@ -85,7 +85,12 @@ describe('OrderRecommendations integration flow', () => {
     window.sessionStorage.clear();
     mockNavigate.mockReset();
     mockGenerateSuggestions.mockResolvedValue({ ok: true });
-    mockApproveSuggestion.mockResolvedValue({ id: 'po-1', orderNumber: 'PO-1' });
+    mockApproveSuggestion.mockResolvedValue({
+      id: 'po-1',
+      orderNumber: 'PO-1',
+      status: 'submitted_for_approval',
+      currentStatus: 'submitted_for_approval',
+    });
     mockListSuggestions.mockResolvedValue(baseRows);
     mockListSuppliers.mockResolvedValue([
       { id: 's1', name: 'Tedarikçi A' },
@@ -206,6 +211,6 @@ describe('OrderRecommendations integration flow', () => {
       expect.anything(),
     );
     expect((await screen.findAllByText(/olu/i)).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Detaya Git' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Onay Bekleyenlere Git' })).toBeInTheDocument();
   });
 });

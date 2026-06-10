@@ -1,0 +1,2398 @@
+{
+  "generatedAt": "2026-06-09T23:46:58.140Z",
+  "seed": 1576245987,
+  "days": 45,
+  "range": {
+    "startDate": "2026-04-27",
+    "endDate": "2026-06-10"
+  },
+  "beforeSales45Days": 14236,
+  "afterSales45Days": 14492,
+  "createdSaleCount": 256,
+  "createdSaleItemCount": 1443,
+  "createdUnitCount": 1924,
+  "totalAmount": 178581.17,
+  "paymentBreakdown": {
+    "card": 153,
+    "qr": 24,
+    "cash": 70,
+    "eft": 9
+  },
+  "categorySummary": [
+    {
+      "categoryName": "Atıştırmalık",
+      "qty": 454,
+      "lines": 334
+    },
+    {
+      "categoryName": "Süt, Kahvaltılık",
+      "qty": 218,
+      "lines": 157
+    },
+    {
+      "categoryName": "Kişisel Bakım, Kozmetik, Sağlık",
+      "qty": 217,
+      "lines": 163
+    },
+    {
+      "categoryName": "Temel Gıda",
+      "qty": 185,
+      "lines": 134
+    },
+    {
+      "categoryName": "İçecek",
+      "qty": 176,
+      "lines": 137
+    },
+    {
+      "categoryName": "Bebek",
+      "qty": 121,
+      "lines": 87
+    },
+    {
+      "categoryName": "Et, Tavuk, Balık",
+      "qty": 87,
+      "lines": 66
+    },
+    {
+      "categoryName": "Fırın, Pastane",
+      "qty": 86,
+      "lines": 65
+    },
+    {
+      "categoryName": "Deterjan, Temizlik",
+      "qty": 84,
+      "lines": 66
+    },
+    {
+      "categoryName": "Hazır Yemek, Donuk",
+      "qty": 80,
+      "lines": 66
+    },
+    {
+      "categoryName": "Ev, Yaşam",
+      "qty": 65,
+      "lines": 52
+    },
+    {
+      "categoryName": "Kitap, Kırtasiye, Oyuncak",
+      "qty": 63,
+      "lines": 48
+    }
+  ],
+  "skippedCount": 4,
+  "skippedByReason": {
+    "\nInvalid `prisma.sale.create()` invocation:\n\n\nUnique constraint failed on the fields: (`reference_no`)": 4
+  },
+  "validation": {
+    "createdRowsVisibleInSalesRepo": 256,
+    "stockMovementRowsForCreatedSales": 1455,
+    "negativeStockCount": 0
+  },
+  "createdSales": [
+    {
+      "id": "45bb8dd5-d69f-4b83-a258-af4b9763e588",
+      "referenceNo": "SAT-20260427-579",
+      "createdAt": "2026-04-27T09:32:14.756Z",
+      "totalAmount": 1452.8000000000002,
+      "paymentMethod": "card",
+      "itemCount": 11,
+      "unitCount": 13
+    },
+    {
+      "id": "e5194a05-ca2d-450d-b03b-ab88916aae49",
+      "referenceNo": "SAT-20260427-193",
+      "createdAt": "2026-04-27T13:16:23.873Z",
+      "totalAmount": 430,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 6
+    },
+    {
+      "id": "aa48b12d-93bb-46f9-a380-368674fa60a0",
+      "referenceNo": "SAT-20260427-678",
+      "createdAt": "2026-04-27T13:55:17.374Z",
+      "totalAmount": 789,
+      "paymentMethod": "qr",
+      "itemCount": 9,
+      "unitCount": 11
+    },
+    {
+      "id": "a03ef81c-90a1-4a68-9b30-6017df564e75",
+      "referenceNo": "SAT-20260428-271",
+      "createdAt": "2026-04-28T17:19:41.893Z",
+      "totalAmount": 1709.15,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "e9b95cc8-6504-40a8-8a46-ad998b5dc8e5",
+      "referenceNo": "SAT-20260428-782",
+      "createdAt": "2026-04-28T11:35:08.196Z",
+      "totalAmount": 576.25,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "6ee73f42-3f13-4eec-ba25-d6231ab42292",
+      "referenceNo": "SAT-20260429-633",
+      "createdAt": "2026-04-29T14:17:55.843Z",
+      "totalAmount": 753.74,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "c35bbd65-6d67-48a2-abd8-002b58fba314",
+      "referenceNo": "SAT-20260429-599",
+      "createdAt": "2026-04-29T17:47:54.667Z",
+      "totalAmount": 2015.3000000000002,
+      "paymentMethod": "card",
+      "itemCount": 13,
+      "unitCount": 15
+    },
+    {
+      "id": "b16a284c-76bb-4188-a97a-d8c0e2826434",
+      "referenceNo": "SAT-20260429-489",
+      "createdAt": "2026-04-29T16:38:21.908Z",
+      "totalAmount": 793.6800000000001,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 9
+    },
+    {
+      "id": "cd733081-c0a2-4d1a-8c71-d3cd5d9ddd59",
+      "referenceNo": "SAT-20260429-943",
+      "createdAt": "2026-04-29T09:07:22.734Z",
+      "totalAmount": 194.25,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "07811dc5-fd7d-4ca3-967d-b8b419ae4fa7",
+      "referenceNo": "SAT-20260430-835",
+      "createdAt": "2026-04-30T15:33:26.232Z",
+      "totalAmount": 1351.55,
+      "paymentMethod": "qr",
+      "itemCount": 14,
+      "unitCount": 20
+    },
+    {
+      "id": "4c5fdd53-3ecb-4389-9aa1-82aed217508a",
+      "referenceNo": "SAT-20260430-965",
+      "createdAt": "2026-04-30T14:45:25.132Z",
+      "totalAmount": 1621.69,
+      "paymentMethod": "card",
+      "itemCount": 14,
+      "unitCount": 17
+    },
+    {
+      "id": "bc94459f-4cb6-4f26-ab5d-8ba1e04ee449",
+      "referenceNo": "SAT-20260430-260",
+      "createdAt": "2026-04-30T15:38:01.981Z",
+      "totalAmount": 1543.25,
+      "paymentMethod": "cash",
+      "itemCount": 8,
+      "unitCount": 12
+    },
+    {
+      "id": "b45c05f6-d0ec-4e36-a791-16719c3de8ca",
+      "referenceNo": "SAT-20260430-340",
+      "createdAt": "2026-04-30T09:00:15.303Z",
+      "totalAmount": 493.34999999999997,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "d621a397-b7aa-4516-a04b-a95687312046",
+      "referenceNo": "SAT-20260501-724",
+      "createdAt": "2026-05-01T10:36:10.260Z",
+      "totalAmount": 432.99,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "d2c3e032-8a91-4319-944a-071395f2676c",
+      "referenceNo": "SAT-20260501-514",
+      "createdAt": "2026-05-01T11:57:23.989Z",
+      "totalAmount": 514.45,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "ff93678f-f496-4f52-9384-430282990a80",
+      "referenceNo": "SAT-20260501-684",
+      "createdAt": "2026-05-01T09:00:23.755Z",
+      "totalAmount": 453.98,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "08771836-ced1-442c-8a72-caacbf0d0455",
+      "referenceNo": "SAT-20260501-898",
+      "createdAt": "2026-05-01T11:13:49.753Z",
+      "totalAmount": 566.25,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 8
+    },
+    {
+      "id": "69931784-3bd4-4674-baac-a24637e40e62",
+      "referenceNo": "SAT-20260501-532",
+      "createdAt": "2026-05-01T16:01:28.716Z",
+      "totalAmount": 1323.05,
+      "paymentMethod": "qr",
+      "itemCount": 12,
+      "unitCount": 15
+    },
+    {
+      "id": "df3fc0f0-e597-4f71-ac70-2bebd25f09d2",
+      "referenceNo": "SAT-20260502-750",
+      "createdAt": "2026-05-02T07:47:14.388Z",
+      "totalAmount": 948.4499999999999,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 9
+    },
+    {
+      "id": "fecaad9f-8b2e-496b-a8c4-d8651c6177a7",
+      "referenceNo": "SAT-20260502-524",
+      "createdAt": "2026-05-02T15:03:22.463Z",
+      "totalAmount": 830.4,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "974f5750-2cf2-4fa4-938c-71cfbca1b9f4",
+      "referenceNo": "SAT-20260502-270",
+      "createdAt": "2026-05-02T15:58:27.728Z",
+      "totalAmount": 332.9,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "c2d0c882-a96d-418b-8bb6-4c2860116b4a",
+      "referenceNo": "SAT-20260502-180",
+      "createdAt": "2026-05-02T14:51:42.820Z",
+      "totalAmount": 610.05,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 12
+    },
+    {
+      "id": "b1bd79b6-d57e-4e8c-920a-7e8521247617",
+      "referenceNo": "SAT-20260502-392",
+      "createdAt": "2026-05-02T09:10:22.080Z",
+      "totalAmount": 535.5,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "3c8977f1-f650-4420-ae23-90f3799dd2b2",
+      "referenceNo": "SAT-20260502-562",
+      "createdAt": "2026-05-02T12:27:20.093Z",
+      "totalAmount": 619.65,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "5ba866b2-c56c-4aef-b455-ba85c448e18d",
+      "referenceNo": "SAT-20260503-224",
+      "createdAt": "2026-05-03T13:50:36.823Z",
+      "totalAmount": 417.9,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "13da3efa-c1c7-442c-a037-fe9ff922f943",
+      "referenceNo": "SAT-20260503-520",
+      "createdAt": "2026-05-03T07:52:40.494Z",
+      "totalAmount": 658.76,
+      "paymentMethod": "qr",
+      "itemCount": 8,
+      "unitCount": 13
+    },
+    {
+      "id": "51237f7a-cb07-46eb-aee1-e143ce0b28dc",
+      "referenceNo": "SAT-20260503-781",
+      "createdAt": "2026-05-03T16:50:14.306Z",
+      "totalAmount": 1772.25,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "09a5a8d1-63d1-4752-88e0-32ddf67cba2f",
+      "referenceNo": "SAT-20260503-194",
+      "createdAt": "2026-05-03T16:52:31.481Z",
+      "totalAmount": 1489.7,
+      "paymentMethod": "card",
+      "itemCount": 12,
+      "unitCount": 15
+    },
+    {
+      "id": "e5fc8106-3d9e-4fc5-ae47-e4eab17c646e",
+      "referenceNo": "SAT-20260504-336",
+      "createdAt": "2026-05-04T09:17:36.117Z",
+      "totalAmount": 1286.5900000000001,
+      "paymentMethod": "eft",
+      "itemCount": 11,
+      "unitCount": 16
+    },
+    {
+      "id": "54d67f9f-c5e9-4a57-84c1-3fdfc8dd5fe8",
+      "referenceNo": "SAT-20260504-197",
+      "createdAt": "2026-05-04T15:57:25.839Z",
+      "totalAmount": 1377.7,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 11
+    },
+    {
+      "id": "d75486b1-2c0b-43b8-9112-95150b7ebfb8",
+      "referenceNo": "SAT-20260504-188",
+      "createdAt": "2026-05-04T15:08:46.180Z",
+      "totalAmount": 1686.3000000000002,
+      "paymentMethod": "card",
+      "itemCount": 12,
+      "unitCount": 17
+    },
+    {
+      "id": "3c2820c7-1a9f-44ab-a8e7-fc965b15f1ee",
+      "referenceNo": "SAT-20260504-817",
+      "createdAt": "2026-05-04T16:44:40.984Z",
+      "totalAmount": 97.5,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "24f166f1-bc3c-4a91-a0c3-6f07d3b80ebf",
+      "referenceNo": "SAT-20260505-574",
+      "createdAt": "2026-05-05T09:59:59.480Z",
+      "totalAmount": 1498.02,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 13
+    },
+    {
+      "id": "820c928f-9a74-4298-a550-647d4d28e8d5",
+      "referenceNo": "SAT-20260505-490",
+      "createdAt": "2026-05-05T12:46:30.653Z",
+      "totalAmount": 619.15,
+      "paymentMethod": "cash",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "cd6084b3-16f2-4bb6-bf08-40b0c2fa11be",
+      "referenceNo": "SAT-20260505-793",
+      "createdAt": "2026-05-05T16:53:10.475Z",
+      "totalAmount": 623,
+      "paymentMethod": "qr",
+      "itemCount": 6,
+      "unitCount": 6
+    },
+    {
+      "id": "c4321c0a-f251-4381-ad19-c67778204d27",
+      "referenceNo": "SAT-20260506-651",
+      "createdAt": "2026-05-06T12:01:56.009Z",
+      "totalAmount": 446.25,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "b62665a9-da4a-492a-9fdd-3e60860511ca",
+      "referenceNo": "SAT-20260506-424",
+      "createdAt": "2026-05-06T18:23:28.913Z",
+      "totalAmount": 884,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 10
+    },
+    {
+      "id": "441b9f48-6b41-4ccb-83ea-67b835587cfc",
+      "referenceNo": "SAT-20260506-616",
+      "createdAt": "2026-05-06T14:28:15.022Z",
+      "totalAmount": 1044.8500000000001,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 12
+    },
+    {
+      "id": "f35edc33-a7f1-420d-8aaa-125f243902ec",
+      "referenceNo": "SAT-20260507-957",
+      "createdAt": "2026-05-07T07:42:41.720Z",
+      "totalAmount": 130.5,
+      "paymentMethod": "qr",
+      "itemCount": 2,
+      "unitCount": 4
+    },
+    {
+      "id": "0821e80d-0072-4700-a15c-c776a217a63c",
+      "referenceNo": "SAT-20260507-721",
+      "createdAt": "2026-05-07T16:20:19.751Z",
+      "totalAmount": 2119.05,
+      "paymentMethod": "qr",
+      "itemCount": 11,
+      "unitCount": 15
+    },
+    {
+      "id": "29dd1bf7-7341-4c3a-96f6-0a86ef538d9b",
+      "referenceNo": "SAT-20260507-507",
+      "createdAt": "2026-05-07T16:03:29.770Z",
+      "totalAmount": 390.4,
+      "paymentMethod": "qr",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "95bdc247-ed08-496f-b018-1c08eadc7091",
+      "referenceNo": "SAT-20260508-831",
+      "createdAt": "2026-05-08T18:21:01.785Z",
+      "totalAmount": 411.15,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "f95d89cb-13d2-4353-8380-03cd2e24924f",
+      "referenceNo": "SAT-20260508-804",
+      "createdAt": "2026-05-08T12:51:44.502Z",
+      "totalAmount": 569,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "fc101925-3ea4-4d11-ae5d-3239d17f26fe",
+      "referenceNo": "SAT-20260508-975",
+      "createdAt": "2026-05-08T17:04:11.034Z",
+      "totalAmount": 1032.7,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "ba3fb84f-dba0-43ec-93e1-2d7d4d1d6c15",
+      "referenceNo": "SAT-20260509-150",
+      "createdAt": "2026-05-09T13:00:32.186Z",
+      "totalAmount": 200.75,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "c24f9980-78dd-4bc6-b736-f3f6ab33fa45",
+      "referenceNo": "SAT-20260509-243",
+      "createdAt": "2026-05-09T18:24:38.321Z",
+      "totalAmount": 774.5,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "e2058e6e-3593-4860-8938-97f70405c695",
+      "referenceNo": "SAT-20260509-422",
+      "createdAt": "2026-05-09T11:56:19.446Z",
+      "totalAmount": 100.5,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "aea66950-fde6-4cab-bef6-d7dbf89a7bed",
+      "referenceNo": "SAT-20260509-794",
+      "createdAt": "2026-05-09T16:21:35.949Z",
+      "totalAmount": 117.5,
+      "paymentMethod": "cash",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "db7128ee-a2d8-48d8-8c3a-488c8d7533fb",
+      "referenceNo": "SAT-20260509-182",
+      "createdAt": "2026-05-09T09:56:25.451Z",
+      "totalAmount": 891.75,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "85261ce0-d157-40b7-8523-f7f40422674b",
+      "referenceNo": "SAT-20260510-846",
+      "createdAt": "2026-05-10T17:19:58.340Z",
+      "totalAmount": 244.75,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "4b0618ba-6619-49ea-9234-343654b1ef8b",
+      "referenceNo": "SAT-20260510-261",
+      "createdAt": "2026-05-10T09:35:02.135Z",
+      "totalAmount": 1510.24,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 7
+    },
+    {
+      "id": "55f52b72-89b9-4212-94a0-8ddef7a471ce",
+      "referenceNo": "SAT-20260510-403",
+      "createdAt": "2026-05-10T12:14:17.921Z",
+      "totalAmount": 2353,
+      "paymentMethod": "card",
+      "itemCount": 14,
+      "unitCount": 21
+    },
+    {
+      "id": "8b3b59d6-53ca-4977-a707-a88ab659d03c",
+      "referenceNo": "SAT-20260510-363",
+      "createdAt": "2026-05-10T09:15:15.336Z",
+      "totalAmount": 1131.85,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 13
+    },
+    {
+      "id": "735f1250-952e-49de-8a73-2fa3c42fe9f9",
+      "referenceNo": "SAT-20260511-802",
+      "createdAt": "2026-05-11T13:57:47.742Z",
+      "totalAmount": 1525,
+      "paymentMethod": "card",
+      "itemCount": 15,
+      "unitCount": 18
+    },
+    {
+      "id": "fb51378a-9976-4642-abd9-6e6dad28d030",
+      "referenceNo": "SAT-20260511-929",
+      "createdAt": "2026-05-11T16:17:32.013Z",
+      "totalAmount": 775.4000000000001,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "abc91674-e5bd-4a6e-8bd0-0de32ef79989",
+      "referenceNo": "SAT-20260512-768",
+      "createdAt": "2026-05-12T10:14:45.540Z",
+      "totalAmount": 1530.79,
+      "paymentMethod": "card",
+      "itemCount": 14,
+      "unitCount": 18
+    },
+    {
+      "id": "072a55ef-c4c8-406f-89c8-1fac0d569bfe",
+      "referenceNo": "SAT-20260512-856",
+      "createdAt": "2026-05-12T17:59:23.649Z",
+      "totalAmount": 611.15,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "a28295e1-0c9e-4a4c-8530-204064f0fc85",
+      "referenceNo": "SAT-20260513-168",
+      "createdAt": "2026-05-13T11:51:27.914Z",
+      "totalAmount": 294.9,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "0e66b369-405f-4d73-b882-a90f7df87c23",
+      "referenceNo": "SAT-20260513-337",
+      "createdAt": "2026-05-13T14:58:39.864Z",
+      "totalAmount": 2520.95,
+      "paymentMethod": "qr",
+      "itemCount": 14,
+      "unitCount": 21
+    },
+    {
+      "id": "76041e8c-4aec-4f58-bbdf-0d214aa60a25",
+      "referenceNo": "SAT-20260513-531",
+      "createdAt": "2026-05-13T10:20:05.808Z",
+      "totalAmount": 1146.42,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 14
+    },
+    {
+      "id": "23e33ed8-5520-4a40-a390-7014045351a0",
+      "referenceNo": "SAT-20260513-293",
+      "createdAt": "2026-05-13T13:38:01.171Z",
+      "totalAmount": 343,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "236ca2a2-3143-446b-8ba9-240871ac65e4",
+      "referenceNo": "SAT-20260514-727",
+      "createdAt": "2026-05-14T17:50:07.441Z",
+      "totalAmount": 104.5,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "3712986f-3a70-48f6-8610-4b1d98cbfed5",
+      "referenceNo": "SAT-20260514-618",
+      "createdAt": "2026-05-14T07:29:47.050Z",
+      "totalAmount": 594.8899999999999,
+      "paymentMethod": "eft",
+      "itemCount": 8,
+      "unitCount": 9
+    },
+    {
+      "id": "733f7efb-cace-424d-8baa-dead0b2a8636",
+      "referenceNo": "SAT-20260514-483",
+      "createdAt": "2026-05-14T09:40:13.165Z",
+      "totalAmount": 657.9,
+      "paymentMethod": "cash",
+      "itemCount": 8,
+      "unitCount": 8
+    },
+    {
+      "id": "e9291a22-9c21-4f15-878c-cd6da89fc771",
+      "referenceNo": "SAT-20260514-125",
+      "createdAt": "2026-05-14T07:36:03.326Z",
+      "totalAmount": 624.2299999999999,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "cbddabe0-f1f8-4126-b96f-af2a431e5c93",
+      "referenceNo": "SAT-20260514-167",
+      "createdAt": "2026-05-14T09:07:03.541Z",
+      "totalAmount": 687.4,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "9236593f-537a-4212-b6be-4dca0e4cb519",
+      "referenceNo": "SAT-20260515-503",
+      "createdAt": "2026-05-15T10:48:00.108Z",
+      "totalAmount": 264,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "9bef453e-3afb-446e-8aaf-10329553c627",
+      "referenceNo": "SAT-20260515-253",
+      "createdAt": "2026-05-15T08:41:43.593Z",
+      "totalAmount": 1513.15,
+      "paymentMethod": "card",
+      "itemCount": 12,
+      "unitCount": 14
+    },
+    {
+      "id": "cd83d2f2-f17f-45db-9410-6e9b6ccbae96",
+      "referenceNo": "SAT-20260515-822",
+      "createdAt": "2026-05-15T09:42:23.802Z",
+      "totalAmount": 865.5,
+      "paymentMethod": "cash",
+      "itemCount": 8,
+      "unitCount": 9
+    },
+    {
+      "id": "af5b8c3e-760c-42e6-81af-59e9fc0046c8",
+      "referenceNo": "SAT-20260516-678",
+      "createdAt": "2026-05-16T13:32:49.964Z",
+      "totalAmount": 1202.6,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "b641d79f-0ab9-4562-ae4b-e1abe57f7094",
+      "referenceNo": "SAT-20260516-978",
+      "createdAt": "2026-05-16T07:27:16.560Z",
+      "totalAmount": 55,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 2
+    },
+    {
+      "id": "747ef230-f58d-4eec-a3f0-c92d50d3f7c9",
+      "referenceNo": "SAT-20260516-974",
+      "createdAt": "2026-05-16T16:35:05.367Z",
+      "totalAmount": 1107.6,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "f3c10326-31c2-4d60-9caf-5c446be772ab",
+      "referenceNo": "SAT-20260516-423",
+      "createdAt": "2026-05-16T07:15:21.773Z",
+      "totalAmount": 1388.2,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 12
+    },
+    {
+      "id": "ed762dbc-6ed1-446d-9510-2140e36d753a",
+      "referenceNo": "SAT-20260516-866",
+      "createdAt": "2026-05-16T15:18:33.237Z",
+      "totalAmount": 983.24,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "b47df3be-6b98-4cf4-8164-1e5b5408c8b9",
+      "referenceNo": "SAT-20260517-524",
+      "createdAt": "2026-05-17T15:57:18.550Z",
+      "totalAmount": 309.75,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "be09d20b-a303-4006-bd62-b3bf5d1f926e",
+      "referenceNo": "SAT-20260517-168",
+      "createdAt": "2026-05-17T17:10:27.027Z",
+      "totalAmount": 2449.05,
+      "paymentMethod": "cash",
+      "itemCount": 14,
+      "unitCount": 17
+    },
+    {
+      "id": "8e63c9c9-3570-40a6-a2d6-ad6c7eb33f67",
+      "referenceNo": "SAT-20260517-697",
+      "createdAt": "2026-05-17T17:42:41.065Z",
+      "totalAmount": 479.98,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 6
+    },
+    {
+      "id": "bef86330-ea4b-4196-88f5-b4527ee30c97",
+      "referenceNo": "SAT-20260517-288",
+      "createdAt": "2026-05-17T14:23:15.103Z",
+      "totalAmount": 617.4,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "0b79e508-2233-4419-a2ba-9c63173c5258",
+      "referenceNo": "SAT-20260518-409",
+      "createdAt": "2026-05-18T17:52:27.369Z",
+      "totalAmount": 393.4,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 9
+    },
+    {
+      "id": "0431a0ab-d54a-487b-b1ab-2895bc474783",
+      "referenceNo": "SAT-20260518-865",
+      "createdAt": "2026-05-18T08:02:51.927Z",
+      "totalAmount": 205.75,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "9f589e1b-142b-4bd6-a824-152eb3a36cef",
+      "referenceNo": "SAT-20260519-294",
+      "createdAt": "2026-05-19T11:05:03.917Z",
+      "totalAmount": 722.11,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "e0683dfd-a0dd-41d8-ab98-aeef70340dcb",
+      "referenceNo": "SAT-20260519-866",
+      "createdAt": "2026-05-19T12:46:15.422Z",
+      "totalAmount": 24.25,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "67852e5e-5ec5-4d95-a5a8-936a51420467",
+      "referenceNo": "SAT-20260519-444",
+      "createdAt": "2026-05-19T15:27:10.724Z",
+      "totalAmount": 1610.19,
+      "paymentMethod": "card",
+      "itemCount": 14,
+      "unitCount": 16
+    },
+    {
+      "id": "57612428-fdc6-4dd9-97f2-3b2ef8b513df",
+      "referenceNo": "SAT-20260519-550",
+      "createdAt": "2026-05-19T15:30:23.312Z",
+      "totalAmount": 730.24,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "b0295dbc-34cd-48e0-961c-29ae001ef492",
+      "referenceNo": "SAT-20260520-566",
+      "createdAt": "2026-05-20T16:55:36.986Z",
+      "totalAmount": 1205.95,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "a4cd8178-8c7c-4d16-ae64-4843b08e4a47",
+      "referenceNo": "SAT-20260520-883",
+      "createdAt": "2026-05-20T07:52:35.163Z",
+      "totalAmount": 551.99,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "39a0370f-8055-438a-9ef2-1400a584eae4",
+      "referenceNo": "SAT-20260520-455",
+      "createdAt": "2026-05-20T16:48:24.343Z",
+      "totalAmount": 952.7,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "ce471a4a-5aef-4c30-a3a5-602abf510dd6",
+      "referenceNo": "SAT-20260520-495",
+      "createdAt": "2026-05-20T18:08:25.351Z",
+      "totalAmount": 212.5,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "bd75d8b1-45b3-41d8-8f7f-cfad8e9bcd10",
+      "referenceNo": "SAT-20260521-353",
+      "createdAt": "2026-05-21T07:59:49.507Z",
+      "totalAmount": 2056.83,
+      "paymentMethod": "cash",
+      "itemCount": 12,
+      "unitCount": 17
+    },
+    {
+      "id": "e777afea-ee66-4685-a2fb-77efd4390c1a",
+      "referenceNo": "SAT-20260521-356",
+      "createdAt": "2026-05-21T09:29:38.343Z",
+      "totalAmount": 1058.85,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "5aebe307-b373-4eb6-8c60-91f23ff8cc1d",
+      "referenceNo": "SAT-20260521-752",
+      "createdAt": "2026-05-21T11:22:34.196Z",
+      "totalAmount": 1433.85,
+      "paymentMethod": "qr",
+      "itemCount": 8,
+      "unitCount": 12
+    },
+    {
+      "id": "9c19fe8c-9a0c-4155-a82a-ea0a427cb2e2",
+      "referenceNo": "SAT-20260521-499",
+      "createdAt": "2026-05-21T12:11:23.908Z",
+      "totalAmount": 1261.9,
+      "paymentMethod": "cash",
+      "itemCount": 13,
+      "unitCount": 16
+    },
+    {
+      "id": "d94a4fff-b0f9-4b44-af0b-47b18fd94553",
+      "referenceNo": "SAT-20260521-398",
+      "createdAt": "2026-05-21T11:46:58.304Z",
+      "totalAmount": 919.75,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "f34b649b-38f6-4625-a3e9-edf7f1541456",
+      "referenceNo": "SAT-20260521-265",
+      "createdAt": "2026-05-21T16:02:35.085Z",
+      "totalAmount": 690.6800000000001,
+      "paymentMethod": "eft",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "522725c9-7e7d-4953-9328-a02dab679531",
+      "referenceNo": "SAT-20260522-585",
+      "createdAt": "2026-05-22T15:25:07.943Z",
+      "totalAmount": 390,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "3579ba85-685e-412a-adf5-55ae3f751fd5",
+      "referenceNo": "SAT-20260522-317",
+      "createdAt": "2026-05-22T17:30:34.898Z",
+      "totalAmount": 315.15,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "fc5b856c-b29a-442a-927b-25fc08294802",
+      "referenceNo": "SAT-20260522-910",
+      "createdAt": "2026-05-22T09:14:38.053Z",
+      "totalAmount": 846.3,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "3955098a-72cf-47df-b768-87e5cfb9d035",
+      "referenceNo": "SAT-20260522-521",
+      "createdAt": "2026-05-22T16:16:35.001Z",
+      "totalAmount": 349.15,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "e31aefcb-0955-43a2-99f4-d4a2aa255d3b",
+      "referenceNo": "SAT-20260522-831",
+      "createdAt": "2026-05-22T11:30:38.607Z",
+      "totalAmount": 142.5,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "bbdad1b9-a0d3-4d06-9fd6-e563d594afe8",
+      "referenceNo": "SAT-20260522-840",
+      "createdAt": "2026-05-22T16:57:14.708Z",
+      "totalAmount": 486.5,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "c6be4386-3cde-4cf6-bcde-2dc9e1e87786",
+      "referenceNo": "SAT-20260522-686",
+      "createdAt": "2026-05-22T15:07:29.580Z",
+      "totalAmount": 1912.15,
+      "paymentMethod": "card",
+      "itemCount": 15,
+      "unitCount": 19
+    },
+    {
+      "id": "0f930cc9-2d23-428d-ae4e-7fbe2d14cb6f",
+      "referenceNo": "SAT-20260522-650",
+      "createdAt": "2026-05-22T09:10:23.483Z",
+      "totalAmount": 558.6,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "23a5a8fc-ac22-4d2e-84da-385f10714569",
+      "referenceNo": "SAT-20260523-229",
+      "createdAt": "2026-05-23T13:18:02.323Z",
+      "totalAmount": 778.25,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 8
+    },
+    {
+      "id": "a8549b68-2921-4502-9f9d-dc7af212fd17",
+      "referenceNo": "SAT-20260523-877",
+      "createdAt": "2026-05-23T07:16:20.618Z",
+      "totalAmount": 1471.25,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 11
+    },
+    {
+      "id": "792306fc-ec6f-4d83-9c3b-b1abf2413016",
+      "referenceNo": "SAT-20260523-508",
+      "createdAt": "2026-05-23T11:08:51.430Z",
+      "totalAmount": 1008.0300000000001,
+      "paymentMethod": "cash",
+      "itemCount": 11,
+      "unitCount": 12
+    },
+    {
+      "id": "36e29e40-61e7-4320-9893-5bfd2f06de96",
+      "referenceNo": "SAT-20260523-490",
+      "createdAt": "2026-05-23T12:55:13.582Z",
+      "totalAmount": 78.75,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 3
+    },
+    {
+      "id": "054b361c-c78e-4422-9325-e44aef6e6d65",
+      "referenceNo": "SAT-20260523-900",
+      "createdAt": "2026-05-23T17:55:21.284Z",
+      "totalAmount": 84.2,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "f2169a72-b665-498a-bc32-58552f9f8cd9",
+      "referenceNo": "SAT-20260523-778",
+      "createdAt": "2026-05-23T10:03:13.734Z",
+      "totalAmount": 580,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "85412474-e7ef-4d4d-96d3-466ca2b07332",
+      "referenceNo": "SAT-20260523-436",
+      "createdAt": "2026-05-23T13:30:29.138Z",
+      "totalAmount": 763.4,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "2b7254e6-ebee-4e02-99a8-02fec2aed7b4",
+      "referenceNo": "SAT-20260523-171",
+      "createdAt": "2026-05-23T15:38:45.488Z",
+      "totalAmount": 637,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "7386eb34-aeb3-44ee-bd10-bbfa2583af18",
+      "referenceNo": "SAT-20260523-687",
+      "createdAt": "2026-05-23T13:30:38.554Z",
+      "totalAmount": 353,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "1cecd094-2add-4f0d-b8e0-24fd9b3d0adf",
+      "referenceNo": "SAT-20260523-749",
+      "createdAt": "2026-05-23T18:10:29.866Z",
+      "totalAmount": 1358.14,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 9
+    },
+    {
+      "id": "70201357-6b91-4c4f-93f8-beaf1de23573",
+      "referenceNo": "SAT-20260524-993",
+      "createdAt": "2026-05-24T16:43:23.903Z",
+      "totalAmount": 992.5,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 8
+    },
+    {
+      "id": "17711df0-5677-467a-8a72-d5f3b127322e",
+      "referenceNo": "SAT-20260524-917",
+      "createdAt": "2026-05-24T07:07:49.827Z",
+      "totalAmount": 1297.3,
+      "paymentMethod": "cash",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "535887b9-668d-484a-91d8-ef402c5ef243",
+      "referenceNo": "SAT-20260524-122",
+      "createdAt": "2026-05-24T11:03:48.961Z",
+      "totalAmount": 198.25,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "dcd9d3d8-8af7-4644-bcf0-013e2b7092c0",
+      "referenceNo": "SAT-20260524-803",
+      "createdAt": "2026-05-24T11:51:32.681Z",
+      "totalAmount": 1109.5,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "3ae0b859-f03b-4b69-9d6f-350af721ff14",
+      "referenceNo": "SAT-20260524-510",
+      "createdAt": "2026-05-24T10:25:40.340Z",
+      "totalAmount": 1022.75,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "fe222607-aedb-41c7-b275-641dada6da8a",
+      "referenceNo": "SAT-20260524-173",
+      "createdAt": "2026-05-24T16:03:16.061Z",
+      "totalAmount": 403.84000000000003,
+      "paymentMethod": "qr",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "89f1cf9e-6387-415b-990f-bdd0c72c4f8a",
+      "referenceNo": "SAT-20260524-131",
+      "createdAt": "2026-05-24T09:50:28.154Z",
+      "totalAmount": 244.05,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "75680628-9c84-4197-be3e-56306a0a132d",
+      "referenceNo": "SAT-20260524-282",
+      "createdAt": "2026-05-24T11:43:39.004Z",
+      "totalAmount": 1267.25,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "f0c2abcb-7cf6-4329-ae54-f166056ee8c4",
+      "referenceNo": "SAT-20260524-909",
+      "createdAt": "2026-05-24T08:33:02.876Z",
+      "totalAmount": 54.25,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "8189d466-c484-4968-8339-3068e84b4eaa",
+      "referenceNo": "SAT-20260525-739",
+      "createdAt": "2026-05-25T11:59:24.529Z",
+      "totalAmount": 631.38,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "d3ac1cb8-4140-46ce-880e-0dc2dec35c93",
+      "referenceNo": "SAT-20260525-313",
+      "createdAt": "2026-05-25T14:35:45.871Z",
+      "totalAmount": 19.5,
+      "paymentMethod": "qr",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "1c69611f-5a60-43f8-b971-9db3f81df019",
+      "referenceNo": "SAT-20260525-331",
+      "createdAt": "2026-05-25T08:03:29.571Z",
+      "totalAmount": 46.99,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "e2e1585a-e36b-45e3-b962-8b99bdc13d33",
+      "referenceNo": "SAT-20260525-663",
+      "createdAt": "2026-05-25T11:43:48.771Z",
+      "totalAmount": 957.25,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 9
+    },
+    {
+      "id": "8b7efb6d-66f1-4749-90ad-de15e20959cb",
+      "referenceNo": "SAT-20260525-190",
+      "createdAt": "2026-05-25T10:51:06.754Z",
+      "totalAmount": 774.1800000000001,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 13
+    },
+    {
+      "id": "55029c8c-fa74-40bf-aecf-c24dd94c45b5",
+      "referenceNo": "SAT-20260525-866",
+      "createdAt": "2026-05-25T18:26:43.808Z",
+      "totalAmount": 969.65,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "70c31c47-2fdf-4e44-9492-eb4ccde0dc64",
+      "referenceNo": "SAT-20260526-174",
+      "createdAt": "2026-05-26T11:05:02.536Z",
+      "totalAmount": 317.85,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 3
+    },
+    {
+      "id": "c5fafaca-7a84-490d-8346-01cd120fb9c5",
+      "referenceNo": "SAT-20260526-330",
+      "createdAt": "2026-05-26T13:30:34.749Z",
+      "totalAmount": 451.1,
+      "paymentMethod": "eft",
+      "itemCount": 3,
+      "unitCount": 8
+    },
+    {
+      "id": "872aea4e-f15b-4919-8ce9-edba25bafa78",
+      "referenceNo": "SAT-20260526-619",
+      "createdAt": "2026-05-26T12:51:57.302Z",
+      "totalAmount": 472.9,
+      "paymentMethod": "eft",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "0d67725b-b1ba-4dbb-8928-2cc8e151092b",
+      "referenceNo": "SAT-20260526-661",
+      "createdAt": "2026-05-26T07:11:39.066Z",
+      "totalAmount": 737.75,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "dd2707ca-8fb3-401e-a444-ec459342e957",
+      "referenceNo": "SAT-20260526-974",
+      "createdAt": "2026-05-26T16:45:56.364Z",
+      "totalAmount": 305.7,
+      "paymentMethod": "eft",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "c439559f-213b-457e-ada9-c691c4ce1595",
+      "referenceNo": "SAT-20260526-226",
+      "createdAt": "2026-05-26T15:46:18.733Z",
+      "totalAmount": 542.5,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "762eda2e-03de-496f-873c-236b975e49be",
+      "referenceNo": "SAT-20260526-258",
+      "createdAt": "2026-05-26T08:57:13.844Z",
+      "totalAmount": 1134.95,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 8
+    },
+    {
+      "id": "d46e5005-9443-4e35-822a-f7e013e41c43",
+      "referenceNo": "SAT-20260527-790",
+      "createdAt": "2026-05-27T10:56:36.594Z",
+      "totalAmount": 98.5,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "22a4120a-1ea7-4ea4-971c-33514ec4158c",
+      "referenceNo": "SAT-20260527-586",
+      "createdAt": "2026-05-27T09:42:59.786Z",
+      "totalAmount": 330.75,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "265c00f9-3ba4-4c04-991f-2b6d5f0005bc",
+      "referenceNo": "SAT-20260527-725",
+      "createdAt": "2026-05-27T14:49:17.350Z",
+      "totalAmount": 648.25,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "86f40047-2880-4a9b-a851-e5e36798f959",
+      "referenceNo": "SAT-20260527-702",
+      "createdAt": "2026-05-27T17:20:40.049Z",
+      "totalAmount": 338.95,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "5397d1bf-1c35-49a7-bf8c-94e9e9a9bb28",
+      "referenceNo": "SAT-20260527-760",
+      "createdAt": "2026-05-27T08:50:18.707Z",
+      "totalAmount": 202.25,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "4232659a-62d4-4f73-98cc-f0d9943f3cb1",
+      "referenceNo": "SAT-20260527-272",
+      "createdAt": "2026-05-27T09:40:25.112Z",
+      "totalAmount": 369.25,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "a1a8c2b8-91ef-45f1-8908-59473a69fd0a",
+      "referenceNo": "SAT-20260528-314",
+      "createdAt": "2026-05-28T13:58:30.378Z",
+      "totalAmount": 252.5,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "90fb5ac1-2749-4f75-94f0-8d186ad47f5a",
+      "referenceNo": "SAT-20260528-110",
+      "createdAt": "2026-05-28T10:57:57.084Z",
+      "totalAmount": 65.64,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "4012a946-1c3a-4431-95ba-844363abb2fb",
+      "referenceNo": "SAT-20260528-477",
+      "createdAt": "2026-05-28T10:58:05.752Z",
+      "totalAmount": 9.5,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "0d0e7180-2e87-4d83-aee4-54298d3af90d",
+      "referenceNo": "SAT-20260528-504",
+      "createdAt": "2026-05-28T13:10:30.425Z",
+      "totalAmount": 267,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 10
+    },
+    {
+      "id": "18c6c6a8-2fc5-4635-be94-f0b22b4575a9",
+      "referenceNo": "SAT-20260528-735",
+      "createdAt": "2026-05-28T16:17:53.951Z",
+      "totalAmount": 63.55,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "d1968081-d6da-4203-b3ac-ae4a78ba70ab",
+      "referenceNo": "SAT-20260528-407",
+      "createdAt": "2026-05-28T14:21:46.573Z",
+      "totalAmount": 8.25,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "b2e7e126-dbd4-44f6-9c2c-eeccc2a23281",
+      "referenceNo": "SAT-20260529-782",
+      "createdAt": "2026-05-29T14:21:34.754Z",
+      "totalAmount": 74.75,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "58421a4c-3d81-4af7-b4a9-7c9cd9c6c91e",
+      "referenceNo": "SAT-20260529-560",
+      "createdAt": "2026-05-29T14:13:44.314Z",
+      "totalAmount": 133.54999999999998,
+      "paymentMethod": "card",
+      "itemCount": 11,
+      "unitCount": 15
+    },
+    {
+      "id": "1999cf01-a15f-4436-83a0-d5965518af47",
+      "referenceNo": "SAT-20260529-267",
+      "createdAt": "2026-05-29T15:55:55.596Z",
+      "totalAmount": 34,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "1a96819e-12c4-4b32-a85d-d021a5aa37a9",
+      "referenceNo": "SAT-20260529-480",
+      "createdAt": "2026-05-29T07:04:22.134Z",
+      "totalAmount": 113.45,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 8
+    },
+    {
+      "id": "33a3afb2-76aa-4e6b-a783-2084fb31218e",
+      "referenceNo": "SAT-20260530-344",
+      "createdAt": "2026-05-30T14:26:59.392Z",
+      "totalAmount": 395.55,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "2c97e3a1-3ff7-4d4d-8457-49b1fa5fa337",
+      "referenceNo": "SAT-20260530-439",
+      "createdAt": "2026-05-30T12:22:22.045Z",
+      "totalAmount": 23.5,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "3684de37-72ec-4044-947f-adcf6902ae91",
+      "referenceNo": "SAT-20260530-533",
+      "createdAt": "2026-05-30T14:52:41.391Z",
+      "totalAmount": 128.24,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "fe43dc04-3efb-4459-ac9a-74c1469ab464",
+      "referenceNo": "SAT-20260530-498",
+      "createdAt": "2026-05-30T17:35:19.305Z",
+      "totalAmount": 23.4,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "d302ee3c-1e0c-49c7-abc6-a29221ddcccd",
+      "referenceNo": "SAT-20260530-275",
+      "createdAt": "2026-05-30T17:41:45.833Z",
+      "totalAmount": 13.75,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "ebc0998e-f0f0-423b-8db2-93056ddd7e18",
+      "referenceNo": "SAT-20260530-919",
+      "createdAt": "2026-05-30T07:43:42.838Z",
+      "totalAmount": 79.5,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "7fe0d5a3-58f1-4f21-907e-e3b00058e90e",
+      "referenceNo": "SAT-20260531-103",
+      "createdAt": "2026-05-31T07:46:15.795Z",
+      "totalAmount": 42.75,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "5e7f37ed-d45c-4aec-a98d-68286524830b",
+      "referenceNo": "SAT-20260531-324",
+      "createdAt": "2026-05-31T08:12:38.516Z",
+      "totalAmount": 11,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "3b789385-b4bd-4ab1-b7e2-e8439e8044fd",
+      "referenceNo": "SAT-20260531-874",
+      "createdAt": "2026-05-31T14:06:08.882Z",
+      "totalAmount": 245.5,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "c34ae841-cc07-485f-ac8d-03574785f664",
+      "referenceNo": "SAT-20260531-386",
+      "createdAt": "2026-05-31T17:13:08.890Z",
+      "totalAmount": 59.25,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "02e4f845-6a9f-4547-93c0-ddbaa9bab99e",
+      "referenceNo": "SAT-20260531-689",
+      "createdAt": "2026-05-31T16:33:13.774Z",
+      "totalAmount": 324.59999999999997,
+      "paymentMethod": "qr",
+      "itemCount": 8,
+      "unitCount": 13
+    },
+    {
+      "id": "14af1934-33ca-4f93-b935-d6e31ffe45fe",
+      "referenceNo": "SAT-20260531-283",
+      "createdAt": "2026-05-31T11:20:49.498Z",
+      "totalAmount": 4.5,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "7e2f864e-d8d3-409d-bc4a-d404e07dbaae",
+      "referenceNo": "SAT-20260531-154",
+      "createdAt": "2026-05-31T15:16:25.010Z",
+      "totalAmount": 110.05,
+      "paymentMethod": "qr",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "d5578dfd-b442-4810-b6f3-a435346cbddf",
+      "referenceNo": "SAT-20260531-231",
+      "createdAt": "2026-05-31T13:48:37.245Z",
+      "totalAmount": 106.75,
+      "paymentMethod": "qr",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "de57a01f-7260-40bb-80d5-e864ab40bade",
+      "referenceNo": "SAT-20260531-228",
+      "createdAt": "2026-05-31T17:24:53.134Z",
+      "totalAmount": 266.75,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "d4821169-3bd8-4c3d-a6c6-b5d83e8c5abd",
+      "referenceNo": "SAT-20260531-185",
+      "createdAt": "2026-05-31T14:36:05.760Z",
+      "totalAmount": 250.87,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "386c69d4-dc65-47b5-9955-e6c9cb4b16e2",
+      "referenceNo": "SAT-20260601-896",
+      "createdAt": "2026-06-01T18:06:05.072Z",
+      "totalAmount": 693.7,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "34fb12a7-642d-49c7-a18c-476a5247d111",
+      "referenceNo": "SAT-20260601-853",
+      "createdAt": "2026-06-01T10:39:26.371Z",
+      "totalAmount": 962.92,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 10
+    },
+    {
+      "id": "e55bfb45-9c6e-4578-91b5-0d77d45785bd",
+      "referenceNo": "SAT-20260601-410",
+      "createdAt": "2026-06-01T13:27:46.487Z",
+      "totalAmount": 219.2,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "c2e0ce22-55a6-4004-b419-11f745da9222",
+      "referenceNo": "SAT-20260601-519",
+      "createdAt": "2026-06-01T14:21:51.441Z",
+      "totalAmount": 96.75,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "78c23fd6-7f7f-48ab-b357-19746010835b",
+      "referenceNo": "SAT-20260601-417",
+      "createdAt": "2026-06-01T11:32:19.225Z",
+      "totalAmount": 1079.65,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "b6ed80b6-8449-44f3-bb52-198c4ae8f025",
+      "referenceNo": "SAT-20260601-953",
+      "createdAt": "2026-06-01T12:18:43.838Z",
+      "totalAmount": 1054.15,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "b77f78e0-fa21-49df-b930-ca6e48b3a6fb",
+      "referenceNo": "SAT-20260602-991",
+      "createdAt": "2026-06-02T15:08:07.239Z",
+      "totalAmount": 277.95000000000005,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 4
+    },
+    {
+      "id": "adf1362f-76d4-466a-8d72-717006545bb2",
+      "referenceNo": "SAT-20260602-696",
+      "createdAt": "2026-06-02T10:06:32.501Z",
+      "totalAmount": 574.5,
+      "paymentMethod": "cash",
+      "itemCount": 1,
+      "unitCount": 3
+    },
+    {
+      "id": "231cc8a2-3a8a-4190-b981-63da1dc51f6f",
+      "referenceNo": "SAT-20260602-185",
+      "createdAt": "2026-06-02T14:44:23.656Z",
+      "totalAmount": 287,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 8
+    },
+    {
+      "id": "4c0fdabe-7eb9-4897-9b6e-32d678fb319e",
+      "referenceNo": "SAT-20260602-294",
+      "createdAt": "2026-06-02T15:49:50.690Z",
+      "totalAmount": 2904.3999999999996,
+      "paymentMethod": "cash",
+      "itemCount": 15,
+      "unitCount": 20
+    },
+    {
+      "id": "6f36996d-c794-4c24-bb5c-81130b835341",
+      "referenceNo": "SAT-20260603-333",
+      "createdAt": "2026-06-03T09:47:54.844Z",
+      "totalAmount": 117,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "4b4408d9-2641-4702-b0b3-0e4a94fcd6b6",
+      "referenceNo": "SAT-20260603-395",
+      "createdAt": "2026-06-03T09:11:57.447Z",
+      "totalAmount": 1641.05,
+      "paymentMethod": "card",
+      "itemCount": 11,
+      "unitCount": 16
+    },
+    {
+      "id": "30fd1138-6182-436d-a3e3-7d3b68d6f34b",
+      "referenceNo": "SAT-20260603-692",
+      "createdAt": "2026-06-03T15:18:00.726Z",
+      "totalAmount": 537.95,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 6
+    },
+    {
+      "id": "c6a979a0-7b49-4dda-9e8e-52b87cdc537d",
+      "referenceNo": "SAT-20260603-766",
+      "createdAt": "2026-06-03T13:19:15.218Z",
+      "totalAmount": 229.49,
+      "paymentMethod": "qr",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "8b9624eb-c389-4c83-89da-9bf242be449a",
+      "referenceNo": "SAT-20260603-693",
+      "createdAt": "2026-06-03T11:34:46.440Z",
+      "totalAmount": 925.9499999999999,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 9
+    },
+    {
+      "id": "78020c28-defa-459c-aac6-9ede614684f4",
+      "referenceNo": "SAT-20260603-479",
+      "createdAt": "2026-06-03T12:25:19.967Z",
+      "totalAmount": 735.75,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "afc89f08-fad6-4f75-b162-878e8e5e87b4",
+      "referenceNo": "SAT-20260603-272",
+      "createdAt": "2026-06-03T16:07:23.346Z",
+      "totalAmount": 2158.13,
+      "paymentMethod": "qr",
+      "itemCount": 10,
+      "unitCount": 15
+    },
+    {
+      "id": "2484a41e-2c94-4c9e-aecd-7e0f75084820",
+      "referenceNo": "SAT-20260603-554",
+      "createdAt": "2026-06-03T10:55:07.107Z",
+      "totalAmount": 1182.65,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 13
+    },
+    {
+      "id": "6b76f17f-8ceb-47d2-8ac4-0a34167c59ef",
+      "referenceNo": "SAT-20260604-777",
+      "createdAt": "2026-06-04T10:12:51.374Z",
+      "totalAmount": 117.65,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "344e2892-f354-4657-b5a9-dd43a1b831fc",
+      "referenceNo": "SAT-20260604-874",
+      "createdAt": "2026-06-04T17:33:08.418Z",
+      "totalAmount": 318,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "0704a24f-a28d-4bfe-9c30-ebfc0a56af43",
+      "referenceNo": "SAT-20260604-852",
+      "createdAt": "2026-06-04T16:52:40.604Z",
+      "totalAmount": 902.7999999999998,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "8cd13963-7fcd-4bd2-bd65-d48171ecc58e",
+      "referenceNo": "SAT-20260604-617",
+      "createdAt": "2026-06-04T09:01:08.374Z",
+      "totalAmount": 815,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 10
+    },
+    {
+      "id": "fede01e6-9163-45cf-8b91-52c3250ae824",
+      "referenceNo": "SAT-20260604-875",
+      "createdAt": "2026-06-04T07:12:48.645Z",
+      "totalAmount": 35,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "cd97c94b-5136-4721-a892-02984fe60be2",
+      "referenceNo": "SAT-20260604-570",
+      "createdAt": "2026-06-04T17:39:21.072Z",
+      "totalAmount": 454.15,
+      "paymentMethod": "qr",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "62767a83-3af2-49e7-86a1-c2cecc02ba6a",
+      "referenceNo": "SAT-20260604-229",
+      "createdAt": "2026-06-04T14:55:22.364Z",
+      "totalAmount": 540.3,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "45409493-6585-462e-a4fc-16d4ec06181b",
+      "referenceNo": "SAT-20260604-981",
+      "createdAt": "2026-06-04T07:39:48.932Z",
+      "totalAmount": 559.25,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 5
+    },
+    {
+      "id": "5a6ceeac-f1fa-4b47-8f0e-3d01a6b26585",
+      "referenceNo": "SAT-20260604-505",
+      "createdAt": "2026-06-04T09:48:46.719Z",
+      "totalAmount": 456.09999999999997,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "bb6afa17-9af3-475d-a566-b21d0d5fb3c9",
+      "referenceNo": "SAT-20260604-737",
+      "createdAt": "2026-06-04T16:38:56.847Z",
+      "totalAmount": 1835,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "90ce99d2-b0d1-4597-99d0-762491c61c54",
+      "referenceNo": "SAT-20260605-281",
+      "createdAt": "2026-06-05T11:30:41.882Z",
+      "totalAmount": 147.75,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "2d1f84bd-9938-4001-941e-3441aff1525e",
+      "referenceNo": "SAT-20260605-436",
+      "createdAt": "2026-06-05T16:32:57.022Z",
+      "totalAmount": 258.95,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "3fadd23e-25de-4c04-908f-f36d7b17ae79",
+      "referenceNo": "SAT-20260605-623",
+      "createdAt": "2026-06-05T16:22:09.937Z",
+      "totalAmount": 668.8,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "e42c3413-1c5b-49d2-ae71-b7ab077bb91b",
+      "referenceNo": "SAT-20260605-609",
+      "createdAt": "2026-06-05T14:06:57.614Z",
+      "totalAmount": 782.5,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "55e7076e-2564-4ddb-8dd8-8abfa25bfe14",
+      "referenceNo": "SAT-20260605-164",
+      "createdAt": "2026-06-05T16:58:28.405Z",
+      "totalAmount": 44.75,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "73c367cd-bb86-469b-acd7-b352d3412a0e",
+      "referenceNo": "SAT-20260605-477",
+      "createdAt": "2026-06-05T11:30:16.294Z",
+      "totalAmount": 206.73000000000002,
+      "paymentMethod": "eft",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "346c96d1-de35-4eab-b2c0-1e09c521683a",
+      "referenceNo": "SAT-20260605-261",
+      "createdAt": "2026-06-05T12:19:26.845Z",
+      "totalAmount": 478.2,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "7f10da3f-3f68-4fc0-b636-09023e1f1126",
+      "referenceNo": "SAT-20260605-142",
+      "createdAt": "2026-06-05T09:49:41.858Z",
+      "totalAmount": 1371.7,
+      "paymentMethod": "card",
+      "itemCount": 11,
+      "unitCount": 13
+    },
+    {
+      "id": "6ee47d37-affe-4873-b21c-6fac19b75761",
+      "referenceNo": "SAT-20260606-966",
+      "createdAt": "2026-06-06T11:49:19.115Z",
+      "totalAmount": 1359.9499999999998,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "a8c94d75-cac9-4fe6-a866-4a89fbe719d7",
+      "referenceNo": "SAT-20260606-830",
+      "createdAt": "2026-06-06T12:26:43.380Z",
+      "totalAmount": 956.99,
+      "paymentMethod": "cash",
+      "itemCount": 9,
+      "unitCount": 10
+    },
+    {
+      "id": "b0a786ab-e4fa-407d-80d1-94faf662519c",
+      "referenceNo": "SAT-20260606-294",
+      "createdAt": "2026-06-06T11:03:30.104Z",
+      "totalAmount": 143.95,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "e6b81461-1f61-49a7-92d3-a9e586fe2c9c",
+      "referenceNo": "SAT-20260606-854",
+      "createdAt": "2026-06-06T17:52:54.785Z",
+      "totalAmount": 729.65,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "5c960887-6e18-42b8-8c01-caab25746203",
+      "referenceNo": "SAT-20260606-845",
+      "createdAt": "2026-06-06T15:30:05.223Z",
+      "totalAmount": 760.15,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 7
+    },
+    {
+      "id": "8132aac5-d8fb-401a-88ec-f8294716ab1f",
+      "referenceNo": "SAT-20260606-363",
+      "createdAt": "2026-06-06T16:38:43.960Z",
+      "totalAmount": 1246.5500000000002,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 9
+    },
+    {
+      "id": "c07ecada-b684-4848-9416-1570c28d152b",
+      "referenceNo": "SAT-20260606-476",
+      "createdAt": "2026-06-06T11:30:03.547Z",
+      "totalAmount": 1440.4399999999998,
+      "paymentMethod": "cash",
+      "itemCount": 10,
+      "unitCount": 13
+    },
+    {
+      "id": "5fa361f2-4361-49c7-82d0-a726fcd88c25",
+      "referenceNo": "SAT-20260606-990",
+      "createdAt": "2026-06-06T12:03:18.712Z",
+      "totalAmount": 410.45,
+      "paymentMethod": "qr",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "2131f1fc-9a8f-494f-905e-a170239eb996",
+      "referenceNo": "SAT-20260606-296",
+      "createdAt": "2026-06-06T12:48:38.282Z",
+      "totalAmount": 611.65,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 8
+    },
+    {
+      "id": "f4afdff2-9791-47e2-90a8-f8814e75235d",
+      "referenceNo": "SAT-20260606-821",
+      "createdAt": "2026-06-06T13:52:22.585Z",
+      "totalAmount": 497,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "41d070f7-b9bf-4046-950b-8eea929e1b9b",
+      "referenceNo": "SAT-20260606-666",
+      "createdAt": "2026-06-06T16:05:49.488Z",
+      "totalAmount": 573.75,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 8
+    },
+    {
+      "id": "36ad491b-dd47-496a-a254-9541f7872c60",
+      "referenceNo": "SAT-20260607-514",
+      "createdAt": "2026-06-07T17:52:32.376Z",
+      "totalAmount": 41.8,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 2
+    },
+    {
+      "id": "34a02513-3730-4ab8-834b-02d32dbf01ab",
+      "referenceNo": "SAT-20260607-918",
+      "createdAt": "2026-06-07T08:46:27.738Z",
+      "totalAmount": 282.9,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "0c5b4511-21ea-4d18-8392-e3cfb72336b8",
+      "referenceNo": "SAT-20260607-688",
+      "createdAt": "2026-06-07T14:26:39.711Z",
+      "totalAmount": 551.65,
+      "paymentMethod": "eft",
+      "itemCount": 5,
+      "unitCount": 8
+    },
+    {
+      "id": "90a6b623-aac8-40b1-92eb-0baa1be234d6",
+      "referenceNo": "SAT-20260607-458",
+      "createdAt": "2026-06-07T14:20:32.660Z",
+      "totalAmount": 501.95000000000005,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 8
+    },
+    {
+      "id": "6b48658b-5a8e-4531-a19e-f4546aa67885",
+      "referenceNo": "SAT-20260607-556",
+      "createdAt": "2026-06-07T15:22:36.473Z",
+      "totalAmount": 532.9,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 9
+    },
+    {
+      "id": "8878af54-5f96-4540-aff7-d657039625ea",
+      "referenceNo": "SAT-20260607-279",
+      "createdAt": "2026-06-07T10:23:30.683Z",
+      "totalAmount": 271.09999999999997,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 5
+    },
+    {
+      "id": "dcd11bbf-e391-4aa4-876a-5f1d5ffb0f8c",
+      "referenceNo": "SAT-20260607-960",
+      "createdAt": "2026-06-07T16:46:59.394Z",
+      "totalAmount": 182.75,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 2
+    },
+    {
+      "id": "37facf17-0f45-4d60-9dcc-96b077fe006f",
+      "referenceNo": "SAT-20260607-741",
+      "createdAt": "2026-06-07T14:55:26.984Z",
+      "totalAmount": 537.6,
+      "paymentMethod": "qr",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "e7a82bfd-ad09-4787-8193-13b58259d5ec",
+      "referenceNo": "SAT-20260607-757",
+      "createdAt": "2026-06-07T09:44:43.522Z",
+      "totalAmount": 211.5,
+      "paymentMethod": "card",
+      "itemCount": 2,
+      "unitCount": 4
+    },
+    {
+      "id": "69a6cf75-391e-4385-b467-69f5e606a878",
+      "referenceNo": "SAT-20260607-345",
+      "createdAt": "2026-06-07T09:44:34.139Z",
+      "totalAmount": 1963.1000000000001,
+      "paymentMethod": "qr",
+      "itemCount": 12,
+      "unitCount": 15
+    },
+    {
+      "id": "42bc0096-53d7-4f71-b8f0-43cd1073e5a5",
+      "referenceNo": "SAT-20260607-605",
+      "createdAt": "2026-06-07T15:06:18.112Z",
+      "totalAmount": 1052.5,
+      "paymentMethod": "cash",
+      "itemCount": 7,
+      "unitCount": 10
+    },
+    {
+      "id": "463d625f-c8cf-4672-8e90-877129e8fdf1",
+      "referenceNo": "SAT-20260607-572",
+      "createdAt": "2026-06-07T09:52:12.515Z",
+      "totalAmount": 1228.4,
+      "paymentMethod": "qr",
+      "itemCount": 11,
+      "unitCount": 14
+    },
+    {
+      "id": "6907cffa-0f41-4ebf-8f2c-78996934e640",
+      "referenceNo": "SAT-20260607-567",
+      "createdAt": "2026-06-07T13:44:27.008Z",
+      "totalAmount": 537.04,
+      "paymentMethod": "cash",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "522e9f6b-5d2b-4af6-b623-2f3a91bb78cd",
+      "referenceNo": "SAT-20260607-639",
+      "createdAt": "2026-06-07T11:10:30.963Z",
+      "totalAmount": 1166.45,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 10
+    },
+    {
+      "id": "bee8e1cf-c316-495b-a670-99eb6a92015b",
+      "referenceNo": "SAT-20260607-241",
+      "createdAt": "2026-06-07T15:48:52.040Z",
+      "totalAmount": 1122.55,
+      "paymentMethod": "card",
+      "itemCount": 10,
+      "unitCount": 11
+    },
+    {
+      "id": "4d0fa3f6-c0d7-4503-b8d1-c706062f9d9e",
+      "referenceNo": "SAT-20260607-475",
+      "createdAt": "2026-06-07T15:18:49.167Z",
+      "totalAmount": 778.1500000000001,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 9
+    },
+    {
+      "id": "74693ae6-dc72-4d4f-bf3c-11e36dbfa38b",
+      "referenceNo": "SAT-20260607-642",
+      "createdAt": "2026-06-07T17:04:33.437Z",
+      "totalAmount": 1282.3,
+      "paymentMethod": "card",
+      "itemCount": 14,
+      "unitCount": 17
+    },
+    {
+      "id": "5a487c98-0c38-422a-bd72-b04615823aa7",
+      "referenceNo": "SAT-20260608-798",
+      "createdAt": "2026-06-08T09:32:51.616Z",
+      "totalAmount": 123.99,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "fc32590e-2f65-486f-97d0-e95150b8337f",
+      "referenceNo": "SAT-20260608-293",
+      "createdAt": "2026-06-08T13:24:57.228Z",
+      "totalAmount": 418.25,
+      "paymentMethod": "qr",
+      "itemCount": 3,
+      "unitCount": 3
+    },
+    {
+      "id": "df80ec05-cf18-4f52-930f-c66023ae6320",
+      "referenceNo": "SAT-20260608-806",
+      "createdAt": "2026-06-08T17:18:45.838Z",
+      "totalAmount": 885.8,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 11
+    },
+    {
+      "id": "ae22bef7-d3e7-4a8f-a91c-89e9ad73939e",
+      "referenceNo": "SAT-20260608-953",
+      "createdAt": "2026-06-08T09:14:38.213Z",
+      "totalAmount": 166.39999999999998,
+      "paymentMethod": "card",
+      "itemCount": 3,
+      "unitCount": 4
+    },
+    {
+      "id": "a887ea32-a441-4c4a-a4ce-f738e2d0e686",
+      "referenceNo": "SAT-20260608-349",
+      "createdAt": "2026-06-08T14:08:44.957Z",
+      "totalAmount": 882.9,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 6
+    },
+    {
+      "id": "d8b331fc-039f-4e85-8297-ccbd3a6e1186",
+      "referenceNo": "SAT-20260608-620",
+      "createdAt": "2026-06-08T15:14:58.617Z",
+      "totalAmount": 1135.65,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 11
+    },
+    {
+      "id": "0399de3a-7ae4-4a72-8911-41dfa8420f60",
+      "referenceNo": "SAT-20260608-141",
+      "createdAt": "2026-06-08T18:25:57.710Z",
+      "totalAmount": 2122.95,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 12
+    },
+    {
+      "id": "7190a81a-7af2-464c-84d3-90627345444a",
+      "referenceNo": "SAT-20260608-121",
+      "createdAt": "2026-06-08T12:50:45.432Z",
+      "totalAmount": 864.9,
+      "paymentMethod": "card",
+      "itemCount": 7,
+      "unitCount": 8
+    },
+    {
+      "id": "b94e9d0c-c852-4886-9fa1-db653a720816",
+      "referenceNo": "SAT-20260608-795",
+      "createdAt": "2026-06-08T11:17:54.981Z",
+      "totalAmount": 1728.6499999999999,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 14
+    },
+    {
+      "id": "c841e2c8-c136-4147-a7f1-232e328be1e1",
+      "referenceNo": "SAT-20260609-338",
+      "createdAt": "2026-06-09T16:50:22.650Z",
+      "totalAmount": 34.5,
+      "paymentMethod": "cash",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "1b2a94c8-0b88-42a5-b2b3-0383d254c9f6",
+      "referenceNo": "SAT-20260609-153",
+      "createdAt": "2026-06-09T09:34:43.895Z",
+      "totalAmount": 54.25,
+      "paymentMethod": "card",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "d9980a03-ac1c-4364-ab60-abafddd6eb2a",
+      "referenceNo": "SAT-20260609-857",
+      "createdAt": "2026-06-09T07:30:15.215Z",
+      "totalAmount": 518.15,
+      "paymentMethod": "cash",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "fea76562-48c6-4c95-bfeb-070de918a5ba",
+      "referenceNo": "SAT-20260609-130",
+      "createdAt": "2026-06-09T09:28:28.400Z",
+      "totalAmount": 1533.43,
+      "paymentMethod": "card",
+      "itemCount": 13,
+      "unitCount": 19
+    },
+    {
+      "id": "4ed88eac-7a05-4619-8835-855bd4c72f60",
+      "referenceNo": "SAT-20260609-980",
+      "createdAt": "2026-06-09T14:45:32.074Z",
+      "totalAmount": 869.25,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 11
+    },
+    {
+      "id": "c4c873bf-5476-4af1-8e28-483e4ad4be21",
+      "referenceNo": "SAT-20260609-305",
+      "createdAt": "2026-06-09T10:41:44.285Z",
+      "totalAmount": 245,
+      "paymentMethod": "cash",
+      "itemCount": 2,
+      "unitCount": 3
+    },
+    {
+      "id": "e81690e4-9fb5-4a33-85a2-4e954015657b",
+      "referenceNo": "SAT-20260609-852",
+      "createdAt": "2026-06-09T08:29:04.418Z",
+      "totalAmount": 206.75,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "870de687-d52e-4b64-aa71-8b913e9d55b4",
+      "referenceNo": "SAT-20260610-621",
+      "createdAt": "2026-06-10T17:36:38.464Z",
+      "totalAmount": 560.2,
+      "paymentMethod": "card",
+      "itemCount": 4,
+      "unitCount": 4
+    },
+    {
+      "id": "ebee62c7-4ae6-43d8-b01f-fb22c42f6e47",
+      "referenceNo": "SAT-20260610-367",
+      "createdAt": "2026-06-10T15:32:22.096Z",
+      "totalAmount": 296.3,
+      "paymentMethod": "qr",
+      "itemCount": 3,
+      "unitCount": 8
+    },
+    {
+      "id": "64f999e2-a5ae-4e21-a4ff-541f382d78fb",
+      "referenceNo": "SAT-20260610-436",
+      "createdAt": "2026-06-10T08:25:54.685Z",
+      "totalAmount": 575,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 6
+    },
+    {
+      "id": "adf5612c-84f7-4531-9be1-ed4940003d07",
+      "referenceNo": "SAT-20260610-907",
+      "createdAt": "2026-06-10T07:06:56.699Z",
+      "totalAmount": 518.45,
+      "paymentMethod": "cash",
+      "itemCount": 6,
+      "unitCount": 6
+    },
+    {
+      "id": "6858f35f-be24-41e5-905e-a4a5793877ab",
+      "referenceNo": "SAT-20260610-351",
+      "createdAt": "2026-06-10T12:32:51.127Z",
+      "totalAmount": 473.04999999999995,
+      "paymentMethod": "card",
+      "itemCount": 5,
+      "unitCount": 5
+    },
+    {
+      "id": "4af4baa6-d405-430f-9183-b83d2e7703e8",
+      "referenceNo": "SAT-20260610-116",
+      "createdAt": "2026-06-10T14:29:42.031Z",
+      "totalAmount": 16.25,
+      "paymentMethod": "cash",
+      "itemCount": 1,
+      "unitCount": 1
+    },
+    {
+      "id": "57281772-e75e-4b47-b673-0e7446934043",
+      "referenceNo": "SAT-20260610-298",
+      "createdAt": "2026-06-10T09:52:28.883Z",
+      "totalAmount": 563.44,
+      "paymentMethod": "cash",
+      "itemCount": 5,
+      "unitCount": 7
+    },
+    {
+      "id": "65af580b-9324-4c3f-b030-813ce46902a9",
+      "referenceNo": "SAT-20260610-288",
+      "createdAt": "2026-06-10T14:43:05.268Z",
+      "totalAmount": 1226.63,
+      "paymentMethod": "card",
+      "itemCount": 8,
+      "unitCount": 10
+    },
+    {
+      "id": "41cbf759-8b1a-45e9-bdd8-2701933d9b24",
+      "referenceNo": "SAT-20260610-610",
+      "createdAt": "2026-06-10T11:37:16.912Z",
+      "totalAmount": 407.4,
+      "paymentMethod": "card",
+      "itemCount": 6,
+      "unitCount": 6
+    },
+    {
+      "id": "a2a78efe-d48c-472d-add2-8373c7f6d961",
+      "referenceNo": "SAT-20260610-444",
+      "createdAt": "2026-06-10T07:15:22.616Z",
+      "totalAmount": 893.55,
+      "paymentMethod": "eft",
+      "itemCount": 8,
+      "unitCount": 10
+    }
+  ]
+}

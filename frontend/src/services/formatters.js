@@ -1,4 +1,4 @@
-﻿const DATE_ONLY_OPTIONS = { day: '2-digit', month: '2-digit', year: 'numeric' };
+const DATE_ONLY_OPTIONS = { day: '2-digit', month: '2-digit', year: 'numeric' };
 const DATE_TIME_OPTIONS = { ...DATE_ONLY_OPTIONS, hour: '2-digit', minute: '2-digit' };
 const DEFAULT_STORE_TIMEZONE = 'Europe/Istanbul';
 
@@ -107,6 +107,7 @@ export const normalizeTurkishText = (value, fallback = '-') => {
   const raw = String(value ?? '').trim();
   if (!raw) return fallback;
   return TURKISH_TEXT_REPLACEMENTS.reduce((text, [from, to]) => text.replaceAll(from, to), raw)
+    .replace(/\bBo\?/gi, 'Boş')
     .replace(/\bSo\?uk\b/gi, 'Soğuk')
     .replace(/\bMa\?aza\b/gi, 'Mağaza')
     .replace(/\bUrun\b/gi, 'Ürün')
@@ -114,6 +115,18 @@ export const normalizeTurkishText = (value, fallback = '-') => {
     .replace(/\s+/g, ' ')
     .trim();
 };
+
+/**
+ * Sanitizes a warehouse location status value for display.
+ * Fixes known DB corruption: 'Bo?' → 'Boş'
+ */
+export const sanitizeLocationStatus = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return raw;
+  if (raw === 'Bo?' || raw.toLowerCase() === 'bo?') return 'Boş';
+  return raw;
+};
+
 
 export const cleanSectionDisplayName = (value, fallback = '-') => {
   const text = normalizeTurkishText(value, '');

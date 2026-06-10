@@ -2,7 +2,7 @@
 import { useAuth } from '../hooks/useAuth.js';
 import PageLoading from './PageLoading.jsx';
 
-function AuthIssueView({ issue }) {
+function AuthIssueView({ issue, onRetry }) {
   const statusText = issue?.status ? `HTTP ${issue.status}` : '';
   return (
     <main className="auth-page">
@@ -20,7 +20,7 @@ function AuthIssueView({ issue }) {
           {issue?.requestId ? (
             <p className="auth-tagline sso-auth-message">Request ID: {issue.requestId}</p>
           ) : null}
-          <button className="auth-submit-btn" type="button" onClick={() => window.location.reload()}>
+          <button className="auth-submit-btn" type="button" onClick={onRetry}>
             Tekrar Dene
           </button>
         </section>
@@ -30,7 +30,7 @@ function AuthIssueView({ issue }) {
 }
 
 export default function ProtectedRoute({ children }) {
-  const { authIssue, isAuthenticated, isLoading, user } = useAuth();
+  const { authIssue, isAuthenticated, isLoading, retryAuth, user } = useAuth();
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search || '');
   const runtimeRole = String(user?.role || '').trim();
@@ -40,7 +40,7 @@ export default function ProtectedRoute({ children }) {
   }
 
   if (authIssue) {
-    return <AuthIssueView issue={authIssue} />;
+    return <AuthIssueView issue={authIssue} onRetry={() => void retryAuth({ isRetry: true })} />;
   }
 
   if (!isAuthenticated) {

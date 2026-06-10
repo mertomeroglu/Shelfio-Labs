@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { createFileRepository } from './fileRepository.js';
 import { config } from '../config/config.js';
 import { getPrisma } from '../providers/postgresProvider.js';
@@ -79,16 +80,28 @@ const getDelegate = async () => {
   return prisma.notification;
 };
 
+const buildTenantWhere = (extra = {}) => ({
+  tenantId: getActiveTenantId(),
+  ...extra,
+});
+
 export const notificationRepo = {
   ...baseRepo,
 
   async getAll() {
-    return readNormalizedAll();
+    const delegate = await getDelegate();
+    const rows = await delegate.findMany({
+      where: buildTenantWhere(),
+    });
+    return rows.map((row) => mapNotificationFromDb(row));
   },
 
   async findById(id) {
-    const all = await readNormalizedAll();
-    return all.find((item) => item.id === id) || null;
+    const delegate = await getDelegate();
+    const row = await delegate.findFirst({
+      where: buildTenantWhere({ id }),
+    });
+    return row ? mapNotificationFromDb(row) : null;
   },
 
   async writeData(items) {
@@ -96,7 +109,11 @@ export const notificationRepo = {
   },
 
   async create(item) {
-    return baseRepo.create(normalizeNotificationRecord(item));
+    const nextItem = {
+      id: item.id || crypto.randomUUID(),
+      ...item,
+    };
+    return baseRepo.create(normalizeNotificationRecord(nextItem));
   },
 
   async updateById(id, updater) {
@@ -107,8 +124,11 @@ export const notificationRepo = {
   },
 
   async findByUserId(userId) {
-    const all = await readNormalizedAll();
-    return all.filter((item) => item.userId === userId);
+    const delegate = await getDelegate();
+    const rows = await delegate.findMany({
+      where: buildTenantWhere({ userId }),
+    });
+    return rows.map((row) => mapNotificationFromDb(row));
   },
 
   async findByUserIdPaged(userId, options = {}) {
@@ -181,29 +201,19 @@ export const notificationRepo = {
 
   async findByUserAndDedupeKey(userId, dedupeKey) {
     if (!dedupeKey) return null;
-    const all = await readNormalizedAll();
-    return all.find((item) => item.userId === userId && item.dedupeKey === dedupeKey) || null;
+    const delegate = await getDelegate();
+    const row = await delegate.findFirst({
+      where: buildTenantWhere({ userId, dedupeKey }),
+    });
+    return row ? mapNotificationFromDb(row) : null;
   },
 
   async markAllAsRead(userId) {
-    const all = await readNormalizedAll();
-    let changed = false;
-
-    const next = all.map((item) => {
-      if (item.userId !== userId || item.isRead) {
-        return item;
-      }
-      changed = true;
-      return {
-        ...item,
-        isRead: true,
-      };
+    const delegate = await getDelegate();
+    const result = await delegate.updateMany({
+      where: buildTenantWhere({ userId, isRead: false }),
+      data: { isRead: true },
     });
-
-    if (changed) {
-      await baseRepo.writeData(normalizeNotificationCollection(next));
-    }
-
-    return { updated: changed };
+    return { updated: result.count > 0 };
   },
 };

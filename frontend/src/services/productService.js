@@ -1,4 +1,4 @@
-﻿import { api, getOrLoadSessionCache, hasSessionCache, invalidateSessionCache } from './api.js';
+import { api, getOrLoadSessionCache, hasSessionCache, invalidateSessionCache } from './api.js';
 
 import { formatDepotLocationLabel, formatStorageTypeLabel } from './formatters.js';
 import { normalizeBarcodeInput } from '../utils/barcode.js';
@@ -531,5 +531,9 @@ export const productService = {
     if (options?.universe) query.set('universe', options.universe);
     const qs = query.toString();
     return api.get(`/products/barcode/${encodeURIComponent(normalized)}${qs ? `?${qs}` : ''}`).then(normalizeProductRecord);
+  },
+  assignLocation: (id, payload) => {
+    invalidateProductCache();
+    return api.post(`/products/${id}/assign-location`, payload);
   },
 };

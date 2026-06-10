@@ -4,6 +4,7 @@ import { notificationRepo } from '../repositories/notificationRepository.js';
 import { userRepo } from '../repositories/userRepository.js';
 import { getPrisma, isPostgresEnabled } from '../providers/postgresProvider.js';
 import { normalizeDateOnly } from '../utils/batchExpiry.js';
+import { resolveSktPolicy, SKT_POLICIES } from '../utils/sktPolicy.js';
 import { buildActiveExpiryBatchWhere } from './expiryTrackingService.js';
 
 const NOTIFICATION_TYPE = 'skt_expired';
@@ -97,6 +98,15 @@ const mapBatchRow = (row = {}, todayKey) => {
   if (product.isActive === false || product.isListed === false) {
     return { skipped: true, reason: 'product_not_active_or_listed', raw: row };
   }
+  const sktPolicy = resolveSktPolicy({ product, category: product.category || null });
+  if (sktPolicy.policy !== SKT_POLICIES.REQUIRED) {
+    return {
+      skipped: true,
+      reason: 'skt_policy_not_required',
+      sktPolicy: sktPolicy.policy,
+      raw: row,
+    };
+  }
 
   const warehouseQuantity = Math.max(0, toNumber(row.warehouseQuantity, 0));
   const shelfQuantity = Math.max(0, toNumber(row.shelfQuantity, 0));
@@ -144,10 +154,18 @@ const listExpiredBatchCandidatesFromPostgres = async ({ now = new Date() } = {})
               id: true,
               sku: true,
               barcode: true,
+              etiket: true,
               name: true,
               isActive: true,
               isListed: true,
               defaultWarehouseLocationCode: true,
+              category: {
+                select: {
+                  id: true,
+                  name: true,
+                  code: true,
+                },
+              },
             },
           },
         },

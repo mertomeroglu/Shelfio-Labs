@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { ArrowLeft, Bell, BellRing, ChevronRight, Clock, Eye, Flame, Heart, History, Home, LifeBuoy, ListOrdered, MapPin, PackageSearch, QrCode, Search, ShoppingBag, Store, Tag, Trash2, User, Megaphone, Sparkles, Gift, ReceiptText, ShieldAlert, ShieldCheck, Settings, Mail, Phone, Lock, Save } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, ChevronRight, Clock, Eye, Flame, Heart, History, Home, LifeBuoy, ListChecks, ListOrdered, MapPin, PackageSearch, QrCode, ScanLine, Search, ShoppingBag, Store, Tag, Trash2, User, Megaphone, Sparkles, Gift, ReceiptText, ShieldAlert, ShieldCheck, Settings, Mail, Phone, Lock, Save } from 'lucide-react';
 import './CustomerPortal.css';
 import './MobileShopping.css';
 import logoPng from '../../assets/logo.png';
@@ -10,7 +10,10 @@ import { normalizeNotification } from '../../services/notificationService.js';
 import CustomerAppShell from '../../components/customer/CustomerAppShell.jsx';
 import CustomerProductDetail from '../../components/customer/CustomerProductDetail.jsx';
 import CustomerCartFull from '../../components/customer/CustomerCartFull.jsx';
+import CustomerCartQuickScanModal from '../../components/customer/CustomerCartQuickScanModal.jsx';
+import CustomerCartRoutePlanSheet from '../../components/customer/CustomerCartRoutePlanSheet.jsx';
 import ProductResultCard from '../../components/customer/ProductResultCard.jsx';
+import { resolveCanonicalAvailableStock } from '../../components/customer/customerProductStockStatus.js';
 import BottomNavigationDock from '../../components/customer/BottomNavigationDock.jsx';
 import PageLoading from '../../components/PageLoading.jsx';
 import ConfirmModal from '../../components/ConfirmModal.jsx';
@@ -19,6 +22,7 @@ import { customerCatalogService } from '../../services/customerCatalogService.js
 import { SUPPORT_CONTACT } from '../../constants/contact.js';
 import { useCustomerCatalogCategories } from '../../hooks/useCustomerCatalogCategories.js';
 import { CAMERA_PERMISSION_HELP_TEXT, getCameraErrorMessage, logCameraError, startHtml5Scanner, waitForCameraElement } from '../../utils/cameraAccess.js';
+import { isLikelyBarcodeOrSku, normalizeBarcodeInput } from '../../utils/barcode.js';
 
 const RECENT_STORAGE_KEY = 'shelfio.customer.recent.products';
 const CUSTOMER_PREFS_KEY = 'shelfio.customer.preferences';
@@ -1365,7 +1369,10 @@ export default function CustomerPortal() {
   const [activeBottomTab, setActiveBottomTab] = useState(initialView === 'cart' ? 'cart' : 'home');
   const [isLoading, setIsLoading] = useState(true);
 
-  const [products, setProducts] = useState([]);
+  const [homeProducts, setHomeProducts] = useState([]);
+  const [searchProducts, setSearchProducts] = useState([]);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchHasNextPage, setSearchHasNextPage] = useState(false);
   const [productsLoaded, setProductsLoaded] = useState(false);
   const [productsLoading, setProductsLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -1382,10 +1389,13 @@ export default function CustomerPortal() {
   } = useCustomerCatalogCategories();
   const [customerProfile, setCustomerProfile] = useState(null);
 
-  const [cart, setCart] = useState({});
+  const [cart, setCart] = useState(() => normalizeCartState(
+    readStoredObject(scopedKey(CART_STORAGE_KEY, customerId))
+  ));
   const [recentProductIds, setRecentProductIds] = useState(() => readStoredArray(RECENT_STORAGE_KEY));
   const [detailProductId, setDetailProductId] = useState('');
   const [detailCache, setDetailCache] = useState({});
+  const [unavailableCartProductIds, setUnavailableCartProductIds] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailForecastCache, setDetailForecastCache] = useState({});
   const [detailForecastLoading, setDetailForecastLoading] = useState({});
@@ -1395,6 +1405,17 @@ export default function CustomerPortal() {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [scanError, setScanError] = useState('');
   const [isScanning, setIsScanning] = useState(false);
+  const [cartQuickScanOpen, setCartQuickScanOpen] = useState(false);
+  const [cartQuickScanStatus, setCartQuickScanStatus] = useState('idle');
+  const [cartQuickScanError, setCartQuickScanError] = useState('');
+  const [cartQuickScanProduct, setCartQuickScanProduct] = useState(null);
+  const [cartQuickScanLastCode, setCartQuickScanLastCode] = useState('');
+  const [cartQuickScanManualQuery, setCartQuickScanManualQuery] = useState('');
+  const [cartQuickScanResults, setCartQuickScanResults] = useState([]);
+  const [routePlanOpen, setRoutePlanOpen] = useState(false);
+  const [routePlanData, setRoutePlanData] = useState(null);
+  const [routePlanLoading, setRoutePlanLoading] = useState(false);
+  const [routePlanError, setRoutePlanError] = useState('');
   const [accountPanel, setAccountPanel] = useState('');
   const customerPrefsStorageKey = scopedKey(CUSTOMER_PREFS_KEY, customerId);
   const [notificationPrefs, setNotificationPrefs] = useState(() => readCustomerPrefs(customerPrefsStorageKey));
@@ -1418,32 +1439,113 @@ export default function CustomerPortal() {
   const [authPrompt, setAuthPrompt] = useState(null);
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [mobileOrderHandoff, setMobileOrderHandoff] = useState(null);
+  const [pendingMobileOrderId, setPendingMobileOrderId] = useState('');
   const [mobileOrderBusy, setMobileOrderBusy] = useState(false);
   const [mobileOrderError, setMobileOrderError] = useState('');
+  const [cartSyncError, setCartSyncError] = useState('');
+  const [cartHydrated, setCartHydrated] = useState(false);
   const isCustomerLoggedIn = customerPortalAuthService.isLoggedIn();
+
+  const allProductsCombined = useMemo(() => {
+    const byId = new Map();
+    homeProducts.forEach((p) => { if (p?.id) byId.set(String(p.id), p); });
+    searchProducts.forEach((p) => { if (p?.id) byId.set(String(p.id), p); });
+    return Array.from(byId.values());
+  }, [homeProducts, searchProducts]);
+
+  const categoriesByDemand = useMemo(() => {
+    const countByCategoryId = new Map();
+    const countByCategoryName = new Map();
+    for (const product of allProductsCombined) {
+      const categoryId = String(product?.categoryId || '');
+      const categoryName = normalizeKey(resolveCustomerProductCategory(product));
+      if (categoryId) countByCategoryId.set(categoryId, (countByCategoryId.get(categoryId) || 0) + 1);
+      if (categoryName) countByCategoryName.set(categoryName, (countByCategoryName.get(categoryName) || 0) + 1);
+    }
+    const baseCategories = categories.length ? categories : CATEGORY_VISUAL_CARDS.map((row) => ({ id: row.id, name: row.name }));
+    return [...baseCategories].sort((a, b) => {
+      const aId = String(a?.id || '');
+      const bId = String(b?.id || '');
+      const aName = normalizeKey(a?.name || '');
+      const bName = normalizeKey(b?.name || '');
+      const aCount = Number(countByCategoryId.get(aId) || countByCategoryName.get(aName) || a?.productCount || a?.count || 0);
+      const bCount = Number(countByCategoryId.get(bId) || countByCategoryName.get(bName) || b?.productCount || b?.count || 0);
+      if (bCount !== aCount) return bCount - aCount;
+      return String(a?.name || '').localeCompare(String(b?.name || ''), 'tr');
+    });
+  }, [categories, allProductsCombined]);
 
   const searchInputRef = useRef(null);
   const scannerRef = useRef(null);
+  const cartQuickScannerRef = useRef(null);
+  const cartQuickScanLockRef = useRef(false);
+  const cartQuickManualSearchSeqRef = useRef(0);
   const cartHydratedRef = useRef(false);
-  const cartSyncSnapshotRef = useRef(serializeCartState({}));
+  const cartSyncSnapshotRef = useRef(serializeCartState(cart));
+  const cartSyncPendingSnapshotRef = useRef('');
+  const cartSyncQueueRef = useRef(Promise.resolve());
+  const cartMutationRevisionRef = useRef(0);
   const catalogRequestKeysRef = useRef(new Set());
+  const searchRequestSeqRef = useRef(0);
+  const searchQueryRef = useRef('');
+
+  const searchPageRef = useRef(1);
+  const searchQueryValRef = useRef('');
+  const categoryIdValRef = useRef('');
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    searchPageRef.current = searchPage;
+  }, [searchPage]);
+
+  useEffect(() => {
+    searchQueryValRef.current = debouncedSearchQuery;
+  }, [debouncedSearchQuery]);
+
+  useEffect(() => {
+    categoryIdValRef.current = selectedCategoryId;
+  }, [selectedCategoryId]);
 
   const ensureProductsLoaded = useCallback(async (params = {}) => {
+    const isLoadMore = params.loadMore === true;
+    const nextPage = isLoadMore ? searchPageRef.current + 1 : 1;
+
     const requestParams = {
       mode: 'products',
-      page: 1,
+      page: nextPage,
       limit: params.limit || CUSTOMER_LAZY_PRODUCT_LIMIT,
-      ...(params.search ? { search: params.search } : {}),
-      ...(params.categoryId ? { categoryId: params.categoryId } : {}),
+      ...(params.search ? { search: params.search } : {
+        ...(searchQueryValRef.current.length >= 2 ? { search: searchQueryValRef.current } : {})
+      }),
+      ...(params.categoryId ? { categoryId: params.categoryId } : {
+        ...(categoryIdValRef.current ? { categoryId: categoryIdValRef.current } : {})
+      }),
     };
     const requestKey = JSON.stringify(requestParams);
     if (catalogRequestKeysRef.current.has(requestKey)) return;
     catalogRequestKeysRef.current.add(requestKey);
     setProductsLoading(true);
+
+    const currentSeq = ++searchRequestSeqRef.current;
+
     try {
       const catalog = await customerCatalogService.getCatalog(requestParams);
+      if (currentSeq !== searchRequestSeqRef.current) return;
+
       const incomingProducts = Array.isArray(catalog?.products) ? catalog.products : [];
-      setProducts((current) => mergeProductRows(current, incomingProducts));
+      setSearchProducts((current) => {
+        if (isLoadMore) {
+          return mergeProductRows(current, incomingProducts);
+        } else {
+          return incomingProducts;
+        }
+      });
+      setSearchPage(nextPage);
+      setSearchHasNextPage(catalog?.pagination?.hasNextPage === true);
+
       if (Array.isArray(catalog?.categories) && catalog.categories.length > 0) {
         setCategories(catalog.categories);
       }
@@ -1452,15 +1554,18 @@ export default function CustomerPortal() {
       setProductsLoaded(true);
       setStorefrontResolved(true);
     } catch {
-      catalogRequestKeysRef.current.delete(requestKey);
       setStorefrontResolved(true);
     } finally {
-      setProductsLoading(false);
+      catalogRequestKeysRef.current.delete(requestKey);
+      if (currentSeq === searchRequestSeqRef.current) {
+        setProductsLoading(false);
+      }
     }
-  }, []);
+  }, [setCategories]);
 
   useEffect(() => {
     let mounted = true;
+    const loadRevision = cartMutationRevisionRef.current;
     const loadData = async () => {
       const favKey = scopedKey(FAVORITES_STORAGE_KEY, customerId);
       const listKey = scopedKey(SHOPPING_LIST_STORAGE_KEY, customerId);
@@ -1482,7 +1587,7 @@ export default function CustomerPortal() {
         if (!mounted) return;
         const catalogData = catalogResult.status === 'fulfilled' ? catalogResult.value || null : null;
         if (catalogData) {
-          setProducts(Array.isArray(catalogData.products) ? catalogData.products : []);
+          setHomeProducts(Array.isArray(catalogData.products) ? catalogData.products : []);
           setProductsLoaded(Array.isArray(catalogData.products) && catalogData.products.length > 0);
           setCampaignDefinitions(Array.isArray(catalogData.campaigns) ? catalogData.campaigns : []);
           setSettingsData(catalogData.storefront || null);
@@ -1491,7 +1596,7 @@ export default function CustomerPortal() {
             setCategories(catalogData.categories);
           }
         } else {
-          setProducts([]);
+          setHomeProducts([]);
           setCampaignDefinitions([]);
           setSettingsData(null);
           setStorefrontResolved(true);
@@ -1524,17 +1629,21 @@ export default function CustomerPortal() {
           setOrderHistory(readStoredArray(ordersKey));
         }
 
-        if (backendCartPayload) {
+        if (backendCartPayload && cartMutationRevisionRef.current === loadRevision) {
           const nextCart = normalizeCartState(normalizeBackendCart(backendCartPayload));
           setCart(nextCart);
           writeStoredObject(cartKey, nextCart);
           cartSyncSnapshotRef.current = serializeCartState(nextCart);
-        } else if (!isCustomerLoggedIn || customerCart.status !== 'fulfilled') {
+        } else if (
+          (!isCustomerLoggedIn || customerCart.status !== 'fulfilled')
+          && cartMutationRevisionRef.current === loadRevision
+        ) {
           const cachedCart = normalizeCartState(readStoredObject(cartKey));
           setCart(cachedCart);
           cartSyncSnapshotRef.current = serializeCartState(cachedCart);
         }
         cartHydratedRef.current = true;
+        setCartHydrated(true);
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -1548,8 +1657,9 @@ export default function CustomerPortal() {
     return () => {
       mounted = false;
       cartHydratedRef.current = false;
+      setCartHydrated(false);
     };
-  }, [customerId, initialView, isCustomerLoggedIn, setCategories]);
+  }, [customerId, isCustomerLoggedIn, setCategories]);
 
   useEffect(() => {
     const refreshStorefront = async () => {
@@ -1609,7 +1719,8 @@ export default function CustomerPortal() {
     return () => window.cancelAnimationFrame(frame);
   }, [
     view,
-    products.length,
+    homeProducts.length,
+    searchProducts.length,
     categories.length,
     campaignDefinitions.length,
     notifications.length,
@@ -1625,7 +1736,12 @@ export default function CustomerPortal() {
 
   useEffect(() => {
     if (view !== 'search' && view !== 'home') return;
-    if (debouncedSearchQuery.length < 2 && !selectedCategoryId) return;
+    if (debouncedSearchQuery.length < 2 && !selectedCategoryId) {
+      setSearchProducts([]);
+      setSearchHasNextPage(false);
+      setSearchPage(1);
+      return;
+    }
     void ensureProductsLoaded({
       search: debouncedSearchQuery.length >= 2 ? debouncedSearchQuery : '',
       categoryId: selectedCategoryId || '',
@@ -1634,8 +1750,14 @@ export default function CustomerPortal() {
 
   useEffect(() => {
     if (view !== 'category') return;
-    void ensureProductsLoaded();
-  }, [ensureProductsLoaded, view]);
+    const slug = decodeURIComponent((location.pathname.split('/musteri/kategori/')[1] || '').split('/')[0] || '');
+    const category = resolveCategoryFromRouteSlug(slug, categoriesByDemand, categories);
+    if (category?.id) {
+      void ensureProductsLoaded({ categoryId: String(category.id) });
+    } else {
+      void ensureProductsLoaded();
+    }
+  }, [ensureProductsLoaded, view, location.pathname, categories, categoriesByDemand]);
 
   useEffect(() => {
     if (!quickToast) return;
@@ -1659,10 +1781,19 @@ export default function CustomerPortal() {
     setOrderHistory(readStoredArray(ordersKey));
     setCart(normalizeCartState(readStoredObject(cartKey)));
     setNotificationPrefs(readCustomerPrefs(scopedKey(CUSTOMER_PREFS_KEY, customerId)));
+    setHomeProducts([]);
+    setSearchProducts([]);
+    setSearchPage(1);
+    setSearchHasNextPage(false);
     setStorefrontResolved(false);
     setSelectedTag('');
     cartHydratedRef.current = false;
-    cartSyncSnapshotRef.current = serializeCartState(readStoredObject(cartKey));
+    setCartHydrated(false);
+    const cachedCart = normalizeCartState(readStoredObject(cartKey));
+    cartMutationRevisionRef.current = 0;
+    cartSyncSnapshotRef.current = serializeCartState(cachedCart);
+    cartSyncPendingSnapshotRef.current = '';
+    setCartSyncError('');
   }, [customerId]);
 
   useEffect(() => {
@@ -1672,6 +1803,23 @@ export default function CustomerPortal() {
     }
     setSelectedTag('');
   }, [selectedCategoryId]);
+
+  useEffect(() => {
+    if (cartHydrated) {
+      const checklistKey = `shelfio.customer.routeChecklist.${customerId || 'guest'}`;
+      const savedChecked = readStoredObject(checklistKey) || {};
+      const nextChecked = {};
+      const cartKeys = Object.keys(cart || {});
+      for (const pid of cartKeys) {
+        if (savedChecked[pid] !== undefined) {
+          nextChecked[pid] = savedChecked[pid];
+        }
+      }
+      if (Object.keys(savedChecked).length !== Object.keys(nextChecked).length) {
+        writeStoredObject(checklistKey, nextChecked);
+      }
+    }
+  }, [cart, customerId, cartHydrated]);
 
   useEffect(() => {
     setSettingsDraft({
@@ -1697,10 +1845,16 @@ export default function CustomerPortal() {
       setCampaignDetailId('');
       setCampaignProductSearch('');
     }
+    if (nextView === 'home') {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+      setSelectedCategoryId('');
+      setSelectedTag('');
+    }
     if (nextView === 'search') {
       const params = new URLSearchParams(location.search);
       const queryFromRoute = params.get('q') || params.get('search') || '';
-      if (queryFromRoute !== searchQuery) {
+      if (queryFromRoute !== searchQueryRef.current) {
         setSearchQuery(queryFromRoute);
         setDebouncedSearchQuery(queryFromRoute.trim());
       }
@@ -1711,7 +1865,7 @@ export default function CustomerPortal() {
         setDetailProductId(routeProductId);
       }
     }
-  }, [detailProductId, location.pathname, location.search, pathToView, searchQuery]);
+  }, [detailProductId, location.pathname, location.search, pathToView]);
 
   const openAuthPrompt = useCallback((message, fromPath = '/musteri/hesabim', fromSearch = '') => {
     setAuthPrompt({
@@ -1847,7 +2001,10 @@ export default function CustomerPortal() {
     setOrderHistory([]);
     setNotifications([]);
     setCart({});
+    setPendingMobileOrderId('');
+    setMobileOrderHandoff(null);
     cartHydratedRef.current = false;
+    setCartHydrated(false);
     cartSyncSnapshotRef.current = serializeCartState({});
     pushQuickToast('Çıkış yapıldı');
     navigateTo('home', 'home');
@@ -1941,7 +2098,18 @@ export default function CustomerPortal() {
       }
     }
 
-    const byId = new Map(products.map((item) => [String(item.id), item]));
+    const byId = new Map(
+      homeProducts
+        .filter((item) => {
+          const warehouse = Number(item?.warehouseStock ?? item?.stockSummary?.warehouseStock ?? 0);
+          const shelf = Number(item?.shelfStock ?? item?.stockSummary?.shelfStock ?? 0);
+          const total = Number(item?.totalStock ?? item?.currentStock ?? item?.available ?? item?.onHand ?? item?.stockSummary?.totalStock ?? item?.stockSummary?.available ?? 0);
+          const totalStock = Math.max(total, warehouse + shelf);
+          const isActive = item.isActive !== false && item.isListed !== false;
+          return isActive && totalStock > 0;
+        })
+        .map((item) => [String(item.id), item])
+    );
     const ranked = Array.from(scoreByProductId.entries())
       .map(([pid, score]) => ({
         product: byId.get(pid),
@@ -1956,21 +2124,29 @@ export default function CustomerPortal() {
       .map((item) => item.product);
 
     if (ranked.length >= 8) return ranked.slice(0, 12);
-    const fallback = [...products]
+    const fallback = [...homeProducts]
+      .filter((item) => {
+        const warehouse = Number(item?.warehouseStock ?? item?.stockSummary?.warehouseStock ?? 0);
+        const shelf = Number(item?.shelfStock ?? item?.stockSummary?.shelfStock ?? 0);
+        const total = Number(item?.totalStock ?? item?.currentStock ?? item?.available ?? item?.onHand ?? item?.stockSummary?.totalStock ?? item?.stockSummary?.available ?? 0);
+        const totalStock = Math.max(total, warehouse + shelf);
+        const isActive = item.isActive !== false && item.isListed !== false;
+        return isActive && totalStock > 0;
+      })
       .sort((a, b) => Number(b.salesCount || b.totalSold || b.orderCount || 0) - Number(a.salesCount || a.totalSold || a.orderCount || 0));
     const merged = [...ranked, ...fallback.filter((p) => !ranked.find((r) => String(r.id) === String(p.id)))];
     return merged.slice(0, 12);
-  }, [products, salesRows]);
+  }, [homeProducts, salesRows]);
   const topSellerProducts = useMemo(() => popularProducts.slice(0, 4), [popularProducts]);
   const recentViewedProducts = useMemo(() => {
-    const byId = new Map(products.map((item) => [String(item.id), item]));
+    const byId = new Map(allProductsCombined.map((item) => [String(item.id), item]));
     return recentProductIds.map((id) => byId.get(String(id))).filter(Boolean).slice(0, 4);
-  }, [products, recentProductIds]);
+  }, [allProductsCombined, recentProductIds]);
 
   const favoriteProducts = useMemo(() => {
     const idSet = new Set(favoriteIds.map((id) => String(id)));
-    return products.filter((item) => idSet.has(String(item.id)) || item.isFavorite === true);
-  }, [favoriteIds, products]);
+    return allProductsCombined.filter((item) => idSet.has(String(item.id)) || item.isFavorite === true);
+  }, [favoriteIds, allProductsCombined]);
 
   const activeCampaigns = useMemo(() => resolveCampaignRows(campaignDefinitions), [campaignDefinitions]);
   const listedCampaigns = useMemo(
@@ -2020,28 +2196,6 @@ export default function CustomerPortal() {
     ));
   }, [campaignProductSearch, campaignProducts]);
 
-  const categoriesByDemand = useMemo(() => {
-    const countByCategoryId = new Map();
-    const countByCategoryName = new Map();
-    for (const product of products) {
-      const categoryId = String(product?.categoryId || '');
-      const categoryName = normalizeKey(resolveCustomerProductCategory(product));
-      if (categoryId) countByCategoryId.set(categoryId, (countByCategoryId.get(categoryId) || 0) + 1);
-      if (categoryName) countByCategoryName.set(categoryName, (countByCategoryName.get(categoryName) || 0) + 1);
-    }
-    const baseCategories = categories.length ? categories : CATEGORY_VISUAL_CARDS.map((row) => ({ id: row.id, name: row.name }));
-    return [...baseCategories].sort((a, b) => {
-      const aId = String(a?.id || '');
-      const bId = String(b?.id || '');
-      const aName = normalizeKey(a?.name || '');
-      const bName = normalizeKey(b?.name || '');
-      const aCount = Number(countByCategoryId.get(aId) || countByCategoryName.get(aName) || a?.productCount || a?.count || 0);
-      const bCount = Number(countByCategoryId.get(bId) || countByCategoryName.get(bName) || b?.productCount || b?.count || 0);
-      if (bCount !== aCount) return bCount - aCount;
-      return String(a?.name || '').localeCompare(String(b?.name || ''), 'tr');
-    });
-  }, [categories, products]);
-
   const selectedCategoryName = useMemo(() => {
     const found = categoriesByDemand.find((item) => String(item?.id || '') === String(selectedCategoryId));
     return found?.name || '';
@@ -2052,27 +2206,11 @@ export default function CustomerPortal() {
   const searchResults = useMemo(() => {
     const query = debouncedSearchQuery;
     const needle = normalizeKey(query);
-    const barcodeNeedle = normalizeBarcodeSearch(query);
     const hasQuery = needle.length >= 2;
     const hasCategory = Boolean(selectedCategoryId);
     if (view === 'search' && !hasQuery && !hasCategory) return [];
-    return products.filter((item) => {
-      const productCategoryId = String(item.categoryId || '');
-      const productCategoryName = normalizeKey(resolveCustomerProductCategory(item));
-      const categoryMatch = !hasCategory
-        || productCategoryId === String(selectedCategoryId)
-        || (selectedCategoryName && productCategoryName === normalizeKey(selectedCategoryName));
-      if (!categoryMatch) return false;
-      if (!hasQuery) return true;
-      return normalizeKey(item.productName || item.name).includes(needle)
-        || normalizeKey(item.sku).includes(needle)
-        || normalizeBarcodeSearch(item.barcode || item.sku).includes(barcodeNeedle)
-        || normalizeKey(resolveCustomerProductCategory(item)).includes(needle)
-        || normalizeKey(item.brandName || item.brand).includes(needle)
-        || normalizeKey(item.supplierName || item.supplierProductName).includes(needle)
-        || getProductTagList(item).some((tag) => normalizeKey(tag).includes(needle));
-    });
-  }, [products, debouncedSearchQuery, selectedCategoryId, selectedCategoryName, view]);
+    return searchProducts;
+  }, [searchProducts, debouncedSearchQuery, selectedCategoryId, view]);
 
   const categoryTags = useMemo(() => {
     if (!selectedCategoryId) return [];
@@ -2088,14 +2226,14 @@ export default function CustomerPortal() {
         ...toTagList(selectedCategory?.subCategories)
       );
     }
-    for (const item of products) {
+    for (const item of searchProducts) {
       const categoryIdMatch = String(item?.categoryId || '') === String(selectedCategoryId);
       const categoryNameMatch = selectedCategoryName && normalizeKey(resolveCustomerProductCategory(item)) === normalizeKey(selectedCategoryName);
       if (!categoryIdMatch && !categoryNameMatch) continue;
       tags.push(...getProductTagList(item));
     }
     return dedupeTags(tags).sort((a, b) => a.localeCompare(b, 'tr'));
-  }, [categories, categoriesByDemand, products, selectedCategoryId, selectedCategoryName]);
+  }, [categories, categoriesByDemand, searchProducts, selectedCategoryId, selectedCategoryName]);
 
   const filteredSearchResults = useMemo(() => {
     if (!selectedTag || selectedTag === ALL_CATEGORY_TAG_KEY) return searchResults;
@@ -2109,17 +2247,9 @@ export default function CustomerPortal() {
   const inlineHomeSearchResults = useMemo(() => {
     const query = debouncedSearchQuery;
     const needle = normalizeKey(query);
-    const barcodeNeedle = normalizeBarcodeSearch(query);
     if (needle.length < 2) return [];
-    return products
-      .filter((item) => normalizeKey(item.productName || item.name).includes(needle)
-        || normalizeKey(item.sku).includes(needle)
-        || normalizeBarcodeSearch(item.barcode || item.sku).includes(barcodeNeedle)
-        || normalizeKey(resolveCustomerProductCategory(item)).includes(needle)
-        || normalizeKey(item.brandName || item.brand).includes(needle)
-        || normalizeKey(item.supplierName || item.supplierProductName).includes(needle))
-      .slice(0, 8);
-  }, [debouncedSearchQuery, products]);
+    return searchProducts.slice(0, 8);
+  }, [debouncedSearchQuery, searchProducts]);
 
   const refreshCustomerNotifications = useCallback(async () => {
     if (!isCustomerLoggedIn) return;
@@ -2188,47 +2318,170 @@ export default function CustomerPortal() {
     setNotifications((current) => current.filter((item) => !isCustomerFacingNotification(item)));
     setClearNotificationsConfirmOpen(false);
   }, [isCustomerLoggedIn]);
-  const productsById = useMemo(() => new Map(products.map((item) => [String(item.id), item])), [products]);
+  const productsById = useMemo(() => new Map(allProductsCombined.map((item) => [String(item.id), item])), [allProductsCombined]);
+
+  const buildCartSyncItems = useCallback((cartState) => Object.entries(normalizeCartState(cartState)).map(([productId, quantity]) => {
+    const product = productsById.get(String(productId)) || detailCache[String(productId)] || null;
+    return {
+      productId,
+      quantity,
+      productName: product?.productName || product?.name || productId,
+      unit: product?.unit || product?.orderUnit || 'adet',
+      unitPrice: Number(product?.currentPrice ?? product?.salePrice ?? product?.price ?? 0) || 0,
+    };
+  }), [detailCache, productsById]);
+
+  const syncCartToBackend = useCallback((cartState, { force = false } = {}) => {
+    const normalizedCart = normalizeCartState(cartState);
+    const snapshot = serializeCartState(normalizedCart);
+    writeStoredObject(scopedKey(CART_STORAGE_KEY, customerId), normalizedCart);
+
+    if (!isCustomerLoggedIn) {
+      cartSyncSnapshotRef.current = snapshot;
+      setCartSyncError('');
+      return Promise.resolve(normalizedCart);
+    }
+    if (!force && (snapshot === cartSyncSnapshotRef.current || snapshot === cartSyncPendingSnapshotRef.current)) {
+      return cartSyncQueueRef.current.then(() => normalizedCart);
+    }
+
+    cartSyncPendingSnapshotRef.current = snapshot;
+    const request = cartSyncQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        const response = await customerPortalAuthService.updateCart({ items: buildCartSyncItems(normalizedCart) });
+        cartSyncSnapshotRef.current = snapshot;
+        setCartSyncError('');
+        return response;
+      })
+      .catch((error) => {
+        setCartSyncError('Sepetiniz kaydedilemedi. Lütfen bağlantınızı kontrol edip tekrar deneyin.');
+        throw error;
+      })
+      .finally(() => {
+        if (cartSyncPendingSnapshotRef.current === snapshot) {
+          cartSyncPendingSnapshotRef.current = '';
+        }
+      });
+
+    cartSyncQueueRef.current = request;
+    return request;
+  }, [buildCartSyncItems, customerId, isCustomerLoggedIn]);
 
   useEffect(() => {
     const cartKey = scopedKey(CART_STORAGE_KEY, customerId);
     const normalizedCart = normalizeCartState(cart);
     writeStoredObject(cartKey, normalizedCart);
 
-    if (!cartHydratedRef.current) return;
-    if (!isCustomerLoggedIn) {
-      cartSyncSnapshotRef.current = serializeCartState(normalizedCart);
-      return;
-    }
+    if (!cartHydrated || !cartHydratedRef.current) return;
+    void syncCartToBackend(normalizedCart).catch(() => {});
+  }, [cart, cartHydrated, customerId, syncCartToBackend]);
 
-    const snapshot = serializeCartState(normalizedCart);
-    if (snapshot === cartSyncSnapshotRef.current) return;
-    cartSyncSnapshotRef.current = snapshot;
+  useEffect(() => {
+    if (!pendingMobileOrderId || !isCustomerLoggedIn) return undefined;
+    let active = true;
+    let checking = false;
 
-    const items = Object.entries(normalizedCart).map(([productId, quantity]) => {
-      const product = productsById.get(String(productId)) || detailCache[String(productId)] || null;
-      return {
-        productId,
-        quantity,
-        productName: product?.productName || product?.name || productId,
-        unit: product?.unit || product?.orderUnit || 'adet',
-        unitPrice: Number(product?.currentPrice ?? product?.salePrice ?? product?.price ?? 0) || 0,
-      };
+    const refreshPendingMobileOrder = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const order = normalizeMobileOrderHandoff(
+          await customerPortalAuthService.getMobileOrder(pendingMobileOrderId)
+        );
+        if (!active) return;
+
+        if (order.status === 'completed') {
+          const backendCart = await customerPortalAuthService.getCart();
+          if (!active) return;
+          const nextCart = normalizeCartState(normalizeBackendCart(backendCart));
+          cartMutationRevisionRef.current += 1;
+          cartSyncSnapshotRef.current = serializeCartState(nextCart);
+          cartSyncPendingSnapshotRef.current = '';
+          setCart(nextCart);
+          writeStoredObject(scopedKey(CART_STORAGE_KEY, customerId), nextCart);
+          setPendingMobileOrderId('');
+          setMobileOrderHandoff(null);
+          pushQuickToast('Alışverişiniz kasada tamamlandı.');
+        } else if (order.status === 'cancelled' || order.status === 'expired') {
+          setPendingMobileOrderId('');
+          setMobileOrderHandoff(null);
+          pushQuickToast(
+            order.status === 'expired'
+              ? 'Kasa kodunun süresi doldu. Sepetiniz korunuyor.'
+              : 'Kasa işlemi iptal edildi. Sepetiniz korunuyor.',
+            'error'
+          );
+        }
+      } catch {
+        // A transient polling error must not close the QR flow or alter the cart.
+      } finally {
+        checking = false;
+      }
+    };
+
+    void refreshPendingMobileOrder();
+    const intervalId = window.setInterval(refreshPendingMobileOrder, 2500);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [customerId, isCustomerLoggedIn, pendingMobileOrderId]);
+
+  useEffect(() => {
+    const missingProductIds = Object.keys(cart).filter(
+      (productId) => !productsById.has(String(productId))
+        && !detailCache[String(productId)]
+        && !unavailableCartProductIds.includes(String(productId))
+    );
+    if (!missingProductIds.length) return;
+
+    let mounted = true;
+    void Promise.allSettled(missingProductIds.map(async (productId) => {
+      const product = await customerCatalogService.getProductById(productId);
+      return [productId, product];
+    })).then((results) => {
+      if (!mounted) return;
+      const loaded = results
+        .filter((result) => result.status === 'fulfilled' && result.value?.[1])
+        .map((result) => result.value);
+      const loadedIds = new Set(loaded.map(([productId]) => String(productId)));
+      const unavailableIds = missingProductIds.filter((productId) => !loadedIds.has(String(productId)));
+      if (loaded.length) {
+        setDetailCache((current) => ({
+          ...current,
+          ...Object.fromEntries(loaded),
+        }));
+      }
+      if (unavailableIds.length) {
+        setUnavailableCartProductIds((current) => [...new Set([...current, ...unavailableIds])]);
+      }
     });
 
-    customerPortalAuthService.updateCart({ items }).catch(() => {});
-  }, [cart, customerId, detailCache, isCustomerLoggedIn, productsById]);
+    return () => {
+      mounted = false;
+    };
+  }, [cart, detailCache, productsById, unavailableCartProductIds]);
 
   const cartEntries = useMemo(
     () =>
       Object.entries(cart)
         .map(([id, quantity]) => {
           const product = productsById.get(String(id)) || detailCache[String(id)] || null;
-          if (!product) return null;
-          return { product, quantity: Number(quantity || 0) };
+          const unavailable = unavailableCartProductIds.includes(String(id));
+          return {
+            product: product || {
+              id,
+              productName: unavailable ? 'Ürün artık kullanılamıyor' : 'Ürün bilgisi yükleniyor',
+              name: unavailable ? 'Ürün artık kullanılamıyor' : 'Ürün bilgisi yükleniyor',
+              isCartProductLoading: !unavailable,
+              isCartProductUnavailable: unavailable,
+            },
+            quantity: Number(quantity || 0),
+          };
         })
-        .filter(Boolean),
-    [cart, detailCache, productsById]
+        .filter((row) => row.quantity > 0),
+    [cart, detailCache, productsById, unavailableCartProductIds]
   );
 
   const cartItemCount = useMemo(() => cartEntries.reduce((sum, row) => sum + row.quantity, 0), [cartEntries]);
@@ -2258,8 +2511,8 @@ export default function CustomerPortal() {
 
   const detailProduct = useMemo(() => {
     if (!detailProductId) return null;
-    return detailCache[detailProductId] || products.find((item) => String(item.id) === String(detailProductId)) || null;
-  }, [detailCache, detailProductId, products]);
+    return detailCache[detailProductId] || allProductsCombined.find((item) => String(item.id) === String(detailProductId)) || null;
+  }, [detailCache, detailProductId, allProductsCombined]);
   const detailForecast = useMemo(() => {
     if (!detailProductId) return null;
     return detailForecastCache[detailProductId] || null;
@@ -2277,7 +2530,7 @@ export default function CustomerPortal() {
     const detailCategoryId = String(detailProduct.categoryId || '');
     const detailBrand = normalizeKey(detailProduct.brandName || detailProduct.brand);
 
-    const scored = products
+    const scored = allProductsCombined
       .filter((item) => item.id !== detailProduct.id && String(item.categoryId || '') === detailCategoryId)
       .map((item) => {
         let score = 0;
@@ -2300,7 +2553,7 @@ export default function CustomerPortal() {
 
     const scoredIds = new Set(scored.map((item) => String(item.id)));
     const detailNameTokens = splitTokens(detailProduct.productName || '');
-    const nameFallback = products
+    const nameFallback = allProductsCombined
       .filter((item) => item.id !== detailProduct.id && !scoredIds.has(String(item.id)))
       .map((item) => {
         const itemTokens = splitTokens(item.productName || '');
@@ -2312,7 +2565,7 @@ export default function CustomerPortal() {
       .map((entry) => entry.item);
 
     return [...scored, ...nameFallback].slice(0, 4);
-  }, [detailProduct, products]);
+  }, [detailProduct, allProductsCombined]);
 
   const isStoreInfoReady = storefrontResolved && Boolean(settingsData);
   const storeInfo = useMemo(() => {
@@ -2490,9 +2743,268 @@ export default function CustomerPortal() {
 
   const addToCart = (productId) => {
     const nextProductId = String(productId);
+    const product = productsById.get(nextProductId) || detailCache[nextProductId] || null;
+    const stock = product ? resolveCanonicalAvailableStock(product) : 0;
+    if (stock <= 0) {
+      pushQuickToast('Bu ürün stokta bulunmamaktadır.', 'error');
+      return;
+    }
+    cartMutationRevisionRef.current += 1;
     setCart((current) => ({ ...current, [nextProductId]: Number(current[nextProductId] || 0) + 1 }));
     pushQuickToast('Ürün sepete eklendi');
   };
+
+  const stopCartQuickScanner = useCallback(async () => {
+    const scanner = cartQuickScannerRef.current;
+    cartQuickScannerRef.current = null;
+    if (!scanner) return;
+    try { await scanner.stop(); } catch {}
+    try { await scanner.clear(); } catch {}
+  }, []);
+
+  const showCartQuickScanProduct = useCallback((product) => {
+    if (!product?.id) return;
+    setDetailCache((current) => ({ ...current, [String(product.id)]: product }));
+    setUnavailableCartProductIds((current) => current.filter((id) => String(id) !== String(product.id)));
+    setCartQuickScanResults([]);
+    setCartQuickScanProduct(product);
+    setCartQuickScanStatus('product-found');
+  }, []);
+
+  const closeCartQuickScan = useCallback(async () => {
+    cartQuickManualSearchSeqRef.current += 1;
+    cartQuickScanLockRef.current = true;
+    await stopCartQuickScanner();
+    setCartQuickScanOpen(false);
+    setCartQuickScanStatus('idle');
+    setCartQuickScanError('');
+    setCartQuickScanProduct(null);
+    setCartQuickScanLastCode('');
+    setCartQuickScanManualQuery('');
+    setCartQuickScanResults([]);
+  }, [stopCartQuickScanner]);
+
+  const startCartQuickScanner = useCallback(async () => {
+    await stopCartQuickScanner();
+    cartQuickScanLockRef.current = false;
+    setCartQuickScanStatus('scanning');
+    setCartQuickScanError('');
+    setCartQuickScanProduct(null);
+    setCartQuickScanResults([]);
+    try {
+      const Html5Qrcode = await loadHtml5Qrcode();
+      await waitForCameraElement('customer-cart-quick-scan-reader');
+      const scanner = new Html5Qrcode('customer-cart-quick-scan-reader');
+      cartQuickScannerRef.current = scanner;
+      await startHtml5Scanner(
+        scanner,
+        { fps: 10, qrbox: { width: 250, height: 150 } },
+        async (decodedText) => {
+          if (cartQuickScanLockRef.current) return;
+          const normalizedCode = normalizeBarcodeInput(decodedText);
+          if (!normalizedCode) return;
+
+          cartQuickScanLockRef.current = true;
+          setCartQuickScanLastCode(normalizedCode);
+          setCartQuickScanStatus('resolving-product');
+          await stopCartQuickScanner();
+
+          try {
+            const product = await customerCatalogService.getProductByBarcode(decodedText);
+            showCartQuickScanProduct(product);
+          } catch (error) {
+            setCartQuickScanProduct(null);
+            setCartQuickScanStatus('product-not-found');
+            setCartQuickScanError(
+              Number(error?.status || error?.statusCode) === 404
+                ? 'Bu barkodla eşleşen satışa açık ürün bulunamadı.'
+                : 'Ürün bilgisi alınamadı. Lütfen tekrar deneyin.'
+            );
+          }
+        },
+        () => {}
+      );
+    } catch (error) {
+      logCameraError(error, 'customer-cart-quick-scan');
+      try { await cartQuickScannerRef.current?.clear(); } catch {}
+      cartQuickScannerRef.current = null;
+      setCartQuickScanStatus('permission-error');
+      setCartQuickScanError(`${getCameraErrorMessage(error)} ${CAMERA_PERMISSION_HELP_TEXT}`);
+    }
+  }, [showCartQuickScanProduct, stopCartQuickScanner]);
+
+  const openCartQuickScan = useCallback(() => {
+    setRoutePlanOpen(false);
+    setCartQuickScanOpen(true);
+    setCartQuickScanStatus('idle');
+    setCartQuickScanError('');
+    setCartQuickScanProduct(null);
+    setCartQuickScanLastCode('');
+    setCartQuickScanManualQuery('');
+    setCartQuickScanResults([]);
+  }, []);
+
+  const fetchRoutePlan = useCallback(async () => {
+    const items = Object.entries(cart)
+      .filter(([, qty]) => Number(qty) > 0)
+      .map(([productId, qty]) => ({
+        productId,
+        quantity: Number(qty),
+      }));
+
+    if (items.length === 0) {
+      setRoutePlanData(null);
+      setRoutePlanError('Sepetinizde planlanacak ürün yok.');
+      return;
+    }
+
+    setRoutePlanLoading(true);
+    setRoutePlanError('');
+    try {
+      const data = await customerCatalogService.getCartRoutePlan(items);
+      if (data && typeof data === 'object') {
+        const enrichItem = (item) => {
+          const cartEntry = cartEntries.find((entry) => String(entry.product?.id) === String(item.productId));
+          const product = cartEntry?.product || {};
+          const categoryName = resolveCustomerProductCategory(product);
+          const visual = getCategoryVisual(categoryName);
+          const categoryImage = visual?.image ? categoryAssetUrl(visual.image) : '';
+          return {
+            ...item,
+            categoryName,
+            categoryImage,
+          };
+        };
+        if (Array.isArray(data.route)) {
+          data.route = data.route.map(enrichItem);
+        }
+        if (Array.isArray(data.missingLocation)) {
+          data.missingLocation = data.missingLocation.map(enrichItem);
+        }
+      }
+      setRoutePlanData(data);
+    } catch (err) {
+      setRoutePlanError(err?.message || 'Rota planı yüklenemedi.');
+    } finally {
+      setRoutePlanLoading(false);
+    }
+  }, [cart, cartEntries]);
+
+  const openRoutePlan = useCallback(async () => {
+    if (cartQuickScanOpen) {
+      await closeCartQuickScan();
+    }
+    setRoutePlanOpen(true);
+    void fetchRoutePlan();
+  }, [cartQuickScanOpen, closeCartQuickScan, fetchRoutePlan]);
+
+  const closeRoutePlan = useCallback(() => {
+    setRoutePlanOpen(false);
+  }, []);
+
+
+  const continueCartQuickScan = useCallback(() => {
+    cartQuickManualSearchSeqRef.current += 1;
+    setCartQuickScanProduct(null);
+    setCartQuickScanLastCode('');
+    setCartQuickScanManualQuery('');
+    setCartQuickScanResults([]);
+    window.requestAnimationFrame(() => {
+      void startCartQuickScanner();
+    });
+  }, [startCartQuickScanner]);
+
+  const searchCartQuickScanManually = useCallback(async () => {
+    const query = String(cartQuickScanManualQuery || '').trim();
+    if (!query) return;
+
+    const requestSeq = cartQuickManualSearchSeqRef.current + 1;
+    cartQuickManualSearchSeqRef.current = requestSeq;
+    cartQuickScanLockRef.current = true;
+    setCartQuickScanStatus('manual-searching');
+    setCartQuickScanError('');
+    setCartQuickScanProduct(null);
+    setCartQuickScanResults([]);
+    setCartQuickScanLastCode(query);
+    await stopCartQuickScanner();
+
+    try {
+      if (isLikelyBarcodeOrSku(query)) {
+        try {
+          const exactProduct = await customerCatalogService.getProductByBarcode(query);
+          if (requestSeq === cartQuickManualSearchSeqRef.current) showCartQuickScanProduct(exactProduct);
+          return;
+        } catch (error) {
+          if (Number(error?.status || error?.statusCode) !== 404) throw error;
+        }
+      }
+
+      const catalog = await customerCatalogService.getCatalog({
+        mode: 'products',
+        search: query,
+        page: 1,
+        limit: 8,
+      });
+      if (requestSeq !== cartQuickManualSearchSeqRef.current) return;
+      const results = Array.isArray(catalog?.products) ? catalog.products : [];
+      if (results.length === 1) {
+        showCartQuickScanProduct(results[0]);
+        return;
+      }
+      if (results.length > 1) {
+        setCartQuickScanResults(results);
+        setCartQuickScanStatus('search-results');
+        return;
+      }
+      setCartQuickScanStatus('product-not-found');
+      setCartQuickScanError('Bu aramayla eşleşen satışa açık ürün bulunamadı.');
+    } catch {
+      if (requestSeq !== cartQuickManualSearchSeqRef.current) return;
+      setCartQuickScanStatus('product-not-found');
+      setCartQuickScanError('Ürün araması tamamlanamadı. Lütfen tekrar deneyin.');
+    }
+  }, [cartQuickScanManualQuery, showCartQuickScanProduct, stopCartQuickScanner]);
+
+  const selectCartQuickScanResult = useCallback((product) => {
+    showCartQuickScanProduct(product);
+  }, [showCartQuickScanProduct]);
+
+  const addQuickScannedProduct = useCallback(() => {
+    if (!cartQuickScanProduct?.id) return;
+    const productId = String(cartQuickScanProduct.id);
+    const currentQuantity = Number(cart[productId] || 0);
+    const stock = resolveCanonicalAvailableStock(cartQuickScanProduct);
+    if (stock <= 0) {
+      setCartQuickScanError('Bu ürün şu anda stokta bulunmuyor.');
+      setCartQuickScanStatus('product-not-found');
+      return;
+    }
+    if (currentQuantity >= stock) {
+      setCartQuickScanError(`Bu üründen en fazla ${stock} adet ekleyebilirsiniz.`);
+      setCartQuickScanStatus('product-not-found');
+      return;
+    }
+    addToCart(productId);
+    continueCartQuickScan();
+  }, [cart, cartQuickScanProduct, continueCartQuickScan]);
+
+  useEffect(() => {
+    if (!cartQuickScanOpen) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      void startCartQuickScanner();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [cartQuickScanOpen, startCartQuickScanner]);
+
+  useEffect(() => {
+    if (view === 'cart') return;
+    if (cartQuickScanOpen) void closeCartQuickScan();
+  }, [cartQuickScanOpen, closeCartQuickScan, view]);
+
+  useEffect(() => () => {
+    cartQuickScanLockRef.current = true;
+    void stopCartQuickScanner();
+  }, [stopCartQuickScanner]);
   const focusCustomerSearch = useCallback(() => {
     window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }, [setCategories]);
@@ -2522,6 +3034,22 @@ export default function CustomerPortal() {
     const nextProductId = String(productId || '');
     if (!nextProductId) return;
     const nextQuantity = Math.max(0, Math.floor(Number(quantity || 0)));
+
+    if (nextQuantity > 0) {
+      const product = productsById.get(nextProductId) || detailCache[nextProductId] || null;
+      const stock = product ? resolveCanonicalAvailableStock(product) : 0;
+      if (stock <= 0) {
+        pushQuickToast('Bu ürün stokta bulunmamaktadır.', 'error');
+        return;
+      }
+      const currentQuantity = Number(cart[nextProductId] || 0);
+      if (nextQuantity > currentQuantity && nextQuantity > stock) {
+        pushQuickToast(`Bu üründen en fazla ${stock} adet ekleyebilirsiniz.`, 'error');
+        return;
+      }
+    }
+
+    cartMutationRevisionRef.current += 1;
     setCart((current) => {
       const next = { ...current };
       if (nextQuantity <= 0) {
@@ -2533,6 +3061,7 @@ export default function CustomerPortal() {
     });
   };
   const clearCart = () => {
+    cartMutationRevisionRef.current += 1;
     setCart({});
     pushQuickToast('Sepet temizlendi');
   };
@@ -2595,6 +3124,7 @@ export default function CustomerPortal() {
     setMobileOrderBusy(true);
     setMobileOrderError('');
     try {
+      await syncCartToBackend(cart, { force: true });
       const responseOrder = await customerPortalAuthService.createMobileOrder({
         selectedProductIds: checkoutEntries.map(({ product }) => String(product.id)),
       });
@@ -2603,12 +3133,7 @@ export default function CustomerPortal() {
         throw new Error('Kasa kodu oluşturulamadı. Lütfen tekrar deneyin.');
       }
       setMobileOrderHandoff(nextOrder);
-      const nextCart = normalizeCartState(Object.fromEntries(
-        Object.entries(cart).filter(([productId]) => !selectedSet.has(String(productId)))
-      ));
-      setCart(nextCart);
-      writeStoredObject(scopedKey(CART_STORAGE_KEY, customerId), nextCart);
-      cartSyncSnapshotRef.current = serializeCartState(nextCart);
+      setPendingMobileOrderId(nextOrder.id);
       pushQuickToast('Kasa kodunuz hazır.');
     } catch (error) {
       const message = getMobileOrderErrorMessage(error);
@@ -2625,8 +3150,9 @@ export default function CustomerPortal() {
     setMobileOrderError('');
     try {
       const confirmedOrder = normalizeMobileOrderHandoff(await customerPortalAuthService.confirmMobileOrderHandoff(mobileOrderHandoff.id));
-      const displayOrderNo = resolveCustomerOrderDisplayNo(confirmedOrder || mobileOrderHandoff);
-      const historyRow = {
+      const persistedOrder = confirmedOrder.customerOrder || {};
+      const displayOrderNo = resolveCustomerOrderDisplayNo(persistedOrder.id ? persistedOrder : (confirmedOrder || mobileOrderHandoff));
+      const historyRow = persistedOrder.id ? persistedOrder : {
         id: mobileOrderHandoff.id,
         orderNo: displayOrderNo,
         displayOrderNo,
@@ -2646,13 +3172,20 @@ export default function CustomerPortal() {
           note: 'Ödeme kasada tamamlanacak.',
         },
       };
+      const nextCart = normalizeCartState(normalizeBackendCart({ activeCart: confirmedOrder.activeCart || null }));
+      cartMutationRevisionRef.current += 1;
+      cartSyncSnapshotRef.current = serializeCartState(nextCart);
+      cartSyncPendingSnapshotRef.current = '';
+      writeStoredObject(scopedKey(CART_STORAGE_KEY, customerId), nextCart);
+      setCart(nextCart);
       setOrderHistory((current) => {
         const nextHistory = [historyRow, ...current.filter((row) => String(row.id) !== String(historyRow.id))].slice(0, 100);
         writeStoredArray(scopedKey(ORDER_HISTORY_STORAGE_KEY, customerId), nextHistory);
         return nextHistory;
       });
+      setPendingMobileOrderId('');
       setMobileOrderHandoff(null);
-      pushQuickToast('Sipariş geçmişine taşındı.');
+      pushQuickToast('Kasa kodu kaydedildi. Seçili ürünler sipariş geçmişine taşındı ve sepetten kaldırıldı.');
       navigateTo('order-history', 'account');
     } catch (error) {
       const message = error?.message || 'Sipariş geçmişine taşınamadı.';
@@ -2668,6 +3201,16 @@ export default function CustomerPortal() {
       <button type="button" className="header-brand" onClick={() => navigateTo('home', 'home')}><img src={logoPng} alt="Shelfio" /></button>
       <div className="customer-header-spacer" />
       <div className="header-actions">
+        {view === 'cart' && activeBottomTab === 'cart' && cartItemCount > 0 ? (
+          <button type="button" className="header-icon-btn" aria-label="Toplama Planı" title="Toplama Planı" onClick={openRoutePlan}>
+            <ListChecks size={19} />
+          </button>
+        ) : null}
+        {view === 'cart' && activeBottomTab === 'cart' ? (
+          <button type="button" className="header-icon-btn" aria-label="Barkod okutarak ürün ekle" title="Hızlı ürün ekle" onClick={openCartQuickScan}>
+            <ScanLine size={19} />
+          </button>
+        ) : null}
         <button type="button" className={`header-icon-btn ${storeInfo.isResolved ? '' : 'is-loading'}`} aria-label="Ma\u011faza durumu" title={storeInfo.isResolved ? (storeInfo.isOpen ? 'Ma\u011faza a\u00e7\u0131k' : 'Ma\u011faza kapal\u0131') : 'Ma\u011faza durumu y\u00fckleniyor'} onClick={() => navigateTo('store-hours', 'home')}>
           <Store size={16} color={storeInfo.isResolved ? (storeInfo.isOpen ? '#16a34a' : '#ef4444') : '#94a3b8'} />
         </button>
@@ -2901,6 +3444,7 @@ export default function CustomerPortal() {
           <button className="quick-action-card" onClick={handleBarcodeScan} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '12px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}><div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><QrCode size={20} /></div><span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#334155' }}>Tarat & Bul</span></button>
           <button className="quick-action-card" onClick={() => openAccountPanel('favorites')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '12px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}><div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#fce7f3', color: '#ec4899', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Heart size={20} /></div><span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#334155' }}>Favoriler</span></button>
           <button className="quick-action-card" onClick={() => openAccountPanel('gift-cards')} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '12px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}><div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#dcfce7', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><PackageSearch size={20} /></div><span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#334155' }}>Hediye Kartları</span></button>
+          <button className="quick-action-card" onClick={() => navigateTo('campaigns', 'campaigns', { mode: 'popular' })} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '12px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}><div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#ffedd5', color: '#f97316', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Flame size={20} /></div><span style={{ fontSize: '0.75rem', fontWeight: '500', color: '#334155' }}>Popüler Ürünler</span></button>
         </div>
       </section>
 
@@ -3107,19 +3651,34 @@ export default function CustomerPortal() {
         ) : null}
 
         {((debouncedSearchQuery.length >= 2) || selectedCategoryId) && filteredSearchResults.length > 0 ? (
-          <div className="customer-results-grid">
-            {filteredSearchResults.map((item) => (
-              <ProductResultCard
-                key={item.id}
-                product={item}
-                onDetail={openProduct}
-                onAddToCart={addToCart}
-                isFavorite={favoriteIds.includes(String(item.id))}
-                onToggleFavorite={toggleFavorite}
-                cartQuantity={Number(cart[String(item.id)] || 0)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="customer-results-grid">
+              {filteredSearchResults.map((item) => (
+                <ProductResultCard
+                  key={item.id}
+                  product={item}
+                  onDetail={openProduct}
+                  onAddToCart={addToCart}
+                  isFavorite={favoriteIds.includes(String(item.id))}
+                  onToggleFavorite={toggleFavorite}
+                  cartQuantity={Number(cart[String(item.id)] || 0)}
+                />
+              ))}
+            </div>
+            {searchHasNextPage ? (
+              <div style={{ textAlign: 'center', marginTop: '16px', marginBottom: '24px' }}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => ensureProductsLoaded({ loadMore: true })}
+                  disabled={productsLoading}
+                  style={{ width: '100%', maxWidth: '200px' }}
+                >
+                  {productsLoading ? 'Yükleniyor...' : 'Daha Fazla Yükle'}
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : null}
       </section>
     </div>
@@ -3167,7 +3726,7 @@ export default function CustomerPortal() {
   const renderCategoryPage = () => {
     const slug = decodeURIComponent((location.pathname.split('/musteri/kategori/')[1] || '').split('/')[0] || '');
     const category = resolveCategoryFromRouteSlug(slug, categoriesByDemand, categories);
-    const rows = products.filter((item) => {
+    const rows = searchProducts.filter((item) => {
       if (!category) return false;
       const categoryId = String(item.categoryId || '');
       const categoryName = normalizeKey(resolveCustomerProductCategory(item));
@@ -3218,11 +3777,28 @@ export default function CustomerPortal() {
           ) : <div className="empty-state-box" style={{ marginBottom: '12px' }}>Etiket bulunamadı.</div>}
           {productsLoading && visibleRows.length === 0 ? <div className="empty-state-box">Ürünler yükleniyor...</div> : null}
           {visibleRows.length ? (
-            <div className="customer-results-grid">
-              {visibleRows.map((item) => (
-                <ProductResultCard key={item.id} product={item} onDetail={openProduct} onAddToCart={addToCart} isFavorite={favoriteIds.includes(String(item.id))} onToggleFavorite={toggleFavorite} cartQuantity={Number(cart[String(item.id)] || 0)} />
-              ))}
-            </div>
+            <>
+              <div className="customer-results-grid">
+                {visibleRows.map((item) => (
+                  <ProductResultCard key={item.id} product={item} onDetail={openProduct} onAddToCart={addToCart} isFavorite={favoriteIds.includes(String(item.id))} onToggleFavorite={toggleFavorite} cartQuantity={Number(cart[String(item.id)] || 0)} />
+                ))}
+              </div>
+              {searchHasNextPage ? (
+                <div style={{ textAlign: 'center', marginTop: '16px', marginBottom: '24px' }}>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      ensureProductsLoaded({ categoryId: category?.id ? String(category.id) : '', loadMore: true });
+                    }}
+                    disabled={productsLoading}
+                    style={{ width: '100%', maxWidth: '200px' }}
+                  >
+                    {productsLoading ? 'Yükleniyor...' : 'Daha Fazla Yükle'}
+                  </button>
+                </div>
+              ) : null}
+            </>
           ) : <div className="empty-state-box">Bu kategoride ürün bulunamadı.</div>}
         </section>
       </div>
@@ -3362,7 +3938,10 @@ export default function CustomerPortal() {
     <div className="customer-subpage customer-popular-products-page">
       <h3>Popüler Ürünler (Son 7 Gün)</h3>
       {popularProducts.length === 0 ? (
-        <div className="empty-state-box">Son 7 güne ait satış verisi bulunamadı.</div>
+        <div className="empty-state-box">
+          <h4>Stokta popüler ürün bulunmuyor.</h4>
+          <p>Daha sonra tekrar kontrol edebilirsiniz.</p>
+        </div>
       ) : (
         <div className="customer-results-grid">
           {popularProducts.map((item) => (
@@ -3672,7 +4251,7 @@ export default function CustomerPortal() {
     </div>
   );
 
-  const hasRenderableCustomerData = storefrontResolved || products.length > 0 || campaignDefinitions.length > 0;
+  const hasRenderableCustomerData = storefrontResolved || homeProducts.length > 0 || searchProducts.length > 0 || campaignDefinitions.length > 0;
   if (isLoading && !hasRenderableCustomerData) {
     return <PageLoading pageTitle={view === 'campaigns' ? 'Kampanyalar' : 'Müşteri'} />;
   }
@@ -3715,7 +4294,7 @@ export default function CustomerPortal() {
           />
         ) : null}
         {view === 'detail' && !detailProduct && detailLoading ? <div className="customer-loading">Ürün detayı yükleniyor...</div> : null}
-        {view === 'cart' ? <CustomerCartFull cartEntries={cartEntries} onUpdateQuantity={updateCartQuantity} onStartShopping={() => navigateTo('search', 'search')} total={cartSubtotal} onCheckout={completeShopping} onOpenProduct={openProduct} onClearCart={clearCart} onShowMessage={pushQuickToast} /> : null}
+        {view === 'cart' ? <CustomerCartFull cartEntries={cartEntries} cartSyncError={cartSyncError} onRetryCartSync={() => { void syncCartToBackend(cart, { force: true }).catch(() => {}); }} onUpdateQuantity={updateCartQuantity} onStartShopping={() => navigateTo('search', 'search')} total={cartSubtotal} onCheckout={completeShopping} onOpenProduct={openProduct} onClearCart={clearCart} onShowMessage={pushQuickToast} /> : null}
       </div>
 
       <BottomNavigationDock tabs={BOTTOM_TABS} activeTab={activeBottomTab} onChange={onBottomNavChange} badgesByKey={{ cart: cartItemCount }} />
@@ -3727,6 +4306,31 @@ export default function CustomerPortal() {
           onConfirm={confirmMobileOrderShown}
         />
       ) : null}
+      <CustomerCartQuickScanModal
+        open={cartQuickScanOpen}
+        status={cartQuickScanStatus}
+        error={cartQuickScanError}
+        product={cartQuickScanProduct}
+        lastCode={cartQuickScanLastCode}
+        manualQuery={cartQuickScanManualQuery}
+        searchResults={cartQuickScanResults}
+        onManualQueryChange={setCartQuickScanManualQuery}
+        onManualSearch={() => { void searchCartQuickScanManually(); }}
+        onSelectResult={selectCartQuickScanResult}
+        onAdd={addQuickScannedProduct}
+        onSkip={continueCartQuickScan}
+        onRetry={continueCartQuickScan}
+        onClose={() => { void closeCartQuickScan(); }}
+      />
+      <CustomerCartRoutePlanSheet
+        isOpen={routePlanOpen}
+        onClose={closeRoutePlan}
+        loading={routePlanLoading}
+        error={routePlanError}
+        routePlan={routePlanData}
+        customerId={customerId}
+        cart={cart}
+      />
       {quickToast ? <div className={`customer-quiet-toast ${quickToast.leaving ? 'is-leaving' : 'is-visible'}`}>{quickToast.text}</div> : null}
 
       {orderDetail ? <CustomerOrderDetailModal order={orderDetail} onClose={() => setOrderDetail(null)} /> : null}

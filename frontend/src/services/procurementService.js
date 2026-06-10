@@ -9,6 +9,7 @@ const invalidateProcurementCache = () => invalidateSessionCache((key) => key.sta
 
 const DEFAULT_SUPPLIER_PRODUCTS_LIMIT = 50;
 const FULL_FETCH_SUPPLIER_PRODUCTS_LIMIT = 250;
+const FULL_FETCH_ORDERS_LIMIT = 250;
 
 const getPaginationMeta = (rows) => rows?.meta?.pagination || null;
 
@@ -68,6 +69,29 @@ const fetchSupplierProductsRows = async (queryParams = {}, requestOptions = {}) 
   return allRows;
 };
 
+const fetchAllOrderRows = async (params = {}) => {
+  const allRows = [];
+  let page = 1;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const rows = await api.get(`/procurement/orders${buildQueryString({
+      ...params,
+      paginationMode: 'offset',
+      page,
+      limit: FULL_FETCH_ORDERS_LIMIT,
+      includeTotal: true,
+    })}`, { cache: 'no-store' });
+    if (Array.isArray(rows)) allRows.push(...rows);
+    const pagination = getPaginationMeta(rows);
+    hasNextPage = Boolean(pagination?.hasNextPage);
+    page += 1;
+    if (!pagination || page > 500) break;
+  }
+
+  return allRows;
+};
+
 const normalizeSupplierProduct = (item = {}) => ({
   ...item,
   productSku: item.productSku || item.sku || '-',
@@ -95,6 +119,7 @@ export const procurementService = {
       { forceRefresh: Boolean(forceRefresh) }
     );
   },
+  getMatchesSummary: (params = {}) => api.get(`/procurement/matches/summary${buildQueryString(params)}`),
   hasSupplierProductsCache: (params = {}) => {
     const { forceRefresh, ...queryParams } = params || {};
     return hasSessionCache(getSupplierProductsCacheKey(queryParams));
@@ -127,6 +152,7 @@ export const procurementService = {
   rejectSuggestion: (id) => api.post(`/procurement/suggestions/${id}/reject`, {}),
 
   listOrders: (params = {}) => api.get(`/procurement/orders${buildQueryString(params)}`),
+  listAllOrders: (params = {}) => fetchAllOrderRows(params),
   createOrder: (payload) => api.post('/procurement/orders', payload),
   getOrderItems: (id) => api.get(`/procurement/orders/${id}/items`),
   updateOrderStatus: (id, payload) => api.patch(`/procurement/orders/${id}/status`, payload),
@@ -142,6 +168,8 @@ export const procurementService = {
   previewCatalogImport: (payload) => api.post('/procurement/catalog-imports/preview', payload),
   updateCatalogImportRow: (importId, rowId, payload) => api.patch(`/procurement/catalog-imports/${importId}/rows/${rowId}`, payload),
   commitCatalogImport: (importId, payload = {}) => api.post(`/procurement/catalog-imports/${importId}/commit`, payload),
+  listCatalogs: (params = {}) => api.get(`/procurement/catalogs${buildQueryString(params)}`),
+  getCatalogItems: (catalogId, params = {}) => api.get(`/procurement/catalogs/${encodeURIComponent(catalogId)}/items${buildQueryString(params)}`),
   listCatalogVersions: (params = {}) => api.get(`/procurement/catalog-versions${buildQueryString(params)}`),
   getCatalogVersionRows: (versionId) => api.get(`/procurement/catalog-versions/${versionId}/rows`),
   activateCatalogVersion: (versionId) => api.post(`/procurement/catalog-versions/${versionId}/activate`, {}),

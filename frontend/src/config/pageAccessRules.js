@@ -23,6 +23,7 @@ export const PAGE_ACCESS_RULES = [
   { path: '/sistem-ayarlari', pattern: /^\/sistem-ayarlari(?:\/|$)/, permission: 'settings:view', label: 'Sistem Ayarları' },
   { path: '/pos-kasa', pattern: /^\/pos-kasa(?:\/|$)/, permission: 'pos:view', label: 'POS / Kasa' },
   { path: '/depo-transfer-talepleri', pattern: /^\/depo-transfer-talepleri(?:\/|$)/, permission: 'transfer_request:view', label: 'Depo Transfer Talepleri' },
+  { path: '/lokasyon-duzenle', pattern: /^\/lokasyon-duzenle(?:\/|$)/, permission: 'layout:manage', label: 'Mağaza Planı Düzenleyici' },
 ];
 
 export const resolvePageAccessRule = (pathname = '/') => {

@@ -7,7 +7,6 @@ const countActivePricingFilters = ({ filters, selectedPreset, criticalFilterActi
     filters.salesSpeed,
     filters.primaryAction,
     filters.categoryId,
-    filters.supplierId,
     filters.campaignEligibility,
     filters.conflict,
     filters.blockingReason,

@@ -308,6 +308,7 @@ export const customerAuthService = {
   async me(id) { const row = await customerRepo.findById(id); if (!row) throw new AppError(404, 'Musteri bulunamadi'); return mapCustomer(row); },
   async dashboard(id) { return customerService.portalDashboard(id); },
   async catalog(query = {}) { return customerCatalogService.listCatalog(query); },
+  async catalogByBarcode(barcode) { return customerCatalogService.getProductByBarcode(barcode); },
   async catalogDetail(id) { return customerCatalogService.getProductById(id); },
   async catalogStockForecast(id) { return customerCatalogService.getProductStockForecast(id); },
   async orders(id, query) { return customerService.listOrders(id, query); },
@@ -320,6 +321,9 @@ export const customerAuthService = {
   async notifications(id, limit) { return customerService.listCustomerNotifications(id, limit); },
   async markNotificationsAsRead(id) { return customerService.markCustomerNotificationsAsRead(id); },
   async clearNotifications(id) { return customerService.clearCustomerNotifications(id); },
+  async getCartRoutePlan(items) {
+    return customerCatalogService.getCartRoutePlan(items);
+  },
   async storeMap() { return storeMapService.getCustomerStoreMap(); },
   async storeMapPublic() { return storeMapService.getCustomerStoreMap(); },
 };

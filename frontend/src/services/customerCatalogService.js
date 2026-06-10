@@ -70,7 +70,19 @@ export const customerCatalogService = {
     return normalizeProductRecord(payload || {});
   },
 
+  async getProductByBarcode(barcode) {
+    const payload = await customerPortalRequest(`/customer-auth/catalog/barcode/${encodeURIComponent(barcode)}`);
+    return normalizeProductRecord(payload || {});
+  },
+
   async getProductStockForecast(id) {
     return customerPortalRequest(`/customer-auth/catalog/${encodeURIComponent(id)}/stock-forecast`);
+  },
+
+  async getCartRoutePlan(items) {
+    return customerPortalRequest('/customer-auth/cart/route-plan', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
   },
 };

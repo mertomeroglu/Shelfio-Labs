@@ -1,4 +1,4 @@
-﻿import { api, invalidateSessionCache } from './api.js';
+import { api, invalidateSessionCache } from './api.js';
 import { API_BASE_URL, buildQueryString, getAuthToken, getOrLoadSessionCache } from './api.js';
 import { isRequestCancellation } from './api.js';
 
@@ -142,6 +142,7 @@ export const settingsService = {
     return api.get(`/settings/audit-logs${buildQueryString(query)}`);
   },
   getDeveloperLogs: (filters = {}) => api.get(`/settings/developer-logs${buildQueryString(filters)}`),
+  getDeveloperLogDetail: (id) => api.get(`/settings/developer-logs/${encodeURIComponent(id)}`),
   clearLogs: (type) => api.delete(`/settings/logs/${encodeURIComponent(type)}`),
   exportAuditLogs: async (format = 'xlsx') => {
     const token = getAuthToken();

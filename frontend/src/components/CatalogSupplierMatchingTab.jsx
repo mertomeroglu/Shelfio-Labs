@@ -1,9 +1,10 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, CheckCircle2, Database, Download, Eye, FileDown, FileUp, RefreshCw, Search, Tag, XCircle } from 'lucide-react';
 import DataTable from './DataTable.jsx';
 import FilterBar from './FilterBar.jsx';
 import FormModal from './FormModal.jsx';
 import { procurementService } from '../services/procurementService.js';
+import { productService } from '../services/productService.js';
 import { formatCurrency, formatDate, formatNumber, formatStorageTypeLabel } from '../services/formatters.js';
 
 const loadXlsx = async () => {
@@ -247,6 +248,100 @@ const RISK_LABELS = {
   category_conflict: 'Kategori çakışması',
 };
 
+const MATCH_TYPE_LABELS = {
+  barcode: 'Barkod',
+  supplierProductCode: 'Tedarikçi Ürün Kodu',
+  supplier_product_code: 'Tedarikçi Ürün Kodu',
+  sku: 'SKU',
+  productId: 'Ürün ID',
+  product_id: 'Ürün ID',
+  productName: 'Ürün Adı',
+  product_name: 'Ürün Adı',
+  manual: 'Manuel Eşleşme',
+  none: 'Eşleşme Yok',
+  unknown: 'Bilinmiyor',
+};
+
+const PRICE_BASIS_LABELS = {
+  unit: 'Birim',
+  case: 'Koli',
+  package: 'Paket',
+  box: 'Kutu',
+  bottle: 'Şişe',
+  piece: 'Adet',
+  each: 'Adet',
+  unknown: 'Bilinmiyor',
+  none: 'Yok',
+};
+
+const DIFF_STATUS_LABELS = {
+  price_increased: 'Zam Geldi',
+  price_decreased: 'İndirim Geldi',
+  unchanged: 'Değişmedi',
+  new_product: 'Yeni Ürün',
+  new_product_candidate: 'Yeni Ürün',
+  removed_product: 'Kaldırılan Ürün',
+  removed_product_candidate: 'Kaldırılan Ürün',
+  matched_existing_product: 'Mevcut Ürün',
+  ambiguous_match: 'Eşleşme Gerekli',
+  price_review_required: 'Fiyat Kontrolü Gerekli',
+  invalid_row: 'Hatalı Satır',
+  currency_review_required: 'Para Birimi Kontrolü Gerekli',
+  vat_review_required: 'KDV Kontrolü Gerekli',
+  price_scale_suspected: 'Fiyat Ölçek Şüphesi',
+  none: 'Durum Yok',
+  unknown: 'Bilinmiyor',
+};
+
+const MATCH_STATUS_LABELS = DIFF_STATUS_LABELS;
+const STATUS_LABELS = DIFF_STATUS_LABELS;
+
+const formatNullableLabel = (value, fallback = '—') => {
+  if (value === null || value === undefined || value === '') return fallback;
+  const str = String(value).trim();
+  if (!str) return fallback;
+  if (str === 'none') return 'Yok';
+  if (str === 'unknown') return 'Bilinmiyor';
+  return str;
+};
+
+const formatDiffStatus = (value) => {
+  if (value === null || value === undefined || value === '') return 'Durum Yok';
+  const key = String(value).trim();
+  if (key === 'none') return 'Durum Yok';
+  return DIFF_STATUS_LABELS[key] || 'Bilinmeyen Durum';
+};
+
+const formatMatchType = (value) => {
+  if (value === null || value === undefined || value === '') return 'Eşleşme Yok';
+  const key = String(value).trim();
+  if (key === 'none') return 'Eşleşme Yok';
+  return MATCH_TYPE_LABELS[key] || 'Bilinmiyor';
+};
+
+const formatPriceBasis = (value) => {
+  if (value === null || value === undefined || value === '') return 'Yok';
+  const key = String(value).trim();
+  if (key === 'none') return 'Yok';
+  return PRICE_BASIS_LABELS[key] || 'Bilinmiyor';
+};
+
+const formatMatchStatus = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
+  const key = String(value).trim();
+  if (key === 'none') return 'Durum Yok';
+  return DIFF_STATUS_LABELS[key] || 'Bilinmeyen Durum';
+};
+
+const formatCatalogDiffStatus = (value) => {
+  return formatMatchStatus(value);
+};
+
+const formatConfidence = (value) => {
+  const num = Number(value || 0);
+  return `%${num} güven`;
+};
+
 const TECHNICAL_LABELS = {
   available: 'Tedarik edilebilir',
   out_of_stock: 'Tedarikçide stok yok',
@@ -285,6 +380,28 @@ const TECHNICAL_LABELS = {
   create_draft_product: 'Güvenli taslak oluşturulacak',
   skip: 'Onay için bekletilecek',
   reject: 'Reddedildi',
+
+  // Match Types
+  barcode: 'Barkod',
+  supplierProductCode: 'Tedarikçi Ürün Kodu',
+  supplier_product_code: 'Tedarikçi Ürün Kodu',
+  sku: 'SKU',
+  productId: 'Ürün ID',
+  product_id: 'Ürün ID',
+  productName: 'Ürün Adı',
+  product_name: 'Ürün Adı',
+  manual: 'Manuel Eşleşme',
+  none: 'Eşleşme Yok',
+  unknown: 'Bilinmiyor',
+
+  // Price Basis
+  unit: 'Birim',
+  case: 'Koli',
+  package: 'Paket',
+  box: 'Kutu',
+  bottle: 'Şişe',
+  piece: 'Adet',
+  each: 'Adet',
 };
 
 const TECHNICAL_SENTENCE_LABELS = {
@@ -436,6 +553,93 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
   // Katalog görüntüleme modal state
   const [viewCatalog, setViewCatalog] = useState(null); // { version, rows }
   const [viewLoading, setViewLoading] = useState(false);
+  const [backendSearchResults, setBackendSearchResults] = useState({});
+  const [isSearchingBackend, setIsSearchingBackend] = useState({});
+  const [approvalBackendSearchOptions, setApprovalBackendSearchOptions] = useState([]);
+  const [isSearchingApprovalBackend, setIsSearchingApprovalBackend] = useState(false);
+
+  const handleProductSearch = async (rowId, query) => {
+    const trimmed = String(query || '').trim();
+    if (trimmed.length < 2) {
+      setBackendSearchResults((current) => {
+        const next = { ...current };
+        delete next[rowId];
+        return next;
+      });
+      return;
+    }
+    setIsSearchingBackend((current) => ({ ...current, [rowId]: true }));
+    try {
+      const res = await productService.list({ search: trimmed, limit: 50 });
+      let productsList = [];
+      if (Array.isArray(res)) {
+        productsList = res;
+      } else if (res && typeof res === 'object') {
+        productsList = res.data?.items?.products || res.items?.products || res.data || res.products || [];
+        if (!Array.isArray(productsList)) {
+          productsList = [];
+        }
+      }
+      const mapped = productsList.map((item) => ({
+        value: String(item.id),
+        label: [
+          item.sku,
+          item.barcode,
+          item.name,
+          item.brand,
+          item.categoryName || item.etiket,
+          item.isActive === false ? 'Pasif' : 'Aktif',
+          item.isListed === false ? 'Listesiz' : 'Listeli',
+        ].filter(Boolean).join(' | '),
+        rawItem: item,
+      }));
+      setBackendSearchResults((current) => ({ ...current, [rowId]: mapped }));
+    } catch (err) {
+      console.error('Product search error:', err);
+    } finally {
+      setIsSearchingBackend((current) => ({ ...current, [rowId]: false }));
+    }
+  };
+
+  const handleApprovalProductSearch = async (query) => {
+    const trimmed = String(query || '').trim();
+    if (trimmed.length < 2) {
+      setApprovalBackendSearchOptions([]);
+      return;
+    }
+    setIsSearchingApprovalBackend(true);
+    try {
+      const res = await productService.list({ search: trimmed, limit: 50 });
+      let productsList = [];
+      if (Array.isArray(res)) {
+        productsList = res;
+      } else if (res && typeof res === 'object') {
+        productsList = res.data?.items?.products || res.items?.products || res.data || res.products || [];
+        if (!Array.isArray(productsList)) {
+          productsList = [];
+        }
+      }
+      const mapped = productsList.map((item) => ({
+        value: String(item.id),
+        label: [
+          item.sku,
+          item.barcode,
+          item.name,
+          item.brand,
+          item.categoryName || item.etiket,
+          item.isActive === false ? 'Pasif' : 'Aktif',
+          item.isListed === false ? 'Listesiz' : 'Listeli',
+        ].filter(Boolean).join(' | '),
+        rawItem: item,
+      }));
+      setApprovalBackendSearchOptions(mapped);
+    } catch (err) {
+      console.error('Approval product search error:', err);
+    } finally {
+      setIsSearchingApprovalBackend(false);
+    }
+  };
+
   const uploadSectionRef = useRef(null);
   const supplierSearchRef = useRef(null);
 
@@ -638,15 +842,17 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
       const priceDiff = oldPrice !== null && newPrice !== null ? Number((newPrice - oldPrice).toFixed(2)) : null;
       const changePct = oldPrice && newPrice !== null ? ((newPrice - oldPrice) / oldPrice) * 100 : null;
 
-      let status = 'Değişmedi';
-      if (Array.isArray(row.errors) && row.errors.length > 0) {
-        status = 'Hatalı';
-      } else if (!existing) {
-        status = 'Yeni Ürün';
-      } else if (priceDiff !== null && priceDiff > 0.0001) {
-        status = 'Zam Geldi';
-      } else if (priceDiff !== null && priceDiff < -0.0001) {
-        status = 'İndirim';
+      let status = row.diffStatus ? formatDiffStatus(row.diffStatus) : 'Değişmedi';
+      if (!row.diffStatus) {
+        if (Array.isArray(row.errors) && row.errors.length > 0) {
+          status = 'Hatalı Satır';
+        } else if (!existing) {
+          status = 'Yeni Ürün';
+        } else if (priceDiff !== null && priceDiff > 0.0001) {
+          status = 'Zam Geldi';
+        } else if (priceDiff !== null && priceDiff < -0.0001) {
+          status = 'İndirim Geldi';
+        }
       }
 
       return {
@@ -715,6 +921,10 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
         barcode: row.barcode || existing?.barcode || '-',
         supplierProductCode: row.supplierProductCode || existing?.supplierProductCode || '-',
         status,
+        matchedBy: row.matchedBy || 'none',
+        purchasePriceBasis: row.purchasePriceBasis || 'unknown',
+        oldPurchasePriceBasis: row.oldPurchasePriceBasis || 'unknown',
+        diffStatus: row.diffStatus || '',
         oldPrice,
         newPrice,
         priceDiff,
@@ -803,7 +1013,7 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
         productName: item.supplierProductName || productById.get(String(item.productId))?.name || '-',
         barcode: item.barcode || '-',
         supplierProductCode: item.supplierProductCode || '-',
-        status: 'Kaldırıldı',
+        status: 'Kaldırılan Ürün',
         oldPrice: toNumber(item.purchasePrice),
         newPrice: null,
         priceDiff: null,
@@ -835,11 +1045,20 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
 
     diffRows.forEach((row) => {
       if (row.status === 'Zam Geldi') next.priceUpCount += 1;
-      if (row.status === 'İndirim') next.priceDownCount += 1;
+      if (row.status === 'İndirim' || row.status === 'İndirim Geldi') next.priceDownCount += 1;
       if (row.status === 'Yeni Ürün') next.newProductCount += 1;
-      if (row.status === 'Kaldırıldı') next.removedCount += 1;
+      if (row.status === 'Kaldırıldı' || row.status === 'Kaldırılan Ürün') next.removedCount += 1;
       if (row.status === 'Değişmedi') next.unchangedCount += 1;
-      if (row.status === 'Hatalı') next.invalidCount += 1;
+      if (row.status === 'Hatalı' || row.status === 'Hatalı Satır') next.invalidCount += 1;
+      if (row.status === 'Eşleşme Gerekli') next.ambiguousCount += 1;
+      if ([
+        'Fiyat Kontrolü Gerekli',
+        'Para Birimi Kontrolü Gerekli',
+        'KDV Kontrolü Gerekli',
+        'KDV Bazı Kontrolü Gerekli',
+        'Fiyat Ölçek Şüphesi',
+        'Manuel İnceleme',
+      ].includes(row.status)) next.priceReviewCount += 1;
     });
 
     return next;
@@ -1426,10 +1645,20 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
 
     const decision = manualDecisions[row.id] || {};
     const searchValue = decision.search || '';
-    const selectedProduct = productById.get(String(decision.manualProductId || '')) || null;
-    const filteredOptions = productSearchOptions
-      .filter((item) => !searchValue || item.searchText.includes(normalize(searchValue)))
-      .slice(0, 25);
+    const hasSearchQuery = searchValue.trim().length >= 2;
+    const currentOptions = hasSearchQuery
+      ? (backendSearchResults[row.id] || [])
+      : productSearchOptions.filter((item) => !searchValue || item.searchText.includes(normalize(searchValue))).slice(0, 25);
+
+    let selectedProduct = productById.get(String(decision.manualProductId || '')) || null;
+    if (!selectedProduct && decision.manualProductId) {
+      const rowOptions = backendSearchResults[row.id] || [];
+      const option = rowOptions.find((opt) => String(opt.value) === String(decision.manualProductId));
+      if (option && option.rawItem) {
+        selectedProduct = option.rawItem;
+      }
+    }
+
     const decisionBadge = decision.decision === 'manual_match'
       ? 'Mevcut ürüne bağlanacak'
       : decision.decision === 'create_draft_product'
@@ -1439,10 +1668,10 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
           : decision.decision === 'reject'
             ? 'Reddedildi'
             : row.missingRequiredFields
-              ? 'Eksik alan var'
-              : row.duplicateBarcode || row.duplicateSupplierCode
-                ? 'Çakışma riski'
-                : 'Yeni ürün - onay bekliyor';
+              ? 'Hatalı satır · düzeltme gerekli'
+              : row.duplicateBarcode || row.duplicateSupplierCode || row.actionType === 'MANUAL_MATCH' || row.diffStatus === 'ambiguous_match'
+                ? 'Eşleşme gerekli · manuel kontrol'
+                : 'Yeni ürün · onay bekliyor';
 
     return (
       <div className="catalog-manual-decision-cell">
@@ -1488,7 +1717,11 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
           <div className="catalog-product-select-wrap">
             <input
               value={searchValue}
-              onChange={(event) => updateManualDecision(row.id, { search: event.target.value })}
+              onChange={(event) => {
+                const val = event.target.value;
+                updateManualDecision(row.id, { search: val });
+                handleProductSearch(row.id, val);
+              }}
               placeholder="SKU, barkod, ad, marka, kategori veya satış durumu ara"
               aria-label="Manuel ürün arama"
             />
@@ -1498,10 +1731,20 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
               aria-label="Manuel eşleşecek ürün"
             >
               <option value="">Ürün seçin</option>
-              {filteredOptions.map((item) => (
+              {currentOptions.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
+            {hasSearchQuery && !isSearchingBackend[row.id] && currentOptions.length === 0 ? (
+              <div className="catalog-search-no-results" style={{ color: 'var(--danger)', fontSize: '0.8rem', marginTop: '4px' }}>
+                Eşleşen ürün bulunamadı
+              </div>
+            ) : null}
+            {isSearchingBackend[row.id] ? (
+              <div className="catalog-search-loading" style={{ color: 'var(--muted)', fontSize: '0.8rem', marginTop: '4px' }}>
+                Aranıyor...
+              </div>
+            ) : null}
             {selectedProduct ? (
               <small>{`${selectedProduct.sku || '-'} | ${selectedProduct.barcode || '-'} | ${selectedProduct.name || '-'}`}</small>
             ) : null}
@@ -1677,13 +1920,28 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
       render: (row) => <span className={`catalog-status-pill is-${getStatusTone(row.status)}`}>{row.status}</span>,
     },
     {
+      key: 'matchedBy',
+      label: 'Eşleşme',
+      render: (row) => (
+        <div className="catalog-barcode-cell">
+          <span>{formatMatchType(row.matchedBy)}</span>
+          <small>{formatConfidence(row.confidence)}</small>
+        </div>
+      ),
+    },
+    {
       key: 'manualDecision',
       label: 'Manuel Karar',
       sortable: false,
       render: renderManualDecisionCell,
     },
-    { key: 'oldPrice', label: 'Eski Fiyat', render: (row) => formatPriceCell(row.oldPrice), sortValue: (row) => row.oldPrice ?? -1 },
-    { key: 'newPrice', label: 'Yeni Fiyat', render: (row) => formatPriceCell(row.newPrice), sortValue: (row) => row.newPrice ?? -1 },
+    {
+      key: 'priceBasis',
+      label: 'Eski / Yeni Baz',
+      render: (row) => `${formatPriceBasis(row.oldPurchasePriceBasis)} / ${formatPriceBasis(row.purchasePriceBasis)}`,
+    },
+    { key: 'oldPrice', label: 'Eski Birim Fiyat', render: (row) => formatPriceCell(row.oldPrice), sortValue: (row) => row.oldPrice ?? -1 },
+    { key: 'newPrice', label: 'Yeni Birim Fiyat', render: (row) => formatPriceCell(row.newPrice), sortValue: (row) => row.newPrice ?? -1 },
     {
       key: 'priceDiff',
       label: 'Fark',
@@ -2159,6 +2417,8 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
               <div className="catalog-detail-grid">
                 <article className="catalog-detail-item"><span>Eski fiyat</span><strong>{formatPriceCell(rowDetail.oldPrice).replace('-', '—')}</strong></article>
                 <article className="catalog-detail-item"><span>Yeni alış fiyatı</span><strong>{formatPriceCell(rowDetail.newPrice).replace('-', '—')}</strong></article>
+                <article className="catalog-detail-item"><span>Eski fiyat bazı</span><strong>{formatPriceBasis(rowDetail.oldPurchasePriceBasis)}</strong></article>
+                <article className="catalog-detail-item"><span>Yeni fiyat bazı</span><strong>{formatPriceBasis(rowDetail.purchasePriceBasis)}</strong></article>
                 <article className="catalog-detail-item"><span>Liste fiyatı</span><strong>{formatDetailCurrency(rowDetail.listPrice, rowDetail.currency)}</strong></article>
                 <article className="catalog-detail-item"><span>Önerilen satış fiyatı</span><strong>{formatDetailCurrency(rowDetail.recommendedSalePrice, rowDetail.currency)}</strong></article>
                 <article className="catalog-detail-item"><span>Para birimi / KDV</span><strong>{formatCurrencyVatValue(rowDetail.currency, rowDetail.vatRate)}</strong></article>
@@ -2185,6 +2445,8 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
               <h4>Eşleşme ve Risk</h4>
               <div className="catalog-detail-grid">
                 <article className="catalog-detail-item"><span>Ürün durumu</span><strong><span className={`catalog-status-pill is-${getStatusTone(rowDetail.status)}`}>{rowDetail.status}</span></strong></article>
+                <article className="catalog-detail-item"><span>Eşleşme yöntemi</span><strong>{formatMatchType(rowDetail.matchedBy)}</strong></article>
+                <article className="catalog-detail-item"><span>Eşleşme durumu</span><strong>{formatMatchStatus(rowDetail.matchStatus || rowDetail.status)}</strong></article>
                 <article className="catalog-detail-item"><span>Karar</span><strong>{trList([rowDetail.actionType, rowDetail.matchStatus, rowDetail.confidence])}</strong></article>
                 <article className="catalog-detail-item"><span>Risk</span><strong><span className={`catalog-status-pill ${rowDetail.reason || rowDetail.pendingApprovalReason ? 'is-warning' : 'is-success'}`}>{trList([rowDetail.reason, rowDetail.pendingApprovalReason], 'Risk yok')}</span></strong></article>
                 <article className="catalog-detail-item"><span>Eksik alanlar</span><strong>{rowDetail.missingRequiredFieldNames?.length ? rowDetail.missingRequiredFieldNames.join(', ') : 'Eksik alan yok'}</strong></article>
@@ -2205,7 +2467,7 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
           setDraftConfirmError('');
           setDraftConfirmRow(null);
         }}
-        modalClassName={`product-form-fit-modal supplier-catalog-modal ${approvalAction?.type === 'create_draft' ? 'supplier-catalog-draft-modal' : ''} modal-header-standardized`.trim()}
+        modalClassName={`product-form-fit-modal supplier-catalog-modal supplier-catalog-compact-modal ${approvalAction?.type === 'create_draft' ? 'supplier-catalog-draft-modal' : ''} modal-header-standardized`.trim()}
         confirmOnDirtyClose={false}
       >
         {draftConfirmRow ? (
@@ -2258,7 +2520,7 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
             : 'Ürün onay kuyruğu kararı yalnızca seçili katalog satırına uygulanır.'}
         headerIcon={approvalAction?.type === 'reject' ? <XCircle size={16} /> : <Search size={16} />}
         onClose={closeApprovalAction}
-        modalClassName="product-form-fit-modal supplier-catalog-modal modal-header-standardized"
+        modalClassName="product-form-fit-modal supplier-catalog-modal supplier-catalog-compact-modal modal-header-standardized"
         confirmOnDirtyClose={false}
       >
         {approvalAction ? (
@@ -2276,7 +2538,11 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
                   <span>Ürün Arama</span>
                   <input
                     value={approvalProductSearch}
-                    onChange={(event) => setApprovalProductSearch(event.target.value)}
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setApprovalProductSearch(val);
+                      handleApprovalProductSearch(val);
+                    }}
                     placeholder="SKU, barkod, ürün adı, marka, kategori veya satış durumu ara"
                     aria-label="Ürün arama"
                   />
@@ -2289,8 +2555,20 @@ export default function CatalogSupplierMatchingTab({ suppliers = [], products = 
                     aria-label="Eşlenecek ürün"
                   >
                     <option value="">Ürün seçin</option>
-                    {approvalProductOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                    {(approvalProductSearch.trim().length >= 2 ? approvalBackendSearchOptions : approvalProductOptions).map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
                   </select>
+                  {approvalProductSearch.trim().length >= 2 && !isSearchingApprovalBackend && approvalBackendSearchOptions.length === 0 ? (
+                    <div className="catalog-search-no-results" style={{ color: 'var(--danger)', fontSize: '0.8rem', marginTop: '4px' }}>
+                      Eşleşen ürün bulunamadı
+                    </div>
+                  ) : null}
+                  {isSearchingApprovalBackend ? (
+                    <div className="catalog-search-loading" style={{ color: 'var(--muted)', fontSize: '0.8rem', marginTop: '4px' }}>
+                      Aranıyor...
+                    </div>
+                  ) : null}
                 </label>
               </div>
             ) : null}

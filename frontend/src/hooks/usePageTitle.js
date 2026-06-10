@@ -54,6 +54,7 @@ export const ROUTE_TITLES = {
   '/personel/lokasyon-yonetimi': 'Lokasyon Yönetimi',
   '/personel/talep': 'Talep',
   '/kasa': 'Kasa',
+  '/lokasyon-duzenle': 'Mağaza Planı Düzenleyici',
 };
 
 const APP_NAME = 'Shelfio';

@@ -27,7 +27,6 @@ const INITIAL_REPORT = {
   supplierReport: [],
   returnReport: [],
   salesReturnReport: [],
-  stockAgingReport: [],
   expiryRiskReport: [],
   marginReport: [],
   supplierPerformanceReport: [],
@@ -182,7 +181,6 @@ const REPORT_PAGE_SIZE = 50;
 const SECTION_REPORT_KEYS = {
   inventory: 'inventory',
   critical: 'criticalItems',
-  aging: 'stockAgingReport',
   expiry: 'expiryRiskReport',
   margin: 'marginReport',
   supplier_performance: 'supplierPerformanceReport',
@@ -201,7 +199,6 @@ const SECTION_LOAD_ORDER = [
   'critical',
   'category',
   'supplier',
-  'aging',
   'expiry',
   'margin',
   'supplier_performance',
@@ -609,13 +606,14 @@ export default function Reports() {
   const renderReportTable = (section, columns, rows, emptyMessage, tableProps = {}) => {
     const state = sectionStates[section] || {};
     const isSectionLoading = state.status === 'loading' || state.status === 'pending';
+    const safeRows = Array.isArray(rows) ? rows : [];
 
     return (
       <>
         {state.error ? <div className="alert error">Rapor bölümü alınırken hata oluştu: {state.error}</div> : null}
         <DataTable
           columns={columns}
-          rows={rows}
+          rows={safeRows}
           isLoading={isLoading || isSectionLoading}
           emptyMessage={emptyMessage}
           pageSize={REPORT_PAGE_SIZE}
@@ -681,12 +679,6 @@ export default function Reports() {
     if (section === 'critical' && column.key === 'isActive') {
       return row.isActive !== false ? 'Aktif' : 'Pasif';
     }
-    if (section === 'aging' && ['stockValue'].includes(column.key)) {
-      return formatCurrency(row.stockValue, report.currency);
-    }
-    if (section === 'aging' && column.key === 'updatedAt') {
-      return formatDate(row.updatedAt);
-    }
     if (section === 'expiry' && column.key === 'potentialWriteOffValue') {
       return formatCurrency(row.potentialWriteOffValue, report.currency);
     }
@@ -716,12 +708,13 @@ export default function Reports() {
     const marginX = 34;
     const marginY = 30;
     const generatedAt = new Date().toLocaleString('tr-TR');
+    const safeRows = Array.isArray(rows) ? rows : [];
     const safeColumns = columns.filter((column) => column?.key && column?.label);
     const head = [safeColumns.map((column) => column.label)];
-    const body = rows.map((row) => safeColumns.map((column) => sanitizePdfValue(buildPdfCellValue(section, column, row))));
+    const body = safeRows.map((row) => safeColumns.map((column) => sanitizePdfValue(buildPdfCellValue(section, column, row))));
     const metadataText = [
       `Rapor Tarihi: ${generatedAt}`,
-      `Toplam Kayıt: ${formatNumber(rows.length)}`,
+      `Toplam Kayıt: ${formatNumber(safeRows.length)}`,
       `Filtre Özeti: ${normalizePdfText(filterSummary || 'Varsayılan görünüm')}`,
     ];
 
@@ -926,17 +919,6 @@ export default function Reports() {
     { key: 'totalValue', label: 'Stok Değeri', render: (row) => formatCurrency(row.totalValue, report.currency), sortValue: (row) => row.totalValue },
   ];
 
-  const stockAgingColumns = [
-    { key: 'sku', label: 'SKU' },
-    { key: 'productName', label: 'Ürün' },
-    { key: 'categoryName', label: 'Kategori' },
-    { key: 'totalStock', label: 'Toplam Stok' },
-    { key: 'stockValue', label: 'Stok Değeri', render: (row) => formatCurrency(row.stockValue, report.currency), sortValue: (row) => row.stockValue },
-    { key: 'daysInStock', label: 'Stokta Bekleme (Gün)' },
-    { key: 'agingBucket', label: 'Yaşlandırma Dilimi' },
-    { key: 'updatedAt', label: 'Son Hareket', render: (row) => formatDate(row.updatedAt), sortValue: (row) => new Date(row.updatedAt).getTime() },
-  ];
-
   const expiryRiskColumns = [
     { key: 'sku', label: 'SKU' },
     { key: 'productName', label: 'Ürün' },
@@ -1134,17 +1116,6 @@ export default function Reports() {
       </div>
 
       <div className="report-grid">
-        <div className="mod-card">
-          <div className="mod-card-header report-card-header">
-            <div className="mod-card-icon mod-icon-indigo"><Package size={18} /></div>
-            <div><h3>Stok Yaşlandırma Raporu</h3><p>Stok yaşına göre bekleme analizi</p>{renderSectionStatus('aging')}</div>
-            {renderExportActions('aging')}
-          </div>
-          <div className="report-table-scroll">
-            {renderReportTable('aging', stockAgingColumns, report.stockAgingReport, 'Stok yaşlandırma raporu bulunmuyor.', { keyField: 'productId' })}
-          </div>
-        </div>
-
         <div className="mod-card">
           <div className="mod-card-header report-card-header">
             <div className="mod-card-icon mod-icon-rose"><AlertTriangle size={18} /></div>

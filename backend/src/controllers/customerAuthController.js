@@ -24,6 +24,7 @@ export const customerAuthController = {
   async updateProfile(req, res, next) { try { res.json({ success: true, data: await customerAuthService.updateProfile(req.customer.id, req.body || {}) }); } catch (e) { next(e); } },
   async dashboard(req, res, next) { try { res.json({ success: true, data: await customerAuthService.dashboard(req.customer.id) }); } catch (e) { next(e); } },
   async catalog(req, res, next) { try { res.json({ success: true, data: await customerAuthService.catalog(req.query || {}) }); } catch (e) { next(e); } },
+  async catalogByBarcode(req, res, next) { try { res.json({ success: true, data: await customerAuthService.catalogByBarcode(req.params.barcode) }); } catch (e) { next(e); } },
   async catalogDetail(req, res, next) { try { res.json({ success: true, data: await customerAuthService.catalogDetail(req.params.id) }); } catch (e) { next(e); } },
   async catalogStockForecast(req, res, next) { try { res.json({ success: true, data: await customerAuthService.catalogStockForecast(req.params.id) }); } catch (e) { next(e); } },
   async orders(req, res, next) { try { res.json({ success: true, data: await customerAuthService.orders(req.customer.id, req.query || {}) }); } catch (e) { next(e); } },
@@ -36,6 +37,59 @@ export const customerAuthController = {
   async notifications(req, res, next) { try { res.json({ success: true, data: await customerAuthService.notifications(req.customer.id, req.query?.limit) }); } catch (e) { next(e); } },
   async markNotificationsAsRead(req, res, next) { try { res.json({ success: true, data: await customerAuthService.markNotificationsAsRead(req.customer.id) }); } catch (e) { next(e); } },
   async clearNotifications(req, res, next) { try { res.json({ success: true, data: await customerAuthService.clearNotifications(req.customer.id) }); } catch (e) { next(e); } },
+  async getRoutePlan(req, res, next) {
+    try {
+      const items = req.body?.items;
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.json({
+          success: true,
+          source: 'fallback',
+          route: [],
+          missingLocation: [],
+          summary: {
+            totalItems: 0,
+            locatedItems: 0,
+            missingLocationCount: 0,
+            routeMode: 'coordinates'
+          }
+        });
+      }
+
+      const mergedItems = [];
+      const qtyMap = new Map();
+      for (const item of items) {
+        if (!item || !item.productId) continue;
+        const qty = Math.max(1, Math.floor(Number(item.quantity || 1)));
+        const productId = String(item.productId).trim();
+        if (!productId) continue;
+        qtyMap.set(productId, (qtyMap.get(productId) || 0) + qty);
+      }
+
+      for (const [productId, quantity] of qtyMap.entries()) {
+        mergedItems.push({ productId, quantity });
+      }
+
+      if (mergedItems.length === 0) {
+        return res.json({
+          success: true,
+          source: 'fallback',
+          route: [],
+          missingLocation: [],
+          summary: {
+            totalItems: 0,
+            locatedItems: 0,
+            missingLocationCount: 0,
+            routeMode: 'coordinates'
+          }
+        });
+      }
+
+      const data = await customerAuthService.getCartRoutePlan(mergedItems);
+      res.json({ success: true, ...data });
+    } catch (e) {
+      next(e);
+    }
+  },
   async storeMap(req, res, next) { try { res.json({ success: true, data: await customerAuthService.storeMap(req.customer.id) }); } catch (e) { next(e); } },
   async storeMapPublic(_req, res, next) { try { res.json({ success: true, data: await customerAuthService.storeMapPublic() }); } catch (e) { next(e); } },
 };

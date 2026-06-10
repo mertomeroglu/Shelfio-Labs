@@ -24,10 +24,26 @@ import { enrichBatchExpiryState, summarizeBatchAvailability } from '../utils/bat
 import { resolveSktPolicy, SKT_POLICIES } from '../utils/sktPolicy.js';
 import { clearPricingAnalysisCache } from './analysis/pricingAnalysisService.js';
 import { validateStockBatchSummaryIntegrity } from './dataIntegrityService.js';
+import { getActiveTenantId } from '../tenant/tenantContext.js';
 
 const sortByNewest = (items) => [...items].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
 const buildReferenceNo = () => `REF-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
+
+const currentStoreDate = (now = new Date()) => {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: config.timezone || 'Europe/Istanbul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${byType.year}-${byType.month}-${byType.day}`;
+  } catch {
+    return normalizeDateOnly(now);
+  }
+};
 
 const fromDateValue = (value) => (value instanceof Date ? value.toISOString() : value ?? null);
 
@@ -567,6 +583,8 @@ const buildMovementWhere = (query = {}) => {
 
 const mapExpiredBatchWarningRow = (row = {}, today = new Date()) => {
   const product = row.stock?.product || {};
+  const category = product.category || null;
+  const sktPolicy = resolveSktPolicy({ product, category });
   const skt = normalizeDateOnly(row.skt);
   const todayDate = normalizeDateOnly(today);
   const daysExpired = skt
@@ -574,7 +592,7 @@ const mapExpiredBatchWarningRow = (row = {}, today = new Date()) => {
     : 0;
   const warehouseQuantity = toSafeInteger(row.warehouseQuantity);
   const shelfQuantity = toSafeInteger(row.shelfQuantity);
-  const totalQuantity = warehouseQuantity + shelfQuantity;
+  const totalQuantity = Math.max(toSafeInteger(row.totalQuantity), warehouseQuantity + shelfQuantity);
 
   return {
     id: row.id,
@@ -589,12 +607,15 @@ const mapExpiredBatchWarningRow = (row = {}, today = new Date()) => {
     totalQuantity,
     riskStatus: daysExpired > 30 ? 'Acil imha' : 'SKT geçmiş',
     daysExpired,
+    sktPolicy: sktPolicy.policy,
+    sktPolicyReason: sktPolicy.reason || '',
+    disposalEligible: sktPolicy.policy === SKT_POLICIES.REQUIRED && totalQuantity > 0,
   };
 };
 
 const listExpiredBatchWarningsFromPostgres = async (query = {}) => {
   const prisma = await getPrisma();
-  const today = normalizeDateOnly(query.today || new Date());
+  const today = query.today || currentStoreDate();
   const pagination = parsePagePagination(query, { defaultLimit: 200, maxLimit: 1000 });
   const where = {
     skt: { lt: today },
@@ -611,13 +632,10 @@ const listExpiredBatchWarningsFromPostgres = async (query = {}) => {
     },
   };
 
-  const [total, rows] = await withPostgresQueryLogging('GET /api/stock/expired-batches', () => Promise.all([
-    prisma.stockBatch.count({ where }),
+  const rows = await withPostgresQueryLogging('GET /api/stock/expired-batches', () =>
     prisma.stockBatch.findMany({
       where,
       orderBy: [{ skt: 'asc' }, { batchNo: 'asc' }, { id: 'asc' }],
-      skip: pagination.skip,
-      take: pagination.limit,
       include: {
         stock: {
           select: {
@@ -627,15 +645,22 @@ const listExpiredBatchWarningsFromPostgres = async (query = {}) => {
                 name: true,
                 sku: true,
                 barcode: true,
+                etiket: true,
+                category: { select: { id: true, name: true, code: true } },
               },
             },
           },
         },
       },
-    }),
-  ]));
+    })
+  );
 
-  const items = rows.map((row) => mapExpiredBatchWarningRow(row, today));
+  const requiredRows = rows
+    .map((row) => mapExpiredBatchWarningRow(row, today))
+    .filter((row) => row.sktPolicy === SKT_POLICIES.REQUIRED);
+  const total = requiredRows.length;
+  const items = requiredRows.slice(pagination.skip, pagination.skip + pagination.limit);
+
   return {
     items,
     pagination: {
@@ -1200,13 +1225,23 @@ export const stockService = {
       return listExpiredBatchWarningsFromPostgres(query);
     }
 
-    const [products, stocks] = await Promise.all([productRepo.getAll(), stockRepo.getAll()]);
+    const [products, stocks, categories] = await Promise.all([
+      productRepo.getAll(),
+      stockRepo.getAll(),
+      categoryRepo.getAll(),
+    ]);
     const productMap = new Map(products.map((product) => [product.id, product]));
-    const today = normalizeDateOnly(query.today || new Date());
+    const categoryMap = new Map(categories.map((category) => [category.id, category]));
+    const today = query.today || currentStoreDate();
     const pagination = parsePagePagination(query, { defaultLimit: 200, maxLimit: 1000 });
     const rows = stocks.flatMap((stock) => {
       const product = productMap.get(stock.productId);
       if (!isActiveRetailProduct(product)) return [];
+
+      const category = product.categoryId ? categoryMap.get(product.categoryId) : null;
+      const sktPolicy = resolveSktPolicy({ product, category });
+      if (sktPolicy.policy !== SKT_POLICIES.REQUIRED) return [];
+
       return cloneBatches(stock.batches || [])
         .filter((batch) => {
           const totalQuantity = toSafeInteger(batch.totalQuantity);
@@ -1223,7 +1258,7 @@ export const stockService = {
           skt: normalizeDateOnly(batch.skt),
           warehouseQuantity: toSafeInteger(batch.warehouseQuantity),
           shelfQuantity: toSafeInteger(batch.shelfQuantity),
-          totalQuantity: toSafeInteger(batch.totalQuantity),
+          totalQuantity: Math.max(toSafeInteger(batch.totalQuantity), toSafeInteger(batch.warehouseQuantity) + toSafeInteger(batch.shelfQuantity)),
           riskStatus: 'SKT geçmiş',
           daysExpired: Math.max(0, Math.floor((Date.parse(`${today}T00:00:00.000Z`) - Date.parse(`${normalizeDateOnly(batch.skt)}T00:00:00.000Z`)) / (24 * 60 * 60 * 1000))),
         }));
@@ -1250,92 +1285,211 @@ export const stockService = {
     const items = Array.isArray(payload.items) ? payload.items : [];
     const batchIds = Array.from(new Set(items.map((item) => String(item.batchId || item.id || '').trim()).filter(Boolean)));
     if (!batchIds.length) {
-      throw new AppError(400, 'İmha için en az bir SKT geçmiş parti seçilmelidir');
+      throw new AppError(400, 'İmha için en az bir son kullanma tarihi geçmiş ürün grubu seçilmelidir');
     }
 
     const user = await userRepo.findById(userId);
-    const today = normalizeDateOnly(new Date());
+    const today = currentStoreDate();
     const noteSuffix = String(payload.note || '').trim();
     const baseNote = 'SKT geçmiş ürün imhası';
     const movements = [];
-    let disposedBatchCount = 0;
+    const disposed = [];
+    const skipped = [];
+    const prisma = await getPrisma();
+    const tenantId = getActiveTenantId();
 
     for (const batchId of batchIds) {
-      const allStocks = await stockRepo.getAll();
-      const stock = allStocks.find((item) => cloneBatches(item.batches || []).some((batch) => String(batch.id) === batchId));
-      if (!stock) {
-        console.warn('[Veri bütünlüğü] İmha edilecek parti stok kaynağında bulunamadı', { batchId });
+      const rawBatch = await prisma.stockBatch.findFirst({
+        where: { id: batchId, tenantId },
+        include: { stock: true },
+      });
+      if (!rawBatch) {
+        skipped.push({ batchId, reason: 'not_found', message: 'SKT grubu stok kaynağında bulunamadı.', quantity: 0, disposed: false });
         continue;
       }
-      const product = await productRepo.findById(stock.productId);
+      const product = await productRepo.findById(rawBatch.productId);
       if (!isActiveRetailProduct(product)) {
-        console.warn('[Veri bütünlüğü] Listed olmayan veya pasif ürün için SKT imhası atlandı', { productId: stock.productId, batchId });
+        skipped.push({ batchId, productId: rawBatch.productId, reason: 'product_inactive', message: 'Ürün aktif satış listesinde olmadığı için işlem atlandı.', quantity: 0, disposed: false });
+        continue;
+      }
+      const category = product.categoryId ? await categoryRepo.findById(product.categoryId) : null;
+      const sktPolicy = resolveSktPolicy({ product, category });
+      if (sktPolicy.policy !== SKT_POLICIES.REQUIRED) {
+        skipped.push({ batchId, productId: rawBatch.productId, reason: sktPolicy.policy, message: 'Yalnız SKT politikası zorunlu olan ürün grupları imha edilebilir.', quantity: 0, disposed: false });
         continue;
       }
 
-      const batches = cloneBatches(stock.batches || []);
-      const index = batches.findIndex((batch) => String(batch.id) === batchId);
-      const batch = batches[index];
-      if (!batch) continue;
-      if (!normalizeDateOnly(batch.skt) || normalizeDateOnly(batch.skt) >= today) {
-        throw new AppError(400, 'Sadece SKT tarihi geçmiş partiler imha edilebilir');
+      const skt = normalizeDateOnly(rawBatch.skt);
+      if (!skt || skt >= today) {
+        skipped.push({ batchId, productId: rawBatch.productId, reason: 'not_expired', message: 'Yalnız son kullanma tarihi geçmiş ürünler imha edilebilir.', quantity: 0, disposed: false });
+        continue;
       }
 
-      const warehouseQty = toSafeInteger(batch.warehouseQuantity);
-      const shelfQty = toSafeInteger(batch.shelfQuantity);
-      const totalQty = warehouseQty + shelfQty;
-      if (totalQty <= 0) continue;
+      const warehouseQty = toSafeInteger(rawBatch.warehouseQuantity);
+      const shelfQty = toSafeInteger(rawBatch.shelfQuantity);
+      const totalQty = Math.max(toSafeInteger(rawBatch.totalQuantity), warehouseQty + shelfQty);
+      if (totalQty <= 0) {
+        skipped.push({
+          batchId,
+          productId: rawBatch.productId,
+          reason: 'no_physical_quantity',
+          message: 'Depo ve reyon miktarı sıfır olduğu için imha hareketi oluşturulmadı.',
+          declaredTotalQuantity: toSafeInteger(rawBatch.totalQuantity),
+          quantity: 0,
+          disposed: false,
+        });
+        continue;
+      }
 
       const movementNote = [
         baseNote,
-        `Parti No: ${normalizeBatchNo(batch.batchNo)}`,
-        `SKT: ${normalizeDateOnly(batch.skt)}`,
+        `SKT Grubu: ${normalizeBatchNo(rawBatch.batchNo)}`,
+        `SKT: ${skt}`,
         noteSuffix,
       ].filter(Boolean).join(' | ');
 
-      if (warehouseQty > 0) {
-        movements.push(await createWriteOffMovement({
-          product,
-          stock,
-          batch,
-          location: 'depo',
-          qty: warehouseQty,
-          note: movementNote,
-          userId,
-          userName: user?.name,
-        }));
-      }
-      if (shelfQty > 0) {
-        movements.push(await createWriteOffMovement({
-          product,
-          stock: { ...stock, warehouseQuantity: Math.max(0, toSafeInteger(stock.warehouseQuantity) - warehouseQty) },
-          batch,
-          location: 'reyon',
-          qty: shelfQty,
-          note: movementNote,
-          userId,
-          userName: user?.name,
-        }));
-      }
+      const batchMovements = await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe('SELECT id FROM stock_batches WHERE id = $1 FOR UPDATE', batchId);
+        const currentBatch = await tx.stockBatch.findFirst({
+          where: { id: batchId, tenantId },
+          include: { stock: true },
+        });
+        if (!currentBatch) {
+          return [];
+        }
+        const currentWarehouseQty = toSafeInteger(currentBatch.warehouseQuantity);
+        const currentShelfQty = toSafeInteger(currentBatch.shelfQuantity);
+        const currentPhysicalQty = currentWarehouseQty + currentShelfQty;
+        const currentDeclaredTotal = toSafeInteger(currentBatch.totalQuantity);
+        const currentTotalQty = Math.max(currentDeclaredTotal, currentPhysicalQty);
 
-      batches[index] = {
-        ...batch,
-        warehouseQuantity: 0,
-        shelfQuantity: 0,
-        totalQuantity: 0,
-        status: 'Imha edildi',
-      };
-      await stockRepo.upsertDetailed(stock.productId, {
-        ...stock,
-        ...buildStockPayloadFromBatches(batches),
+        if (currentTotalQty <= 0) {
+          return [];
+        }
+
+        const currentDiff = Math.max(0, currentDeclaredTotal - currentPhysicalQty);
+        const effectiveWarehouseQty = currentWarehouseQty + currentDiff;
+
+        const movementRows = [];
+        let previousWarehouse = toSafeInteger(currentBatch.stock?.warehouseQuantity);
+        let previousShelf = toSafeInteger(currentBatch.stock?.shelfQuantity);
+        const createMovement = async (location, qty, previousQuantity, previousTotalQuantity) => {
+          if (qty <= 0) return;
+          const movement = {
+            id: uuidv4(),
+            tenantId,
+            productId: product.id,
+            productName: product.name,
+            sku: product.sku,
+            type: 'OUT',
+            qty,
+            previousQuantity,
+            nextQuantity: Math.max(0, previousQuantity - qty),
+            previousTotalQuantity,
+            nextTotalQuantity: Math.max(0, previousTotalQuantity - qty),
+            location,
+            reasonCode: 'write_off',
+            reasonLabel: 'SKT geçmiş ürün imhası',
+            referenceNo: buildReferenceNo(),
+            userId: userId || null,
+            userName: user?.name || 'Sistem',
+            batchNo: normalizeBatchNo(currentBatch.batchNo),
+            skt,
+            createdAt: new Date(),
+          };
+          const payloadRow = {
+            ...movement,
+            locationLabel: LOCATION_LABELS[location] || location,
+            note: movementNote,
+            batchAllocations: [{ batchNo: movement.batchNo, skt, qty }],
+            outputType: 'fire',
+            createdAt: movement.createdAt.toISOString(),
+          };
+          await tx.stockMovement.create({ data: { ...movement, payload: payloadRow } });
+          movementRows.push(payloadRow);
+        };
+
+        await createMovement('depo', effectiveWarehouseQty, previousWarehouse, previousWarehouse + previousShelf);
+        previousWarehouse = Math.max(0, previousWarehouse - effectiveWarehouseQty);
+        await createMovement('reyon', currentShelfQty, previousShelf, previousWarehouse + previousShelf);
+
+        await tx.stockBatch.update({
+          where: { id: batchId },
+          data: {
+            warehouseQuantity: 0,
+            shelfQuantity: 0,
+            totalQuantity: 0,
+            status: 'Imha edildi',
+            payload: {
+              ...(currentBatch.payload || {}),
+              disposedAt: new Date().toISOString(),
+              disposedBy: userId || null,
+              disposalNote: noteSuffix || null,
+            },
+          },
+        });
+
+        const remainingBatches = await tx.stockBatch.findMany({
+          where: {
+            stockId: currentBatch.stockId,
+            OR: [
+              { warehouseQuantity: { gt: 0 } },
+              { shelfQuantity: { gt: 0 } },
+            ],
+          },
+          select: { warehouseQuantity: true, shelfQuantity: true, batchNo: true, skt: true },
+        });
+        const nextWarehouse = remainingBatches.reduce((sum, item) => sum + toSafeInteger(item.warehouseQuantity), 0);
+        const nextShelf = remainingBatches.reduce((sum, item) => sum + toSafeInteger(item.shelfQuantity), 0);
+        const nextTotal = nextWarehouse + nextShelf;
+        const reserved = toSafeInteger(currentBatch.stock?.reserved);
+        const nextFefo = [...remainingBatches]
+          .filter((item) => normalizeDateOnly(item.skt))
+          .sort((left, right) => normalizeDateOnly(left.skt).localeCompare(normalizeDateOnly(right.skt)))[0] || null;
+        await tx.stock.update({
+          where: { id: currentBatch.stockId },
+          data: {
+            warehouseQuantity: nextWarehouse,
+            shelfQuantity: nextShelf,
+            quantity: nextTotal,
+            onHand: nextTotal,
+            available: Math.max(0, nextTotal - reserved),
+            batchCount: remainingBatches.length,
+            nearestExpiry: nextFefo ? normalizeDateOnly(nextFefo.skt) : null,
+            fefoDefaultBatchNo: nextFefo?.batchNo || null,
+            fefoDefaultExpiry: nextFefo ? normalizeDateOnly(nextFefo.skt) : null,
+            updatedAt: new Date(),
+          },
+        });
+
+        return movementRows;
       });
-      disposedBatchCount += 1;
+
+      if (!batchMovements.length) {
+        skipped.push({ batchId, productId: rawBatch.productId, reason: 'already_disposed', message: 'SKT grubu daha önce imha edilmiş.', quantity: 0, disposed: false });
+        continue;
+      }
+      movements.push(...batchMovements);
+      disposed.push({
+        batchId,
+        productId: rawBatch.productId,
+        productName: product.name,
+        quantity: totalQty,
+        warehouseQuantity: warehouseQty,
+        shelfQuantity: shelfQty,
+        movementCount: batchMovements.length,
+        disposed: true,
+        reason: 'success',
+      });
     }
 
     clearPricingAnalysisCache();
     return {
-      disposedBatchCount,
+      disposedBatchCount: disposed.length,
+      skippedBatchCount: skipped.length,
       movementCount: movements.length,
+      disposed,
+      skipped,
       movements,
     };
   },

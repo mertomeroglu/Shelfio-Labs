@@ -776,3 +776,3617 @@
     padding: 8px;
   }
 }
+
+/* --- Mağaza Planı (Store Layout Plan) Styles --- */
+
+.location-management-page .lm-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 24px;
+  background: #ffffff;
+  border-radius: 24px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.05);
+  margin-top: 0;
+}
+
+.location-management-page .mod-card-header.lm-plan-section-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8) !important;
+  padding-bottom: 16px !important;
+}
+
+.location-management-page .lm-plan-section-header .lm-plan-title-area {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 14px !important;
+}
+
+.location-management-page .lm-plan-title-area > div {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.location-management-page .lm-plan-section-header .mod-card-icon {
+  width: 40px !important;
+  height: 40px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+}
+
+.location-management-page .lm-plan-title-area h3 {
+  margin: 0 !important;
+  font-size: 1.1rem !important;
+  color: #0f172a !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+}
+
+.location-management-page .lm-plan-title-area p {
+  margin: 2px 0 0 0 !important;
+  font-size: 0.76rem !important;
+  color: #64748b !important;
+  line-height: 1.3 !important;
+}
+
+@media (max-width: 640px) {
+  .location-management-page .mod-card-header.lm-plan-section-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+  }
+  .location-management-page .lm-plan-header-badge-area {
+    width: 100% !important;
+  }
+  .location-management-page .lm-plan-edit-btn {
+    width: 100% !important;
+    justify-content: center !important;
+  }
+}
+
+.location-management-page .lm-plan-header-badge-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.location-management-page .lm-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.location-management-page .lm-plan-badge.source-published {
+  background: rgba(220, 252, 231, 0.9);
+  color: #15803d;
+  border: 1px solid rgba(187, 247, 208, 0.9);
+}
+
+.location-management-page .lm-plan-badge.source-generated {
+  background: rgba(254, 243, 199, 0.9);
+  color: #b45309;
+  border: 1px solid rgba(253, 230, 138, 0.9);
+}
+
+.location-management-page .lm-plan-version-badge {
+  font-family: monospace;
+  font-size: 0.74rem;
+  background: rgba(241, 245, 249, 0.9);
+  color: #475569;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.location-management-page .lm-plan-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  background: #f8fafc;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.location-management-page .lm-plan-toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.location-management-page .lm-plan-filter-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.location-management-page .lm-plan-filter-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  border: 1px solid rgba(203, 213, 225, 0.7);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-plan-filter-chip:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.location-management-page .lm-plan-filter-chip.is-active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+}
+
+.location-management-page .lm-plan-grid-layout {
+  display: grid;
+  grid-template-columns: 1fr 310px;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.location-management-page .lm-plan-canvas-column {
+  position: relative;
+  width: 100%;
+}
+
+.location-management-page .lm-plan-canvas-wrapper {
+  height: 900px;
+}
+
+@media (max-width: 768px) {
+  .location-management-page .lm-plan-canvas-wrapper {
+    height: 500px;
+  }
+}
+
+.location-management-page .lm-plan-info-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.location-management-page .lm-plan-object-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 10px 30px rgba(148, 163, 184, 0.05);
+  height: 100%;
+  backdrop-filter: blur(4px);
+}
+
+.location-management-page .lm-plan-object-info-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+  padding-bottom: 12px;
+}
+
+.location-management-page .lm-plan-object-info-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+}
+
+.location-management-page .lm-plan-object-info-header h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #0f172a;
+}
+
+.location-management-page .lm-plan-object-info-header p {
+  margin: 2px 0 0;
+  font-size: 0.74rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.location-management-page .lm-plan-object-info-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.location-management-page .lm-plan-info-field {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.74rem;
+}
+
+.location-management-page .lm-plan-info-field span {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.location-management-page .lm-plan-info-field strong {
+  color: #1e293b;
+  text-align: right;
+  word-break: break-all;
+}
+
+.location-management-page .lm-plan-info-product-name {
+  max-width: 180px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.location-management-page .lm-plan-info-meta-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(226, 232, 240, 0.6);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+.location-management-page .lm-plan-info-meta-section h5 {
+  margin: 0 0 2px 0;
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.location-management-page .lm-plan-object-info-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 20px;
+  border-radius: 20px;
+  background: rgba(248, 250, 252, 0.6);
+  border: 1px dashed rgba(203, 213, 225, 0.75);
+  text-align: center;
+  height: 100%;
+}
+
+.location-management-page .lm-plan-empty-icon {
+  color: #94a3b8;
+}
+
+.location-management-page .lm-plan-object-info-empty p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+/* Skeleton and error styling */
+.location-management-page .lm-plan-skeleton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 320px;
+  color: #64748b;
+}
+
+.location-management-page .lm-plan-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 320px;
+  text-align: center;
+  padding: 20px;
+}
+
+.location-management-page .lm-plan-error-state h4 {
+  margin: 0;
+  color: #ef4444;
+  font-size: 1rem;
+}
+
+.location-management-page .lm-plan-error-state p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.8rem;
+  max-width: 400px;
+  line-height: 1.5;
+}
+
+/* No permission gate */
+.location-management-page .lm-plan-section-no-permission {
+  margin-bottom: 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.02);
+}
+
+.location-management-page .lm-plan-object > .lm-plan-object-surface {
+  transition: stroke 0.15s ease, stroke-width 0.15s ease;
+}
+
+.location-management-page .lm-plan-object:hover > .lm-plan-object-surface {
+  stroke: #38bdf8 !important;
+  stroke-width: 1.9px !important;
+}
+
+.location-management-page .lm-plan-object.is-selected > .lm-plan-object-surface {
+  stroke: #0ea5e9 !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 5px rgba(14, 165, 233, 0.42));
+}
+
+@media (max-width: 1024px) {
+  .location-management-page .lm-plan-grid-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .location-management-page .lm-plan-info-column {
+    margin-top: 10px;
+  }
+}
+
+/* --- Store Layout Editor Modal / Interface Styles --- */
+
+.location-management-page .lm-layout-editor-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: lmFadeIn 0.2s ease-out;
+}
+
+.location-management-page .lm-layout-editor-modal-container {
+  width: 96vw;
+  height: 94vh;
+  background: #ffffff;
+  border-radius: 24px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: lmScaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.location-management-page .lm-layout-editor-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  background: #ffffff;
+}
+
+.location-management-page .lm-layout-editor-header-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.location-management-page .lm-layout-editor-header-title h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.location-management-page .lm-layout-editor-header-title p {
+  margin: 2px 0 0 0;
+  font-size: 0.76rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-layout-editor-close-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 999px;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.location-management-page .lm-layout-editor-close-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+/* Editor Toolbar */
+.location-management-page .lm-layout-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 24px;
+  background: #f8fafc;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.location-management-page .lm-layout-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.location-management-page .lm-layout-toolbar-zoom-pct {
+  min-width: 54px;
+  text-align: center;
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.location-management-page .lm-layout-toolbar-fit-btn,
+.location-management-page .lm-layout-toolbar-snap-btn,
+.location-management-page .lm-layout-toolbar-history-btn,
+.location-management-page .lm-layout-toolbar-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.location-management-page .lm-layout-toolbar-history-btn span,
+.location-management-page .lm-layout-toolbar-fit-btn span,
+.location-management-page .lm-layout-toolbar-snap-btn span {
+  white-space: nowrap;
+}
+
+.location-management-page .lm-layout-toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: #cbd5e1;
+  margin: 0 4px;
+}
+
+.location-management-page .lm-layout-dirty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  animation: pulse 2s infinite;
+}
+
+.location-management-page .lm-layout-editor-error-strip {
+  background: #fef2f2;
+  border-bottom: 1px solid #fca5a5;
+  color: #b91c1c;
+  padding: 8px 24px;
+  font-size: 0.76rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+/* Editor Workspace Grid */
+.location-management-page .lm-layout-editor-workspace {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px 1fr 320px;
+  overflow: hidden;
+  position: relative;
+}
+
+.location-management-page .lm-layout-editor-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+  color: #64748b;
+}
+
+/* Sol Palet (Object Palette) */
+.location-management-page .lm-layout-palette {
+  background: #ffffff;
+  border-right: 1px solid rgba(226, 232, 240, 0.8);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.location-management-page .lm-layout-palette-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.location-management-page .lm-layout-palette-header h4 {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.location-management-page .lm-layout-palette-header p {
+  margin: 2px 0 0 0;
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-layout-palette-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.location-management-page .lm-layout-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.location-management-page .lm-layout-palette-item:hover {
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(148, 163, 184, 0.08);
+}
+
+.location-management-page .lm-layout-palette-symbol {
+  font-size: 1.05rem;
+}
+
+.location-management-page .lm-layout-palette-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+/* Sağ Özellik Paneli (Properties Panel) */
+.location-management-page .lm-layout-properties {
+  background: #ffffff;
+  border-left: 1px solid rgba(226, 232, 240, 0.8);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.location-management-page .lm-layout-properties-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+  color: #94a3b8;
+  gap: 12px;
+}
+
+.location-management-page .lm-properties-empty-icon {
+  color: #cbd5e1;
+}
+
+.location-management-page .lm-layout-properties-empty p {
+  font-size: 0.78rem;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.location-management-page .lm-layout-properties-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.location-management-page .lm-layout-properties-header h4 {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.location-management-page .lm-layout-properties-header p {
+  margin: 2px 0 0 0;
+  font-size: 0.74rem;
+  color: #4f46e5;
+  font-weight: 700;
+}
+
+.location-management-page .lm-layout-properties-status-banner {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 10px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #1e293b;
+  background: #f8fafc;
+}
+
+.location-management-page .lm-layout-properties-status-banner.is-locked {
+  color: #92400e;
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.location-management-page .lm-layout-properties-status-banner.is-editable {
+  color: #166534;
+  background: #ecfdf5;
+  border-color: #86efac;
+}
+
+.location-management-page .lm-layout-properties-status-banner.is-section {
+  color: #1f2937;
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.location-management-page .lm-layout-properties-status-banner.is-warehouse {
+  color: #155e75;
+  background: #ecfeff;
+  border-color: #a5f3fc;
+}
+
+.location-management-page .lm-layout-properties-hint {
+  margin-top: 10px;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.location-management-page .lm-layout-properties-form {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.location-management-page .lm-properties-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.location-management-page .lm-properties-field span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.location-management-page .lm-properties-field input[type="text"],
+.location-management-page .lm-properties-field input[type="number"],
+.location-management-page .lm-properties-field select {
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  color: #0f172a;
+  width: 100%;
+}
+
+.location-management-page .lm-properties-field input:focus,
+.location-management-page .lm-properties-field select:focus {
+  border-color: #4f46e5;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+}
+
+.location-management-page .lm-properties-color-picker-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.location-management-page .lm-properties-color-picker-wrap input[type="color"] {
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  background: none;
+}
+
+.location-management-page .lm-properties-row-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.location-management-page .lm-properties-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.location-management-page .lm-properties-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.location-management-page .lm-properties-toggle-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.location-management-page .lm-properties-toggle-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.location-management-page .lm-properties-meta-section {
+  border-top: 1px solid rgba(226, 232, 240, 0.8);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.location-management-page .lm-properties-meta-section h5 {
+  margin: 0 0 4px 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.location-management-page .lm-properties-readonly-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  gap: 8px;
+}
+
+.location-management-page .lm-properties-readonly-field.is-stack {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.location-management-page .lm-properties-readonly-field span {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.location-management-page .lm-properties-readonly-field strong {
+  color: #1e293b;
+  word-break: break-all;
+  text-align: right;
+}
+
+.location-management-page .lm-properties-list-box {
+  width: 100%;
+  max-height: 120px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #f8fafc;
+  box-sizing: border-box;
+}
+
+.location-management-page .lm-properties-list-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.7rem;
+}
+
+.location-management-page .lm-properties-list-row:last-child {
+  border-bottom: 0;
+}
+
+.location-management-page .lm-properties-list-empty {
+  color: #64748b;
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+.location-management-page .lm-properties-delete-btn {
+  margin-top: 10px;
+  padding: 10px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  font-size: 0.74rem;
+  font-weight: 700;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-properties-delete-btn:hover {
+  background: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+/* Canvas Area Column */
+.location-management-page .lm-layout-canvas-column {
+  padding: 20px;
+  background: #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.location-management-page .lm-layout-canvas-wrapper {
+  transition: box-shadow 0.2s ease;
+}
+
+.location-management-page .lm-layout-canvas-wrapper:hover {
+  box-shadow: inset 0 2px 10px rgba(148, 163, 184, 0.08), 0 4px 20px rgba(15, 23, 42, 0.02);
+}
+
+/* Animations */
+@keyframes lmFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lmScaleUp {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@media (max-width: 1100px) {
+  .location-management-page .lm-layout-editor-workspace {
+    grid-template-columns: 200px 1fr;
+  }
+  .location-management-page .lm-layout-properties {
+    grid-column: 1 / -1;
+    border-left: none;
+    border-top: 1px solid rgba(226, 232, 240, 0.8);
+    max-height: 300px;
+  }
+}
+
+/* ==========================================================================
+   Product Assignment Panel & Button Styles (Prompt 5)
+   ========================================================================== */
+
+/* Properties Panel Trigger Area */
+.location-management-page .lm-properties-assignment-action-wrap {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(226, 232, 240, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.location-management-page .lm-properties-assignment-action-wrap h5 {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.location-management-page .lm-properties-assign-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.15);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.location-management-page .lm-properties-assign-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(79, 70, 229, 0.24);
+  background: linear-gradient(135deg, #4338ca 0%, #2563eb 100%);
+}
+
+.location-management-page .lm-properties-assign-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.location-management-page .lm-properties-assign-btn:disabled {
+  background: #cbd5e1;
+  color: #94a3b8;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.location-management-page .lm-properties-assign-warning {
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  color: #64748b;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.location-management-page .lm-properties-assign-help-text {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.location-management-page .lm-properties-assign-help-text.text-danger {
+  color: #ef4444;
+}
+
+.location-management-page .lm-properties-assign-help-text.text-warning {
+  color: #d97706;
+}
+
+/* Sub-panel layout */
+.location-management-page .lm-properties-assignment-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: #ffffff;
+  animation: lmFadeIn 0.2s ease-out;
+}
+
+.location-management-page .lm-properties-assignment-panel.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  text-align: center;
+  gap: 12px;
+  color: #64748b;
+}
+
+.location-management-page .lm-properties-warning-icon {
+  color: #eab308;
+}
+
+.location-management-page .lm-properties-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-properties-back-btn:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+/* Assignment Header */
+.location-management-page .lm-assignment-panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #ffffff;
+}
+
+.location-management-page .lm-assignment-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 8px;
+  margin-left: -6px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-back-btn:hover {
+  color: #4f46e5;
+  background: #f1f5f9;
+}
+
+.location-management-page .lm-assignment-panel-header h4 {
+  margin: 0;
+  font-size: 0.94rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.location-management-page .lm-assignment-badge-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.location-management-page .lm-assignment-type-badge {
+  font-size: 0.64rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4f46e5;
+  background: #e0e7ff;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.location-management-page .lm-assignment-code-badge {
+  font-family: monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #334155;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+}
+
+/* Scroll Area & Sections */
+.location-management-page .lm-assignment-panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.location-management-page .lm-assignment-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.location-management-page .lm-assignment-section h5 {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Alerts */
+.location-management-page .lm-assignment-alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.location-management-page .lm-assignment-alert.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+}
+
+.location-management-page .lm-assignment-alert.success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+}
+
+/* Assignment cards */
+.location-management-page .lm-assignment-current-card,
+.location-management-page .lm-assignment-preview-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.location-management-page .lm-assignment-current-card {
+  border-color: #cbd5e1;
+  background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+}
+
+.location-management-page .lm-assignment-card-body {
+  display: flex;
+  gap: 10px;
+}
+
+.location-management-page .lm-assignment-card-body .product-icon {
+  color: #4f46e5;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.location-management-page .lm-assignment-card-body .product-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.location-management-page .lm-assignment-card-body .product-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.35;
+}
+
+.location-management-page .lm-assignment-card-body .product-meta {
+  font-size: 0.68rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.location-management-page .lm-assignment-card-body .product-meta.text-warning {
+  color: #d97706;
+  font-weight: 600;
+}
+
+.location-management-page .product-stocks-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 0.68rem;
+  color: #475569;
+}
+
+.location-management-page .product-stocks-row strong {
+  color: #0f172a;
+}
+
+.location-management-page .lm-assignment-empty-card {
+  padding: 20px;
+  text-align: center;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+/* Unassign Button */
+.location-management-page .lm-assignment-unassign-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #dc2626;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-unassign-btn:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.location-management-page .lm-assignment-unassign-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Loader */
+.location-management-page .lm-assignment-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  font-size: 0.74rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-assignment-loader .spinner {
+  animation: spin 1s linear infinite;
+  color: #4f46e5;
+}
+
+/* Search */
+.location-management-page .lm-assignment-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.location-management-page .lm-assignment-search-box input {
+  width: 100%;
+  padding: 10px 14px 10px 36px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: #0f172a;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-search-box input:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+}
+
+.location-management-page .lm-assignment-search-box .search-icon {
+  position: absolute;
+  left: 12px;
+  color: #94a3b8;
+}
+
+.location-management-page .lm-assignment-search-box .search-loading {
+  position: absolute;
+  right: 12px;
+  animation: spin 1s linear infinite;
+  color: #64748b;
+}
+
+/* Results List */
+.location-management-page .lm-assignment-results-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.location-management-page .lm-assignment-result-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-result-item:last-child {
+  border-bottom: none;
+}
+
+.location-management-page .lm-assignment-result-item:hover {
+  background: #f1f5f9;
+}
+
+.location-management-page .lm-assignment-result-item.active {
+  background: #e0e7ff;
+  border-left: 3px solid #4f46e5;
+}
+
+.location-management-page .lm-assignment-result-item .result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.location-management-page .lm-assignment-result-item .result-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.location-management-page .lm-assignment-result-item .result-meta {
+  font-size: 0.66rem;
+  color: #64748b;
+}
+
+.location-management-page .lm-assignment-no-results {
+  font-size: 0.74rem;
+  color: #94a3b8;
+  padding: 10px;
+  text-align: center;
+}
+
+/* Preview Card */
+.location-management-page .lm-assignment-preview-card {
+  border-color: #3b82f6;
+  background: linear-gradient(180deg, #ffffff 0%, #f0f7ff 100%);
+  animation: lmScaleUp 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.location-management-page .lm-assignment-preview-card .preview-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #2563eb;
+  letter-spacing: 0.04em;
+}
+
+.location-management-page .lm-assignment-preview-card .preview-sparkle {
+  color: #3b82f6;
+}
+
+.location-management-page .lm-assignment-preview-card .preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.1);
+}
+
+.location-management-page .lm-assignment-preview-card .preview-body strong {
+  font-size: 0.78rem;
+  color: #0f172a;
+}
+
+.location-management-page .lm-assignment-preview-card .preview-body span {
+  font-size: 0.68rem;
+  color: #475569;
+}
+
+/* Warning Box */
+.location-management-page .lm-assignment-warning-box {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  gap: 10px;
+  color: #b45309;
+}
+
+.location-management-page .lm-assignment-warning-box svg {
+  flex-shrink: 0;
+  color: #d97706;
+  margin-top: 1px;
+}
+
+.location-management-page .lm-assignment-warning-box h6 {
+  margin: 0 0 3px 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.location-management-page .lm-assignment-warning-box p {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.location-management-page .lm-assignment-info-notice {
+  font-size: 0.66rem;
+  line-height: 1.35;
+  color: #64748b;
+  padding: 0 4px;
+}
+
+.location-management-page .lm-assignment-info-notice p {
+  margin: 0;
+}
+
+.location-management-page .lm-assignment-info-notice-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  color: #334155;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.location-management-page .lm-assignment-info-notice-card h5 {
+  margin: 0 0 6px 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.location-management-page .lm-assignment-info-notice-card p {
+  margin: 0 0 8px 0;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.location-management-page .lm-assignment-info-notice-card ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.71rem;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.location-management-page .lm-assignment-info-notice-card li {
+  color: #475569;
+}
+
+/* Preview actions */
+.location-management-page .lm-assignment-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.location-management-page .lm-assignment-confirm-btn {
+  flex: 1;
+  padding: 8px 14px;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.1);
+}
+
+.location-management-page .lm-assignment-confirm-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.location-management-page .lm-assignment-cancel-btn {
+  padding: 8px 14px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-cancel-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.location-management-page .lm-assignment-preview-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.location-management-page .lm-assignment-unauthorized {
+  padding: 24px;
+  text-align: center;
+  color: #ef4444;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+/* Confirmation Dialog Overlay */
+.location-management-page .lm-assignment-dialog-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: lmFadeIn 0.18s ease-out;
+}
+
+.location-management-page .lm-assignment-dialog {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 280px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: lmScaleUp 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.location-management-page .lm-assignment-dialog h5 {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: #ef4444;
+}
+
+.location-management-page .lm-assignment-dialog p {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions button {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions .btn-danger {
+  background: #dc2626;
+  color: #ffffff;
+  border: none;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions .btn-danger:hover {
+  background: #b91c1c;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions .btn-secondary {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+}
+
+.location-management-page .lm-assignment-dialog .dialog-actions .btn-secondary:hover {
+  background: #f8fafc;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Unified Layout & Table Tab Styles */
+.location-table-header-tabs {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  width: 100%;
+}
+
+.location-table-tabs {
+  display: flex;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 12px;
+  gap: 4px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.location-table-tab {
+  border: none;
+  background: transparent;
+  padding: 6px 16px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  border-radius: 9px;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.location-table-tab:hover {
+  color: #0f172a;
+}
+
+.location-table-tab.active {
+  background: #ffffff;
+  color: #4f46e5;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.05),
+    0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
+
+.location-three-stack-unified {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.location-unified-top-grid {
+  display: grid;
+  grid-template-columns: 1fr 310px;
+  gap: 20px;
+  align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+  .location-unified-top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes barcode-pulse {
+  0% {
+    stroke: #ef4444;
+    stroke-width: 4.5px;
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.4));
+  }
+  50% {
+    stroke: #f87171;
+    stroke-width: 6.5px;
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.8));
+  }
+  100% {
+    stroke: #ef4444;
+    stroke-width: 4.5px;
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.4));
+  }
+}
+
+.location-management-page .is-highlighted rect {
+  animation: barcode-pulse 1.5s infinite ease-in-out;
+}
+
+.location-management-page .lm-plan-barcode-input {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.location-management-page .lm-plan-barcode-input:focus {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.location-management-page .lm-plan-search-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  animation: lmFadeIn 0.2s ease-out;
+}
+
+/* --- Lokasyon Yönetimi Birleşik Filtre Tasarımı --- */
+.location-management-page .location-filter-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.location-management-page .location-filter-main-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.location-management-page .main-search-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 280px;
+}
+
+.location-management-page .main-search-group input {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  font-size: 0.82rem;
+  outline: none;
+  background: #f8fafc;
+  transition: all 0.2s ease;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.location-management-page .main-search-group input:focus {
+  border-color: #4f46e5;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12), inset 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.location-management-page .main-search-group .search-icon {
+  position: absolute;
+  left: 14px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.location-management-page .location-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.location-management-page .toggle-advanced-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.location-management-page .toggle-advanced-btn.is-active {
+  background: #e0e7ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+.location-management-page .location-filter-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  animation: lmFadeIn 0.2s ease-out;
+  width: 100%;
+}
+
+.location-management-page .location-filter-advanced-grid .field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.location-management-page .location-filter-advanced-grid .field-group span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.location-management-page .location-filter-advanced-grid select,
+.location-management-page .location-filter-advanced-grid input {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  font-size: 0.78rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.location-management-page .location-filter-advanced-grid select:focus,
+.location-management-page .location-filter-advanced-grid input:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1);
+}
+
+/* Results count badge */
+.location-management-page .location-table-results-badge {
+  background: #e0e7ff;
+  color: #4f46e5;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  border: 1px solid #c7d2fe;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  line-height: 1;
+}
+
+.location-management-page .location-table-results-badge strong,
+.location-management-page .location-table-results-badge span {
+  display: inline;
+  white-space: nowrap;
+}
+
+/* Premium KPI stats grid */
+.location-management-page .location-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+  width: 100%;
+}
+
+.location-management-page .lm-plan-object-info-empty h4 {
+  margin: 8px 0 0 0;
+  font-size: 0.88rem;
+  color: #334155;
+  font-weight: 700;
+}
+
+.location-management-page .lm-plan-object-info-empty p {
+  margin: 4px 0 0 0;
+  font-size: 0.74rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+@media (max-width: 1200px) {
+  .location-management-page .location-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .location-management-page .location-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .location-management-page .lm-plan-filter-chips {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 6px;
+    width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .location-management-page .lm-plan-filter-chips::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .location-management-page .lm-plan-filter-chips::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 999px;
+  }
+
+  .location-management-page .lm-plan-filter-chip {
+    white-space: nowrap;
+  }
+}
+
+/* Premium KPI stats grid - micro progress bars */
+.location-management-page .mod-stat-chart-card {
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.location-management-page .mod-stat-chart-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+}
+
+.location-management-page .mod-stat-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.location-management-page .mod-stat-chart-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.location-management-page .mod-stat-chart-percent {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--text-main, #0f172a);
+}
+
+.location-management-page .mod-stat-chart-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.location-management-page .mod-stat-chart-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease-in-out;
+}
+
+/* Color palettes */
+.location-management-page .mod-stat-chart-bar-fill.fill-emerald {
+  background: linear-gradient(90deg, #10b981, #059669);
+}
+.location-management-page .mod-stat-chart-bar-fill.fill-rose {
+  background: linear-gradient(90deg, #f43f5e, #e11d48);
+}
+.location-management-page .mod-stat-chart-bar-fill.fill-gray {
+  background: linear-gradient(90deg, #94a3b8, #64748b);
+}
+.location-management-page .mod-stat-chart-bar-fill.fill-indigo {
+  background: linear-gradient(90deg, #6366f1, #4f46e5);
+}
+.location-management-page .mod-stat-chart-bar-fill.fill-violet {
+  background: linear-gradient(90deg, #8b5cf6, #7c3aed);
+}
+.location-management-page .mod-stat-chart-bar-fill.fill-blue {
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+}
+
+.location-management-page .mod-stat-chart-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.location-management-page .mod-stat-chart-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main, #1e293b);
+}
+
+.location-management-page .mod-stat-chart-subtext {
+  font-size: 0.7rem;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Page editor workspace root full screen style */
+.location-management-page .lm-layout-editor-workspace-root {
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.location-management-page .lm-layout-canvas-column {
+  height: 100%;
+}
+
+/* PIN-gate inspired visual language for the read-only store plan. */
+.location-management-page .lm-plan-section {
+  border-color: rgba(191, 219, 254, 0.72);
+  background:
+    radial-gradient(circle at 8% 12%, rgba(59, 130, 246, 0.1), transparent 30%),
+    radial-gradient(circle at 92% 88%, rgba(124, 58, 237, 0.08), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.99), rgba(244, 247, 255, 0.97));
+  box-shadow:
+    0 24px 64px rgba(30, 64, 175, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.location-management-page .lm-plan-toolbar {
+  border-color: rgba(191, 219, 254, 0.78);
+  background:
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.09), transparent 38%),
+    rgba(255, 255, 255, 0.84);
+  box-shadow:
+    0 12px 30px rgba(30, 64, 175, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(16px);
+}
+
+.location-management-page .lm-plan-toolbar-controls {
+  padding: 4px;
+  border: 1px solid rgba(203, 213, 225, 0.72);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.location-management-page .lm-plan-filter-chip {
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.location-management-page .lm-plan-filter-chip.is-active {
+  border-color: rgba(99, 102, 241, 0.72);
+  background: linear-gradient(135deg, #2563eb, #6d28d9);
+  box-shadow: 0 8px 20px rgba(79, 70, 229, 0.24);
+}
+
+.location-management-page .lm-plan-barcode-input {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(191, 219, 254, 0.9) !important;
+}
+
+.location-management-page .lm-plan-canvas-column {
+  padding: 10px;
+  border: 1px solid rgba(191, 219, 254, 0.58);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(59, 130, 246, 0.12), transparent 30%),
+    radial-gradient(circle at 88% 90%, rgba(124, 58, 237, 0.1), transparent 32%),
+    rgba(239, 246, 255, 0.7);
+}
+
+.location-management-page .lm-plan-canvas-wrapper {
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid rgba(147, 197, 253, 0.42);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 10% 18%, rgba(96, 165, 250, 0.24), transparent 40%),
+    radial-gradient(circle at 90% 82%, rgba(167, 139, 250, 0.18), transparent 42%),
+    linear-gradient(145deg, #24466b 0%, #20385f 48%, #3d356b 100%);
+  box-shadow:
+    0 24px 60px rgba(30, 41, 90, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -30px 80px rgba(2, 6, 23, 0.18);
+}
+
+.location-management-page .lm-plan-canvas-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.045), transparent 32%),
+    radial-gradient(circle at 50% -15%, rgba(125, 211, 252, 0.1), transparent 44%);
+}
+
+.location-management-page .lm-plan-canvas-wrapper > svg {
+  position: relative;
+  z-index: 1;
+}
+
+.location-management-page .lm-plan-canvas-wrapper {
+  cursor: grab;
+}
+
+.location-management-page .lm-plan-canvas-wrapper.is-dragging {
+  cursor: grabbing;
+}
+
+.location-management-page .lm-plan-object {
+  cursor: pointer;
+}
+
+.location-management-page .lm-plan-object.is-decorative {
+  cursor: grab;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-object text,
+.location-management-page .lm-plan-object foreignObject,
+.location-management-page .lm-plan-object .lm-plan-common-content,
+.location-management-page .lm-plan-object .lm-plan-shelf-stack-label {
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-canvas-wrapper.is-panning,
+.location-management-page .lm-plan-canvas-wrapper.is-panning * {
+  cursor: grabbing !important;
+}
+
+.location-management-page .lm-plan-canvas-wrapper.is-panning .lm-plan-object {
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-canvas-wrapper.is-panning .lm-plan-object,
+.location-management-page .lm-plan-canvas-wrapper.is-panning .lm-plan-object-surface,
+.location-management-page .lm-plan-canvas-wrapper.is-panning .lm-plan-common-area {
+  transition: none !important;
+  filter: none !important;
+}
+
+.location-management-page .lm-plan-canvas-wrapper.is-panning .lm-plan-object:hover > .lm-plan-object-surface {
+  stroke: inherit !important;
+  stroke-width: inherit !important;
+}
+
+.location-management-page .lm-plan-object.is-selected {
+  filter: none;
+}
+
+.location-management-page .lm-plan-object.is-highlighted {
+  filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.96));
+}
+
+.location-management-page .lm-plan-object .lm-plan-object-surface {
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-object.is-decorative .lm-plan-object-surface {
+  stroke-dasharray: none !important;
+}
+
+.location-management-page .lm-plan-object .lm-plan-hit-area {
+  fill: transparent !important;
+  stroke: none !important;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+.location-management-page .lm-plan-canvas-scale-badge {
+  padding: 7px 12px;
+  border: 1px solid rgba(191, 219, 254, 0.28);
+  border-radius: 999px;
+  color: #eff6ff;
+  background:
+    linear-gradient(135deg, rgba(30, 64, 175, 0.72), rgba(76, 29, 149, 0.68)),
+    rgba(15, 23, 42, 0.74);
+  box-shadow:
+    0 10px 26px rgba(2, 6, 23, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  font-size: 0.74rem;
+  font-weight: 800;
+  backdrop-filter: blur(14px);
+}
+
+.location-management-page .lm-plan-object-info-card,
+.location-management-page .lm-plan-object-info-empty {
+  border-color: rgba(191, 219, 254, 0.64);
+  background:
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.08), transparent 34%),
+    rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 20px 44px rgba(30, 64, 175, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+}
+
+.location-management-page .lm-plan-object-info-card {
+  max-height: 900px;
+  overflow-y: auto;
+  border-radius: 16px;
+}
+
+.location-management-page .lm-plan-object-info-header {
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.76);
+}
+
+.location-management-page .lm-plan-object-info-icon {
+  flex: 0 0 auto;
+  color: #2563eb;
+  background: linear-gradient(135deg, #eff6ff, #e0e7ff);
+  border: 1px solid rgba(147, 197, 253, 0.58);
+}
+
+.location-management-page .lm-plan-object-info-header h4 {
+  color: #0f172a;
+  font-size: 0.96rem;
+  font-weight: 850;
+  line-height: 1.22;
+}
+
+.location-management-page .lm-plan-object-info-header p {
+  max-width: 270px;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.location-management-page .lm-plan-info-hero-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid rgba(203, 213, 225, 0.78);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.98), rgba(239, 246, 255, 0.92));
+}
+
+.location-management-page .lm-plan-object-type-badge,
+.location-management-page .lm-plan-object-role,
+.location-management-page .lm-plan-product-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-plan-object-type-badge {
+  color: #1e293b;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-section {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-shelf {
+  color: #334155;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-warehouse_location {
+  color: #365314;
+  background: #ecfccb;
+  border-color: #bef264;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-section_common_area {
+  color: #5b21b6;
+  background: #ede9fe;
+  border-color: #c4b5fd;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-warehouse_common_area {
+  color: #115e59;
+  background: #ccfbf1;
+  border-color: #5eead4;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-cashier,
+.location-management-page .lm-plan-object-type-badge.is-entrance {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-exit {
+  color: #9f1239;
+  background: #ffe4e6;
+  border-color: #fda4af;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-service_area {
+  color: #86198f;
+  background: #fae8ff;
+  border-color: #f0abfc;
+}
+
+.location-management-page .lm-plan-object-type-badge.is-warehouse_door {
+  color: #1e40af;
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.location-management-page .lm-plan-object-role {
+  max-width: 150px;
+  color: #64748b;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(226, 232, 240, 0.86);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.location-management-page .lm-plan-info-meta-section {
+  border-radius: 13px;
+  background: rgba(248, 250, 252, 0.74);
+}
+
+.location-management-page .lm-plan-info-field {
+  gap: 10px;
+}
+
+.location-management-page .lm-plan-info-field strong {
+  text-align: right;
+}
+
+/* --- Common Area styles --- */
+.location-management-page .lm-plan-object-aisle > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-empty_area > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-zone > .lm-plan-object-surface {
+  fill: none !important;
+  fill-opacity: 0 !important;
+  stroke-dasharray: none !important;
+  stroke-opacity: 0.2;
+  transition: stroke 0.15s ease, stroke-width 0.15s ease;
+}
+
+.location-management-page .lm-plan-object.is-decorative:hover > .lm-plan-object-surface {
+  stroke-width: 1px !important;
+  filter: none !important;
+}
+
+.location-management-page .lm-plan-common-area > .lm-plan-object-surface {
+  stroke-width: 1.2;
+  fill-opacity: 0.94 !important;
+  transition: stroke 0.15s ease, stroke-width 0.15s ease, filter 0.15s ease;
+}
+
+.location-management-page .lm-plan-common-area--section > .lm-plan-object-surface {
+  fill: #dbe6f1 !important;
+  stroke: #53729b !important;
+}
+
+.location-management-page .lm-plan-common-area--warehouse > .lm-plan-object-surface {
+  fill: #d8ebe6 !important;
+  stroke: #397b70 !important;
+}
+
+.location-management-page .lm-plan-common-area:hover > .lm-plan-object-surface {
+  stroke-width: 1.6px !important;
+  filter: drop-shadow(0 6px 10px rgba(15, 23, 42, 0.08));
+}
+
+.location-management-page .lm-plan-object-aisle.is-selected > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-aisle.is-highlighted > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-empty_area.is-selected > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-empty_area.is-highlighted > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-zone.is-selected > .lm-plan-object-surface,
+.location-management-page .lm-plan-object-zone.is-highlighted > .lm-plan-object-surface {
+  fill: none !important;
+  fill-opacity: 0 !important;
+  stroke-dasharray: none !important;
+  stroke-opacity: 0.2;
+}
+
+.location-management-page .lm-plan-common-area.is-selected > .lm-plan-object-surface,
+.location-management-page .lm-plan-common-area.is-highlighted > .lm-plan-object-surface {
+  stroke: #0ea5e9 !important;
+  stroke-width: 2px !important;
+}
+
+.location-management-page .lm-plan-common-title {
+  fill: #0f172a;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.location-management-page .lm-plan-common-subtitle,
+.location-management-page .lm-plan-common-count {
+  fill: #334155;
+  font-size: 7px;
+  font-weight: 600;
+}
+
+.location-management-page .lm-plan-common-products {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.location-management-page .lm-plan-common-products-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 340px;
+  padding: 2px 4px 2px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.location-management-page .lm-plan-common-product-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.location-management-page .lm-plan-common-product-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.location-management-page .lm-plan-common-product-head > span:first-child {
+  color: #1e293b;
+  font-size: 0.74rem;
+  font-weight: 750;
+  line-height: 1.32;
+}
+
+.location-management-page .lm-plan-common-product-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #64748b;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.location-management-page .lm-plan-common-product-meta > span:last-child {
+  color: #334155;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-plan-product-badge {
+  min-height: 18px;
+  padding: 2px 6px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 0.6rem;
+}
+
+.location-management-page .lm-plan-product-empty {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.location-management-page .lm-plan-common-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.location-management-page .lm-plan-common-info-banner {
+  box-shadow: 0 4px 12px rgba(56, 189, 248, 0.08);
+  animation: lmScaleUp 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.location-management-page .lm-plan-toolbar-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.location-management-page .lm-plan-rotation-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid rgba(203, 213, 225, 0.82);
+  border-radius: 11px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.location-management-page .lm-plan-rotation-control > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  color: #475569;
+  font-size: 0.68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-plan-rotation-control button {
+  min-width: 38px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 7px;
+  color: #64748b;
+  background: transparent;
+  font-size: 0.68rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.location-management-page .lm-plan-rotation-control button:hover {
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.location-management-page .lm-plan-rotation-control button.is-active {
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #6d28d9);
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.22);
+}
+
+.location-management-page .lm-plan-boundary rect {
+  fill: none;
+  stroke: rgba(186, 230, 253, 0.28);
+  stroke-width: 1;
+  stroke-dasharray: none !important;
+  vector-effect: non-scaling-stroke;
+}
+
+.location-management-page .lm-plan-boundary,
+.location-management-page .lm-plan-boundary * {
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-boundary text {
+  fill: rgba(219, 234, 254, 0.58);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.location-management-page .lm-plan-boundary--warehouse rect {
+  fill: none;
+  stroke: rgba(94, 234, 212, 0.24);
+}
+
+.location-management-page .lm-plan-boundary--warehouse text {
+  fill: rgba(153, 246, 228, 0.52);
+}
+
+.location-management-page .lm-layout-canvas-wrapper.is-interacting .lm-plan-object,
+.location-management-page .lm-layout-canvas-wrapper.is-interacting .lm-plan-object-surface,
+.location-management-page .lm-layout-canvas-wrapper.is-interacting .lm-plan-common-area {
+  transition: none !important;
+  filter: none !important;
+}
+
+.location-management-page .lm-layout-canvas-wrapper.is-interacting .lm-plan-object:hover > .lm-plan-object-surface {
+  filter: none;
+  stroke-width: 1.2;
+}
+
+.location-management-page .lm-plan-section-label {
+  fill: #78350f;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.035em;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-object-section > .lm-plan-object-surface {
+  fill: #fde68a;
+  stroke: #b45309;
+}
+
+.location-management-page .lm-plan-object-cashier > .lm-plan-object-surface {
+  fill: #dcfce7;
+  stroke: #15803d;
+}
+
+.location-management-page .lm-plan-object-service_area > .lm-plan-object-surface {
+  fill: #fae8ff;
+  stroke: #a21caf;
+}
+
+.location-management-page .lm-plan-object-entrance > .lm-plan-object-surface {
+  fill: #d1fae5;
+  stroke: #047857;
+}
+
+.location-management-page .lm-plan-object-exit > .lm-plan-object-surface {
+  fill: #ffe4e6;
+  stroke: #be123c;
+}
+
+.location-management-page .lm-plan-object-warehouse_door > .lm-plan-object-surface {
+  fill: #dbeafe;
+  stroke: #1d4ed8;
+}
+
+.location-management-page .lm-plan-object-cashier text,
+.location-management-page .lm-plan-object-entrance text,
+.location-management-page .lm-plan-object-exit text,
+.location-management-page .lm-plan-object-warehouse_door text,
+.location-management-page .lm-plan-object-service_area text {
+  fill: #0f172a;
+  font-weight: 800;
+}
+
+.location-management-page .lm-plan-common-title {
+  fill: #111827;
+  font-size: 7px;
+  font-weight: 850;
+  letter-spacing: 0.015em;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-common-subtitle {
+  fill: #475569;
+  font-size: 5.6px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-common-count-surface {
+  fill: rgba(255, 255, 255, 0.82);
+  stroke: rgba(15, 23, 42, 0.18);
+  stroke-width: 0.7;
+}
+
+.location-management-page .lm-plan-common-count {
+  fill: #1f2937;
+  font-size: 5.8px;
+  font-weight: 850;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-shelf-stack .lm-plan-object-surface {
+  stroke-width: 1.45;
+}
+
+.location-management-page .lm-plan-object-shelf.lm-plan-shelf-stack .lm-plan-object-surface {
+  fill: #f8fafc;
+  stroke: #64748b;
+}
+
+.location-management-page .lm-plan-object-warehouse_location.lm-plan-shelf-stack .lm-plan-object-surface {
+  fill: #d9f99d;
+  stroke: #3f6212;
+}
+
+.location-management-page .lm-plan-shelf-stack-code {
+  fill: #1e293b;
+  font-size: 6.5px;
+  font-weight: 750;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-shelf-stack-badge {
+  fill: #e0e7ff;
+  stroke: #818cf8;
+  stroke-width: 0.7;
+}
+
+.location-management-page .lm-plan-shelf-stack-count {
+  fill: #3730a3;
+  font-size: 5.2px;
+  font-weight: 850;
+  pointer-events: none;
+}
+
+.location-management-page .lm-plan-shelf-stack.is-empty-stack .lm-plan-object-surface {
+  stroke-dasharray: 4 3;
+}
+
+.location-management-page .lm-plan-shelf-stack.is-empty-stack:not(.is-selected):not(.is-highlighted) {
+  opacity: 0.72;
+}
+
+.location-management-page .lm-plan-stack-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.location-management-page .lm-plan-stack-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eff6ff, #f5f3ff);
+}
+
+.location-management-page .lm-plan-stack-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.location-management-page .lm-plan-stack-summary span {
+  color: #64748b;
+  font-size: 0.66rem;
+}
+
+.location-management-page .lm-plan-stack-summary strong {
+  color: #1e293b;
+  font-size: 0.78rem;
+}
+
+.location-management-page .lm-plan-level-count {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #4338ca !important;
+  background: #e0e7ff;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-plan-level-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.location-management-page .lm-plan-level-item {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.location-management-page .lm-plan-level-item > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  background: #f8fafc;
+}
+
+.location-management-page .lm-plan-level-item > header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.location-management-page .lm-plan-level-item > header strong {
+  color: #1e293b;
+  font-size: 0.74rem;
+}
+
+.location-management-page .lm-plan-level-item > header span {
+  color: #64748b;
+  font-size: 0.64rem;
+}
+
+.location-management-page .lm-plan-level-item > header > span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-plan-level-item > header > span.is-filled {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.location-management-page .lm-plan-level-item > header > span.is-empty {
+  color: #64748b;
+  background: #e2e8f0;
+}
+
+.location-management-page .lm-plan-level-item > header > span.is-unassigned {
+  color: #a16207;
+  background: #fef3c7;
+}
+
+.location-management-page .lm-plan-level-products {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px 10px 10px;
+}
+
+.location-management-page .lm-plan-level-products > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 8px;
+  border-left: 2px solid #c7d2fe;
+}
+
+.location-management-page .lm-plan-level-products strong {
+  color: #1e293b;
+  font-size: 0.72rem;
+}
+
+.location-management-page .lm-plan-level-products span {
+  color: #64748b;
+  font-size: 0.64rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .location-management-page .lm-plan-toolbar-end {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+/* --- Merkezi Kontrol Çubuğu (Toggle + Harita Aksiyonları) --- */
+.location-management-page .location-central-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  margin-bottom: 0;
+  border-radius: 20px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 252, 0.97)),
+    radial-gradient(circle at top right, rgba(99, 102, 241, 0.08), transparent 36%);
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.location-management-page .location-central-control-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.location-management-page .location-central-control-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .location-management-page .location-central-control {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .location-management-page .location-central-control-left {
+    justify-content: center;
+  }
+
+  .location-management-page .location-central-control-right {
+    justify-content: center;
+  }
+}
+
+/* --- Birleşik Çalışma Alanı Layout --- */
+.location-management-page .location-unified-workspace-section {
+  margin-top: 0;
+}
+
+.location-management-page .location-unified-layout-stack,
+.location-management-page .location-unified-layout-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  align-items: stretch;
+}
+
+.location-management-page .location-unified-table-card {
+  min-width: 0;
+  width: 100%;
+}
+
+.location-management-page .unified-location-table-scroll {
+  overflow-x: auto;
+  border-radius: 12px;
+}
+
+/* --- Summary Card Progress Bars --- */
+.location-management-page .lm-progress-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.location-management-page .lm-progress-bar-wrapper {
+  width: 100%;
+  height: 6px;
+  background-color: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.location-management-page .lm-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #059669);
+  border-radius: 999px;
+  transition: width 0.4s ease-out;
+}
+
+.location-management-page .lm-progress-bar-fill.is-empty-fill {
+  background: linear-gradient(90deg, #06b6d4, #0891b2);
+}
+
+.location-management-page .mod-stat-sub {
+  font-size: 0.75rem;
+  color: #64748b;
+  display: block;
+}
+
+/* --- Section Spacing and visual rhythm --- */
+.location-management-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.location-management-page .location-central-control {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.location-management-page .location-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 28px;
+  margin-bottom: 28px;
+}
+
+.location-management-page .mod-stat {
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.location-management-page .location-legend {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.location-management-page .location-cell-product {
+  max-width: 220px;
+}
+
+.location-management-page .location-cell-sku {
+  max-width: 150px;
+}
+
+.location-management-page .location-table-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+/* --- KPI Row & Cards (Referanstaki Görünüm) --- */
+.location-management-page .lm-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-top: 0;
+  margin-bottom: 0;
+  width: 100%;
+}
+
+.location-management-page .lm-kpi-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 100px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.location-management-page .lm-kpi-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.location-management-page .lm-kpi-card__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.location-management-page .lm-kpi-card__title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 4px;
+}
+
+.location-management-page .lm-kpi-card__value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.location-management-page .lm-kpi-card__bar {
+  width: 100%;
+  height: 4px;
+  background-color: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.location-management-page .lm-kpi-card__bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease-out;
+}
+
+/* Colors matching instructions */
+.location-management-page .lm-kpi-bar-green {
+  background: linear-gradient(90deg, #10b981, #059669);
+}
+
+.location-management-page .lm-kpi-bar-gray {
+  background: linear-gradient(90deg, #94a3b8, #64748b);
+}
+
+.location-management-page .lm-kpi-bar-blue {
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+}
+
+.location-management-page .lm-kpi-bar-purple {
+  background: linear-gradient(90deg, #8b5cf6, #7c3aed);
+}
+
+.location-management-page .lm-kpi-bar-red {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+}
+
+.location-management-page .lm-kpi-bar-teal {
+  background: linear-gradient(90deg, #14b8a6, #0d9488);
+}
+
+.location-management-page .lm-kpi-card__bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.location-management-page .lm-kpi-card__metric {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.location-management-page .lm-kpi-card__description {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Responsive styles */
+@media (max-width: 1200px) {
+  .location-management-page .lm-kpi-row {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+}
+
+@media (max-width: 768px) {
+  .location-management-page .lm-kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .location-management-page .lm-kpi-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Location Detail Panel Card-Based Redesign --- */
+
+.location-management-page .location-right-detail {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.location-management-page .location-right-detail > .mod-card-header {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.location-management-page .location-right-detail > .mod-card-header .mod-card-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.location-management-page .location-right-detail > .mod-card-header .mod-card-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.location-management-page .location-right-detail > .mod-card-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.05;
+}
+
+.location-management-page .location-right-detail > .mod-card-header p {
+  margin: 2px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.location-management-page .location-right-detail-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 6px;
+}
+
+.location-management-page .lm-location-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 7px;
+  padding: 4px 6px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.location-management-page .lm-summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.location-management-page .lm-summary-label {
+  font-size: 0.5rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  margin-bottom: 1px;
+}
+
+.location-management-page .lm-summary-value {
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.08;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.location-management-page .lm-summary-badge {
+  font-size: 0.56rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 999px;
+  text-align: center;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.location-management-page .lm-summary-badge.type-badge {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.location-management-page .lm-summary-badge.status-success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.location-management-page .lm-summary-badge.status-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.location-management-page .lm-summary-badge.status-neutral {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+/* Scrollable container for cards */
+.location-management-page .lm-location-detail-container {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  align-items: start;
+  gap: 6px !important;
+  overflow-y: visible;
+  padding-right: 0;
+  flex: none;
+  min-height: 0;
+  width: 100% !important;
+}
+
+.location-management-page .lm-location-detail-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.location-management-page .lm-location-detail-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+/* Individual Card Styling */
+.location-management-page .lm-location-detail-card {
+  width: 100% !important;
+  max-width: none !important;
+  flex: none !important;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 8px;
+  padding: 6px 8px;
+  box-shadow: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.location-management-page .lm-location-detail-card:hover {
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.03);
+}
+
+.location-management-page .lm-location-detail-card__title {
+  margin: 0 0 4px 0;
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.05;
+  color: #1e293b;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid rgba(241, 245, 249, 0.9);
+  padding-bottom: 3px;
+}
+
+/* Card content layout */
+.location-management-page .lm-location-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 8px;
+}
+
+.location-management-page .lm-location-detail-row {
+  display: grid;
+  grid-template-columns: minmax(56px, 0.42fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  min-height: 15px;
+}
+
+.location-management-page .lm-location-detail-row.full-width {
+  grid-column: span 2;
+}
+
+.location-management-page .lm-location-detail-label {
+  font-size: 0.53rem;
+  font-weight: 600;
+  line-height: 1.05;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.location-management-page .lm-location-detail-value {
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.12;
+  color: #0f172a;
+  word-break: break-word;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.location-management-page .lm-location-detail-value.is-placeholder {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Status text coloring */
+.location-management-page .lm-location-detail-value.tone-success {
+  color: #16a34a;
+}
+.location-management-page .lm-location-detail-value.tone-danger {
+  color: #dc2626;
+}
+.location-management-page .lm-location-detail-value.tone-neutral {
+  color: #475569;
+}
+
+/* Product empty state styling */
+.location-management-page .lm-product-empty-state {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  background: rgba(248, 250, 252, 0.6);
+  border: 1px dashed rgba(203, 213, 225, 0.7);
+  border-radius: 8px;
+  text-align: center;
+  gap: 6px;
+}
+
+.location-management-page .lm-product-empty-icon {
+  color: #94a3b8;
+  animation: float 3s ease-in-out infinite;
+  width: 16px;
+  height: 16px;
+}
+
+.location-management-page .lm-product-empty-state p {
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.15;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Occupancy progress bar */
+.location-management-page .lm-occupancy-progress-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  margin-top: 0;
+}
+
+.location-management-page .lm-occupancy-progress-bar {
+  flex: 1;
+  height: 3px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.location-management-page .lm-occupancy-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.location-management-page .lm-occupancy-progress-fill.status-success {
+  background: linear-gradient(90deg, #22c55e, #16a34a);
+}
+
+.location-management-page .lm-occupancy-progress-fill.status-danger {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+}
+
+.location-management-page .lm-occupancy-progress-fill.status-neutral {
+  background: linear-gradient(90deg, #cbd5e1, #94a3b8);
+}
+
+/* Empty state panel when no location is selected */
+.location-management-page .lm-location-detail-empty-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px 12px;
+  background: radial-gradient(circle at center, rgba(99, 102, 241, 0.02) 0%, transparent 70%);
+}
+
+.location-management-page .lm-location-detail-empty-icon {
+  color: #818cf8;
+  opacity: 0.7;
+  width: 24px;
+  height: 24px;
+  margin-bottom: 5px;
+  animation: pulse 2.5s infinite ease-in-out;
+}
+
+.location-management-page .lm-location-detail-empty-panel h4 {
+  font-size: 0.7rem;
+  color: #1e293b;
+  margin: 0 0 2px 0;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.location-management-page .lm-location-detail-empty-panel p {
+  font-size: 0.62rem;
+  color: #64748b;
+  line-height: 1.2;
+  margin: 0;
+  max-width: 280px;
+}
+
+/* Footer / Actions styling */
+.location-management-page .location-detail-footer {
+  margin: 0;
+}
+
+.location-management-page .lm-location-detail-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+}
+
+.location-management-page .lm-location-detail-actions-text {
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.15;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.location-management-page .lm-location-detail-actions-group {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+  width: auto;
+}
+
+.location-management-page .lm-location-detail-actions-group button {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 0.62rem;
+  border-radius: 7px;
+  gap: 4px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.location-management-page .lm-location-detail-actions-group button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.location-management-page .lm-location-detail-actions.is-disabled {
+  opacity: 0.7;
+}
+
+.location-management-page .lm-location-detail-actions.is-disabled button {
+  cursor: not-allowed;
+  background: #f1f5f9 !important;
+  color: #94a3b8 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.08); opacity: 0.9; }
+}
+
+/* Responsive Overrides */
+@media (max-width: 1120px) {
+  .location-management-page .lm-location-detail-container {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .location-management-page .lm-location-detail-container {
+    grid-template-columns: 1fr !important;
+  }
+
+  .location-management-page .lm-location-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .location-management-page .lm-location-detail-row.full-width {
+    grid-column: span 1;
+  }
+
+  .location-management-page .lm-location-detail-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .location-management-page .lm-location-detail-actions-group,
+  .location-management-page .lm-location-detail-actions-group button {
+    width: 100%;
+  }
+}

@@ -11,6 +11,7 @@ router.post('/refresh', customerAuthController.refresh);
 router.post('/delete-account', customerAuthController.deleteAccount);
 router.post('/logout', authenticateCustomer, customerAuthController.logout);
 router.get('/catalog', customerAuthController.catalog);
+router.get('/catalog/barcode/:barcode', customerAuthController.catalogByBarcode);
 router.get('/catalog/:id', customerAuthController.catalogDetail);
 router.get('/catalog/:id/stock-forecast', customerAuthController.catalogStockForecast);
 router.get('/store-map-public', customerAuthController.storeMapPublic);
@@ -20,6 +21,7 @@ router.get('/dashboard', authenticateCustomer, customerAuthController.dashboard)
 router.get('/orders', authenticateCustomer, customerAuthController.orders);
 router.get('/cart', authenticateCustomer, customerAuthController.getCart);
 router.patch('/cart', authenticateCustomer, customerAuthController.updateCart);
+router.post('/cart/route-plan', authenticateCustomer, customerAuthController.getRoutePlan);
 router.post('/mobile-orders', authenticateCustomer, customerAuthController.createMobileOrder);
 router.get('/mobile-orders/:id', authenticateCustomer, customerAuthController.getMobileOrder);
 router.post('/mobile-orders/:id/confirm-handoff', authenticateCustomer, customerAuthController.confirmMobileOrderHandoff);

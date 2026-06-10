@@ -1,4 +1,4 @@
-import { createContext, createElement, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authService } from '../services/authService.js';
 import { productService } from '../services/productService.js';
 import { stockService } from '../services/stockService.js';
@@ -16,7 +16,8 @@ import {
 import { hasPermission } from '../config/permissions.js';
 
 const AuthContext = createContext(null);
-const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000;
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 15000;
+const AUTH_BOOTSTRAP_RETRY_DELAY_MS = 1200;
 
 function createTimeoutError() {
   const error = new Error('AUTH_BOOTSTRAP_TIMEOUT');
@@ -98,39 +99,59 @@ export function AuthProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [authIssue, setAuthIssue] = useState(null);
 
+  const bootstrapAuth = useCallback(async ({ isRetry = false } = {}) => {
+    const hasAccessToken = Boolean(getAuthToken());
+    const hasRefreshToken = Boolean(getAuthRefreshToken());
+
+    if (!hasAccessToken && !hasRefreshToken) {
+      setUser(null);
+      setAuthIssue(null);
+      return;
+    }
+
+    try {
+      if (!hasAccessToken && hasRefreshToken) {
+        await withTimeout(refreshStaffSession(), AUTH_BOOTSTRAP_TIMEOUT_MS);
+      }
+
+      const currentUser = await hydrateCurrentUser();
+      setUser(currentUser);
+      setAuthIssue(null);
+    } catch (error) {
+      if (shouldClearAuthForError(error)) {
+        clearAuthToken();
+        setUser(null);
+        setAuthIssue(null);
+        return;
+      }
+
+      const fallbackUser = getStoredUser();
+      const nextIssue = buildAuthIssue(error);
+      const isNetworkIssue = nextIssue.errorCode === 'auth_network_error';
+
+      if (fallbackUser && isNetworkIssue) {
+        setUser(fallbackUser);
+        setAuthIssue(null);
+
+        if (!isRetry) {
+          window.setTimeout(() => {
+            void bootstrapAuth({ isRetry: true });
+          }, AUTH_BOOTSTRAP_RETRY_DELAY_MS);
+        }
+        return;
+      }
+
+      setUser(fallbackUser);
+      setAuthIssue(nextIssue);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
 
     const bootstrap = async () => {
-      const hasAccessToken = Boolean(getAuthToken());
-      const hasRefreshToken = Boolean(getAuthRefreshToken());
-
-      if (!hasAccessToken && !hasRefreshToken) {
-        if (active) setIsLoading(false);
-        return;
-      }
-
       try {
-        if (!hasAccessToken && hasRefreshToken) {
-          await withTimeout(refreshStaffSession(), AUTH_BOOTSTRAP_TIMEOUT_MS);
-        }
-
-        const currentUser = await hydrateCurrentUser();
-        if (active) {
-          setUser(currentUser);
-          setAuthIssue(null);
-        }
-      } catch (error) {
-        if (active) {
-          if (shouldClearAuthForError(error)) {
-            clearAuthToken();
-            setUser(null);
-            setAuthIssue(null);
-          } else {
-            setUser(getStoredUser());
-            setAuthIssue(buildAuthIssue(error));
-          }
-        }
+        await bootstrapAuth();
       } finally {
         if (active) setIsLoading(false);
       }
@@ -189,9 +210,10 @@ export function AuthProvider({ children }) {
       authIssue,
       login,
       logout,
+      retryAuth: bootstrapAuth,
       setUser,
     }),
-    [authIssue, isLoading, login, logout, user],
+    [authIssue, bootstrapAuth, isLoading, login, logout, user],
   );
 
   return createElement(AuthContext.Provider, { value }, children);

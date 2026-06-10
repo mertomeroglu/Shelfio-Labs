@@ -164,7 +164,6 @@ const DEFAULT_PRODUCT_PAGINATION = {
   totalPages: 1,
   hasNextPage: false,
 };
-const EMPTY_MISSING_FIELDS_TEXT = 'Eksik bulunmamakta';
 const UNDEFINED_FIELD_TEXT = 'Tanımsız';
 
 const hasDisplayNumber = (value) => value !== null
@@ -178,9 +177,23 @@ const renderOptionalNumber = (value, options = {}) => (
     : UNDEFINED_FIELD_TEXT
 );
 
-const renderMissingFields = (fields) => (
-  Array.isArray(fields) && fields.length ? fields.join(', ') : EMPTY_MISSING_FIELDS_TEXT
-);
+const renderMissingFields = (fields) => {
+  if (!Array.isArray(fields) || !fields.length) {
+    return <span className="product-missing-fields product-missing-fields--complete" title="Eksik alan yok">+</span>;
+  }
+
+  const visibleFields = fields.slice(0, 2);
+  const remainingCount = fields.length - visibleFields.length;
+
+  return (
+    <span className="product-missing-fields product-missing-fields--missing" title={fields.join(', ')}>
+      {visibleFields.map((field) => (
+        <span key={field} className="product-missing-fields__tag">{field}</span>
+      ))}
+      {remainingCount > 0 ? <span className="product-missing-fields__more">+{remainingCount}</span> : null}
+    </span>
+  );
+};
 
 const DEFAULT_PRODUCT_SUMMARY = {
   totalProducts: 0,

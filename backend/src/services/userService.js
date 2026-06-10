@@ -17,6 +17,7 @@ import { sanitizeUserInput, validateUserPayload } from '../utils/validators.js';
 import { getPurchaseOrderStatusLabel, normalizePurchaseOrderStatus } from '../domain/purchaseOrderLifecycle.js';
 import { getPrisma } from '../providers/postgresProvider.js';
 import { getActiveStoreId, getActiveTenantId } from '../tenant/tenantContext.js';
+import { config } from '../config/config.js';
 
 const SUPER_ADMIN_ID = 'u-admin-1';
 const SUPER_ADMIN_USERNAME = 'mert.omeroglu@shelfio.com';
@@ -459,6 +460,328 @@ const loadActivitySources = async () => {
   };
 };
 
+const isPostgresStore = config.dataStore === 'postgres';
+
+const loadActivitySourcesForUserPostgres = async (userId, limit = 20) => {
+  const prisma = await getPrisma();
+  const tenantId = getActiveTenantId();
+  const safeLimit = Math.min(50, Math.max(5, Number(limit || 20)));
+
+  const [
+    sales,
+    movements,
+    warehouseMovements,
+    transferRequests,
+    transferRequestAudits,
+    createdOrders,
+    orderActivities,
+    createdTasks,
+    assignedTasks,
+    taskComments,
+    accessAuditLogs,
+  ] = await Promise.all([
+    prisma.sale.findMany({
+      where: { tenantId, cashierId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        type: true,
+        totalAmount: true,
+        items: true,
+        referenceNo: true,
+        receiptNo: true,
+        cashierId: true,
+        createdAt: true,
+      },
+    }),
+    prisma.stockMovement.findMany({
+      where: { tenantId, userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        reasonCode: true,
+        type: true,
+        productName: true,
+        qty: true,
+        routeLabel: true,
+        referenceNo: true,
+        userId: true,
+        createdAt: true,
+      },
+    }),
+    prisma.warehouseMovement.findMany({
+      where: { tenantId, createdBy: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        movementType: true,
+        productName: true,
+        qty: true,
+        locationCode: true,
+        affectedLocation: true,
+        referenceNo: true,
+        createdBy: true,
+        createdAt: true,
+      },
+    }),
+    prisma.stockTransferRequest.findMany({
+      where: {
+        tenantId,
+        OR: [{ requestedBy: userId }, { handledBy: userId }],
+      },
+      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }],
+      take: safeLimit,
+      select: {
+        id: true,
+        productName: true,
+        quantity: true,
+        status: true,
+        requestedBy: true,
+        handledBy: true,
+        handledNote: true,
+        createdAt: true,
+        completedAt: true,
+      },
+    }),
+    prisma.transferAudit.findMany({
+      where: { tenantId, actorId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        actorId: true,
+        toStatus: true,
+        event: true,
+        note: true,
+        transferRequestId: true,
+        createdAt: true,
+      },
+    }),
+    prisma.purchaseOrder.findMany({
+      where: { tenantId, createdBy: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        createdBy: true,
+        supplierName: true,
+        currentStatus: true,
+        status: true,
+        totalAmount: true,
+        grandTotal: true,
+        orderNumber: true,
+        createdAt: true,
+        activityLogs: {
+          where: { by: userId },
+          orderBy: { at: 'desc' },
+          take: safeLimit,
+          select: {
+            id: true,
+            by: true,
+            status: true,
+            note: true,
+            orderId: true,
+            orderNumber: true,
+            at: true,
+          },
+        },
+      },
+    }),
+    prisma.purchaseOrderActivityLog.findMany({
+      where: { tenantId, by: userId },
+      orderBy: { at: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        by: true,
+        status: true,
+        note: true,
+        orderId: true,
+        at: true,
+        order: {
+          select: {
+            id: true,
+            supplierName: true,
+            orderNumber: true,
+            createdBy: true,
+            currentStatus: true,
+            status: true,
+            totalAmount: true,
+            grandTotal: true,
+            createdAt: true,
+          },
+        },
+      },
+    }),
+    prisma.task.findMany({
+      where: { tenantId, createdBy: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        taskNo: true,
+        title: true,
+        status: true,
+        createdBy: true,
+        assignedTo: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.task.findMany({
+      where: { tenantId, assignedTo: userId },
+      orderBy: { updatedAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        taskNo: true,
+        title: true,
+        status: true,
+        createdBy: true,
+        assignedTo: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.taskComment.findMany({
+      where: { tenantId, authorId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        text: true,
+        authorId: true,
+        createdAt: true,
+        task: {
+          select: {
+            id: true,
+            taskNo: true,
+            title: true,
+            status: true,
+          },
+        },
+      },
+    }),
+    prisma.accessAuditLog.findMany({
+      where: { tenantId, actorId: userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      select: {
+        id: true,
+        actorId: true,
+        action: true,
+        permission: true,
+        requestId: true,
+        metadata: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  const orderMap = new Map();
+  const attachOrderActivity = (orderId, activity) => {
+    if (!orderId) return;
+    if (!orderMap.has(orderId)) {
+      orderMap.set(orderId, {
+        id: orderId,
+        createdBy: null,
+        supplierName: '',
+        currentStatus: '',
+        status: '',
+        totalAmount: 0,
+        grandTotal: 0,
+        orderNumber: '',
+        createdAt: null,
+        activityLog: [],
+      });
+    }
+    orderMap.get(orderId).activityLog.push(activity);
+  };
+
+  (Array.isArray(createdOrders) ? createdOrders : []).forEach((order) => {
+    orderMap.set(order.id, {
+      ...order,
+      activityLog: Array.isArray(order.activityLogs) ? order.activityLogs : [],
+    });
+  });
+
+  (Array.isArray(orderActivities) ? orderActivities : []).forEach((activity) => {
+    const baseOrder = activity.order ? {
+      id: activity.order.id,
+      createdBy: activity.order.createdBy,
+      supplierName: activity.order.supplierName,
+      currentStatus: activity.order.currentStatus,
+      status: activity.order.status,
+      totalAmount: activity.order.totalAmount,
+      grandTotal: activity.order.grandTotal,
+      orderNumber: activity.order.orderNumber,
+      createdAt: activity.order.createdAt,
+      activityLog: [],
+    } : null;
+    if (baseOrder && !orderMap.has(baseOrder.id)) {
+      orderMap.set(baseOrder.id, baseOrder);
+    }
+    attachOrderActivity(activity.orderId, {
+      id: activity.id,
+      by: activity.by,
+      status: activity.status,
+      note: activity.note,
+      orderNumber: activity.order?.orderNumber || '',
+      at: activity.at,
+    });
+  });
+
+  const taskMap = new Map();
+  const mergeTaskRow = (task) => {
+    if (!task?.id) return;
+    const current = taskMap.get(task.id) || { ...task, comments: [] };
+    const nextUpdated = new Date(task.updatedAt || task.createdAt || 0).getTime();
+    const prevUpdated = new Date(current.updatedAt || current.createdAt || 0).getTime();
+    taskMap.set(task.id, nextUpdated >= prevUpdated ? { ...current, ...task } : current);
+  };
+
+  (Array.isArray(createdTasks) ? createdTasks : []).forEach(mergeTaskRow);
+  (Array.isArray(assignedTasks) ? assignedTasks : []).forEach(mergeTaskRow);
+  (Array.isArray(taskComments) ? taskComments : []).forEach((comment) => {
+    const task = comment.task || {};
+    mergeTaskRow({
+      id: task.id,
+      taskNo: task.taskNo,
+      title: task.title,
+      status: task.status,
+      createdBy: null,
+      assignedTo: null,
+      createdAt: null,
+      updatedAt: comment.createdAt,
+    });
+    const current = taskMap.get(task.id);
+    if (!current) return;
+    current.comments = [
+      ...(Array.isArray(current.comments) ? current.comments : []),
+      {
+        id: comment.id,
+        text: comment.text,
+        authorId: comment.authorId,
+        createdAt: comment.createdAt,
+      },
+    ];
+  });
+
+  return {
+    sales,
+    movements,
+    warehouseMovements,
+    transferRequests,
+    transferRequestAudits,
+    purchaseOrders: [...orderMap.values()],
+    tasks: [...taskMap.values()],
+    accessAuditLogs,
+  };
+};
+
 export const userService = {
   async list() {
     let users = await userRepo.getAll();
@@ -499,7 +822,9 @@ export const userService = {
     }
 
     const limit = Math.min(50, Math.max(5, Number(query.limit || 20)));
-    const activitySources = await loadActivitySources();
+    const activitySources = isPostgresStore
+      ? await loadActivitySourcesForUserPostgres(userId, limit)
+      : await loadActivitySources();
     return collectUserActivities({
       ...activitySources,
       targetUserId: userId,

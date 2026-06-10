@@ -1078,6 +1078,7 @@ const buildInventory = async () => {
       fiyat: product.salePrice || 0,
       isActive: product.isActive,
       aktif: Boolean(product.isActive),
+      etiket: product.etiket || '',
       stockAlert,
       stockStatus: String(product.stockStatus || product?.payload?.stockStatus || '').trim() || (stockAlert === 'critical' ? 'Kritik' : stockAlert === 'low' ? 'Düşük' : stockAlert === 'overstock' ? 'Yüksek' : 'Normal'),
       replenishmentNeed: Number(product.replenishmentNeed ?? product?.payload?.replenishmentNeed ?? 0),
@@ -2655,6 +2656,8 @@ const buildFastDashboardReport = async (tenantId) => {
       supplierName: row.supplier?.name || '-',
       currentStatus: row.status,
       createdAt: fromDateValue(row.createdAt),
+      updatedAt: fromDateValue(row.updatedAt),
+      completedAt: fromDateValue(row.completedAt),
       cancelledAt: isPurchaseOrderCancelledStatus(row.status) ? fromDateValue(getPurchaseOrderCancelledAt(row)) : null,
     })),
     goodsReceiptPerformanceReport: [{
@@ -3901,12 +3904,19 @@ export const reportService = {
 
     const categoryReport = categories.map((category) => {
       const items = filteredInventory.filter((item) => item.categoryId === category.id);
+      const uniqueEtikets = Array.from(new Set(
+        items.map((item) => String(item.etiket || '').trim())
+             .filter(Boolean)
+             .flatMap((val) => val.split(',').map(v => v.trim()))
+             .filter(Boolean)
+      )).join(', ');
       return {
         id: category.id,
-        name: category.name,
+        name: category.name || 'Genel',
         productCount: items.length,
         totalQuantity: items.reduce((sum, item) => sum + item.quantity, 0),
         totalValue: items.reduce((sum, item) => sum + item.stockValue, 0),
+        subCategories: uniqueEtikets || 'Etiket yok',
       };
     });
 
@@ -4392,12 +4402,14 @@ export const reportService = {
         sheetName: 'Kategori Raporu',
         columns: [
           { key: 'kategori', header: 'Kategori' },
+          { key: 'altKategori', header: 'Alt Kategoriler / Etiketler' },
           { key: 'urunCesidi', header: 'Ürün Çeşidi' },
           { key: 'toplamStok', header: 'Toplam Stok' },
           { key: 'stokDegeri', header: 'Stok Değeri' },
         ],
         rows: report.categoryReport.map((item) => ({
           kategori: item.name,
+          altKategori: item.subCategories,
           urunCesidi: item.productCount,
           toplamStok: item.totalQuantity,
           stokDegeri: item.totalValue,

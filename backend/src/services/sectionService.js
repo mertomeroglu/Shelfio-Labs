@@ -893,9 +893,14 @@ export const sectionService = {
     ]);
     const sectionMap = new Map(sections.map((section) => [String(section.id), section]));
     const stockMap = new Map(stocks.map((stock) => [String(stock.productId), stock]));
+
     const openAutoKeys = new Set(requests
       .filter((request) => OPEN_TRANSFER_REQUEST_STATUSES.has(normalizeTransferStatus(request.status)))
-      .map((request) => `${String(request.productId || '')}:${String(request.sectionId || '')}`));
+      .map((request) => {
+        const type = request.targetLocationType || request.payload?.transferTarget?.targetLocationType || 'physical_shelf';
+        return `${String(request.productId || '')}:${type}`;
+      }));
+
     const recentAutoKeys = new Set(requests
       .filter((request) => String(request.origin || request.source || '').toLowerCase() === 'automation')
       .filter((request) => !OPEN_TRANSFER_REQUEST_STATUSES.has(normalizeTransferStatus(request.status)))
@@ -903,7 +908,10 @@ export const sectionService = {
         const createdAt = new Date(request.createdAt || 0).getTime();
         return Number.isFinite(createdAt) && now.getTime() - createdAt < TRANSFER_AUTOMATION_COOLDOWN_MS;
       })
-      .map((request) => `${String(request.productId || '')}:${String(request.sectionId || '')}`));
+      .map((request) => {
+        const type = request.targetLocationType || request.payload?.transferTarget?.targetLocationType || 'physical_shelf';
+        return `${String(request.productId || '')}:${type}`;
+      }));
 
     const created = [];
     const skipped = [];
@@ -960,35 +968,44 @@ export const sectionService = {
       }
       summary.eligibleCount += 1;
       const stock = stockMap.get(String(product.id)) || { warehouseQuantity: 0, shelfQuantity: 0 };
-      const shelfStock = Number(stock.shelfQuantity || 0);
-      const criticalStock = Number(product.criticalStock || 0);
-      const isBelowThreshold = shelfStock <= 0 || (criticalStock > 0 && shelfStock <= criticalStock);
-      if (!isBelowThreshold) {
+      const shelfQty = Number(stock.shelfQuantity || 0);
+      const critical = Number(product.criticalStock || 0);
+      const warehouseStock = Number(stock.warehouseQuantity || 0);
+
+      const isBelowCritical = critical > 0 && shelfQty <= critical;
+      const isEmptyWithoutCritical = critical <= 0 && shelfQty <= 0;
+      const needsReplenishment = warehouseStock > 0 && (isBelowCritical || isEmptyWithoutCritical);
+
+      if (!needsReplenishment) {
         skip(buildAutomationSkip({
           product,
           sectionId: section.id,
           reason: 'not_below_threshold',
-          details: { shelfStock, criticalStock },
+          details: { shelfStock: shelfQty, criticalStock: critical, warehouseStock },
         }));
         continue;
       }
       summary.belowThresholdCount += 1;
-      const key = `${product.id}:${section.id}`;
+
+      const descriptor = resolveTransferTargetDescriptor({ product, section });
+      const targetLocationType = descriptor.targetLocationType || 'physical_shelf';
+      const key = `${product.id}:${targetLocationType}`;
+
       if (openAutoKeys.has(key)) {
         skip(buildAutomationSkip({
           product,
           sectionId: section.id,
           reason: 'open_request_exists',
-          details: { shelfStock, criticalStock },
+          details: { shelfStock: shelfQty, criticalStock: critical, targetLocationType },
         }));
         continue;
       }
-      if (shelfStock > 0 && recentAutoKeys.has(key)) {
+      if (shelfQty > 0 && recentAutoKeys.has(key)) {
         skip(buildAutomationSkip({
           product,
           sectionId: section.id,
           reason: 'cooldown',
-          details: { shelfStock, criticalStock, cooldownMs: TRANSFER_AUTOMATION_COOLDOWN_MS },
+          details: { shelfStock: shelfQty, criticalStock: critical, targetLocationType, cooldownMs: TRANSFER_AUTOMATION_COOLDOWN_MS },
         }));
         continue;
       }
@@ -998,7 +1015,7 @@ export const sectionService = {
           product,
           sectionId: section.id,
           reason: 'warehouse_stock_unavailable',
-          details: { shelfStock, criticalStock, warehouseStock: Number(stock.warehouseQuantity || 0) },
+          details: { shelfStock: shelfQty, criticalStock: critical, warehouseStock },
         }));
         continue;
       }
@@ -1007,7 +1024,7 @@ export const sectionService = {
         quantity,
         origin: 'automation',
         source: 'automation',
-        note: `Otomatik reyon besleme: reyon stoğu ${shelfStock}, kritik eşik ${criticalStock || 0}. ${nowIso}`,
+        note: `Otomatik reyon besleme: reyon stoğu ${shelfQty}, kritik eşik ${critical || 0}. ${nowIso}`,
       }, actor);
       created.push(request);
       summary.createdCount += 1;

@@ -149,10 +149,26 @@ const resolveSourceRackCode = (item = {}) => {
 };
 
 const resolveTargetSectionLabel = (item = {}) => {
+  const directLabel = String(item.targetLocationLabel || item.targetLocationDisplay || item.payload?.transferTarget?.targetLocationLabel || '').trim();
+  if (directLabel) return directLabel;
   const number = String(item.sectionNumber || '').trim();
   const name = String(item.sectionName || '').trim();
   if (number && name) return `${number} - ${name}`;
   return name || number || '-';
+};
+
+const resolveTargetLocationType = (item = {}) => (
+  item.targetLocationType
+  || item.targetLocationKind
+  || item.payload?.transferTarget?.targetLocationType
+  || ''
+);
+
+const resolveTargetLocationTypeLabel = (item = {}) => {
+  const type = resolveTargetLocationType(item);
+  if (type === 'section_common_area') return 'Ortak Reyon Alanı';
+  if (type === 'physical_shelf') return 'Fiziksel Raf';
+  return '';
 };
 
 const resolveTransferItems = (item) => {
@@ -724,7 +740,8 @@ export default function WarehouseTransferRequests() {
       render: (row) => (
         <div className="transfer-product-cell">
           <strong>{row.productName}</strong>
-          <span>Reyon {row.sectionNumber} / {row.sectionName}</span>
+          <span>Hedef: {resolveTargetSectionLabel(row)}</span>
+          {resolveTargetLocationTypeLabel(row) ? <span className="warehouse-origin-badge">{resolveTargetLocationTypeLabel(row)}</span> : null}
           {row.isAutomation ? <span className="warehouse-origin-badge">Otomasyon</span> : null}
         </div>
       ),
@@ -1076,7 +1093,8 @@ export default function WarehouseTransferRequests() {
         <div className="warehouse-task-meta">
           <span>Toplam miktar: {formatNumber(totalQuantity)}</span>
           <span>Kaynak: {resolveSourceRackCode(item)}</span>
-          <span>Hedef Reyon: {resolveTargetSectionLabel(item)}</span>
+          <span>Hedef: {resolveTargetSectionLabel(item)}</span>
+          {resolveTargetLocationTypeLabel(item) ? <span>Tip: {resolveTargetLocationTypeLabel(item)}</span> : null}
           <span>Talep eden: {item.requestedByName || 'Personel'}</span>
           {item.note ? <span>Not: {item.note}</span> : null}
         </div>

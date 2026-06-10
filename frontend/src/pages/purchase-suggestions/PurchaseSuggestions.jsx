@@ -116,20 +116,36 @@ const statusTone = {
   pending: 'warning',
   approved: 'success',
   rejected: 'danger',
+  converted: 'success',
+  cancelled: 'danger',
+  expired: 'neutral',
   archived: 'neutral',
   stale: 'warning',
+  manual_evaluation: 'neutral',
+  skipped: 'secondary',
 };
 
 const statusLabel = {
-  pending: 'Bekleyen',
+  pending: 'Otomatik Öneri',
   approved: 'Siparişe dönüştü',
   rejected: 'Reddedildi',
+  converted: 'Siparişe dönüştü',
+  cancelled: 'İptal edildi',
+  expired: 'Süresi doldu',
   archived: 'Arşivlendi',
   stale: 'Yeniden hesap gerekli',
+  manual_evaluation: 'Manuel Değerlendirme',
+  skipped: 'Öneriye Alınmadı',
 };
 
-const ACTIVE_SUGGESTION_STATUSES = new Set(['pending']);
-const ARCHIVED_SUGGESTION_STATUSES = new Set(['approved', 'rejected', 'archived', 'stale']);
+const SECTION_TAB_STATUS = {
+  pending: 'pending',
+  manual_evaluation: 'manual_evaluation',
+  skipped: 'skipped',
+};
+
+const ACTIVE_SUGGESTION_STATUSES = new Set(['pending', 'manual_evaluation', 'skipped']);
+const ARCHIVED_SUGGESTION_STATUSES = new Set(['approved', 'rejected', 'converted', 'cancelled', 'expired', 'archived', 'stale']);
 const PACKAGED_ORDER_UNITS = new Set(['koli', 'kasa', 'paket', 'çuval']);
 
 const trendLabel = { up: 'Yükseliş', flat: 'Dengeli', down: 'Düşüş' };
@@ -150,7 +166,7 @@ const buildSuggestionQueryParams = (filters = {}, options = {}) => {
     limit: SERVER_PAGE_SIZE,
   };
   if (statusGroup) params.statusGroup = statusGroup;
-  ['search', 'status', 'riskLevel', 'supplierId', 'preset'].forEach((key) => {
+  ['search', 'status', 'riskLevel', 'supplierId', 'preset', 'stockoutEligible'].forEach((key) => {
     const value = filters?.[key];
     const text = String(value ?? '').trim();
     if (text) params[key] = text;
@@ -256,7 +272,7 @@ const normalizeSuggestionStatus = (value = '') => {
     .trim()
     .toLocaleLowerCase('tr-TR')
     .replace(/[\s-]+/g, '_');
-  if (['senttoorder', 'sent_to_order', 'ordered'].includes(normalized)) return 'approved';
+  if (['senttoorder', 'sent_to_order', 'ordered'].includes(normalized)) return 'converted';
   return normalized || 'pending';
 };
 
@@ -266,7 +282,7 @@ const shouldLoadActiveSuggestions = (filters = {}) => !filters.status || isActiv
 const shouldLoadArchiveSuggestions = (filters = {}) => !filters.status || isArchivedSuggestionStatus(filters.status);
 
 const getResponsePagination = (value, fallbackPage = 1) => (
-  value.meta.pagination || {
+  value?.meta?.pagination || {
     page: fallbackPage,
     limit: TABLE_PAGE_SIZE,
     total: Array.isArray(value) ? value.length : 0,
@@ -345,6 +361,39 @@ const getTotalStockValue = (item) => {
   const directTotal = Number(item.totalStock);
   if (Number.isFinite(directTotal) && directTotal >= 0) return directTotal;
   return null;
+};
+
+const isItemSelectableStockout = (item) => {
+  const totalStock = getTotalStockValue(item);
+  const isStockOut = totalStock === 0;
+  const hasReasonTag = (tag) => Array.isArray(item.reasonTags) ? item.reasonTags.includes(tag) : (item.reasonCode === tag);
+
+  if (!isStockOut) return false;
+  if (hasReasonTag('product_inactive') || item.isActive === false) return false;
+  if (hasReasonTag('inbound_covered')) return false;
+  if (hasReasonTag('missing_supplier_mapping') || item.supplierMissing) return false;
+  if (hasReasonTag('inactive_supplier')) return false;
+
+  return true;
+};
+
+const isSkippedSelectable = (item) => {
+  const isSkipped = normalizeSuggestionStatus(item.status) === 'skipped';
+  return isSkipped && isItemSelectableStockout(item);
+};
+
+const getSkippedDisabledReason = (item) => {
+  const totalStock = getTotalStockValue(item);
+  const isStockOut = totalStock === 0;
+  const hasReasonTag = (tag) => Array.isArray(item.reasonTags) && item.reasonTags.includes(tag);
+
+  if (!isStockOut) return 'Stok tükenmemiş';
+  if (hasReasonTag('product_inactive') || item.isActive === false) return 'Ürün aktif değil';
+  if (hasReasonTag('inbound_covered')) return 'Yoldaki sipariş ihtiyacı karşılıyor';
+  if (hasReasonTag('missing_supplier_mapping') || item.supplierMissing) return 'Tedarikçi eşleştirmesi yok';
+  if (hasReasonTag('inactive_supplier')) return 'Tedarikçi pasif';
+
+  return 'Sipariş için uygun değil';
 };
 
 const readSuggestionHandoffStore = () => {
@@ -484,10 +533,12 @@ const buildNavigationItem = (item = {}) => {
   ).trim();
   const orderUnit = resolveOrderUnit(item);
   const packageSize = resolvePackageSize(item, orderUnit);
-  const baseRecommendedQty = Number(item.suggestedQty || item.recommendedBaseQuantity || item.recommendedQuantity || 0);
-  const recommendedQuantity = orderUnit === 'palet' || PACKAGED_ORDER_UNITS.has(orderUnit)
+  const baseRecommendedQty = Number(item.suggestedQty || item.recommendedQuantity || item.recommendedQty || 0);
+  let recommendedQuantity = orderUnit === 'palet' || PACKAGED_ORDER_UNITS.has(orderUnit)
     ? Math.ceil(baseRecommendedQty / packageSize)
     : Math.max(0, baseRecommendedQty);
+
+  const statusVal = normalizeSuggestionStatus(item.status);
 
   if (!suggestionId || !productId || !supplierId) {
     return {
@@ -497,10 +548,21 @@ const buildNavigationItem = (item = {}) => {
   }
 
   if (!Number.isFinite(recommendedQuantity) || recommendedQuantity <= 0) {
-    return {
-      valid: false,
-      reason: `${item.productName || item.sku || 'öneri'} için geçerli öneri miktarı yok`,
-    };
+    if (statusVal === 'manual_evaluation') {
+      recommendedQuantity = 1;
+    } else if (statusVal === 'skipped') {
+      const minQty = Number(item.minimumOrderQty || item.minimumOrderBaseQty || 1);
+      const unitsPerCase = Number(item.unitsPerCase || 1);
+      const fallbackVal = Math.max(1, minQty, unitsPerCase);
+      recommendedQuantity = orderUnit === 'palet' || PACKAGED_ORDER_UNITS.has(orderUnit)
+        ? Math.ceil(fallbackVal / packageSize)
+        : fallbackVal;
+    } else {
+      return {
+        valid: false,
+        reason: `${item.productName || item.sku || 'öneri'} için geçerli öneri miktarı yok`,
+      };
+    }
   }
 
   return {
@@ -515,6 +577,8 @@ const buildNavigationItem = (item = {}) => {
       supplierName: item.supplierName || 'Tedarikçi atanmadı',
       recommendedQuantity,
       recommendedBaseQuantity: Math.max(0, baseRecommendedQty),
+      suggestedQty: recommendedQuantity,
+      unit: item.unit || 'adet',
       orderUnit,
       baseUnit: 'adet',
       packageSize,
@@ -522,6 +586,7 @@ const buildNavigationItem = (item = {}) => {
       unitsPerCase: Number(item.unitsPerCase || item.packageSize || 1),
       unitsPerPallet: Number(item.unitsPerPallet || item.packageSize || 1),
       purchaseUnitPrice: Number(item.purchasePrice || item.unitPrice || 0),
+      purchasePrice: Number(item.purchasePrice || item.unitPrice || 0),
       supplierProductCode: item.supplierProductCode || item.supplierSku || item.sku || '',
       barcode: item.barcode || '',
       minimumOrderQty: Number(item.minimumOrderQty || item.minimumOrderBaseQty || 1),
@@ -531,10 +596,13 @@ const buildNavigationItem = (item = {}) => {
       currentStock: Number(item.currentStock || item.stockLevel || 0),
       shelfStock: Number(item.shelfStock || 0),
       warehouseStock: Number(item.warehouseStock || 0),
+      totalStock: Number(item.totalStock ?? getTotalStockValue(item) ?? 0),
       riskLevel: String(item.riskLevel || '').trim().toLocaleLowerCase('tr-TR'),
-      reason: item.reason || item.actionableReason || item.explanation.summary || '-',
-      recommendationReason: item.reason || item.actionableReason || item.explanation.summary || '-',
-      status: normalizeSuggestionStatus(item.status),
+      reason: item.reason || item.actionableReason || item.explanation?.summary || '-',
+      recommendationReason: item.reason || item.actionableReason || item.explanation?.summary || '-',
+      status: statusVal,
+      sourceStatus: statusVal,
+      reasonTags: Array.isArray(item.reasonTags) ? item.reasonTags : (item.reasonCode ? [item.reasonCode] : []),
       source: 'purchase_suggestions',
       createdAt: item.createdAt || '',
       updatedAt: item.updatedAt || '',
@@ -567,6 +635,17 @@ const reasonTagLabel = {
   moq_applied: 'Minimum sipariş',
   case_rounded: 'Koli yuvarlama',
   pallet_rounded: 'Palet yuvarlama',
+  product_inactive: 'Ürün pasif',
+  missing_supplier_mapping: 'Tedarikçi eşleşmesi eksik',
+  inactive_supplier: 'Tedarikçi pasif',
+  missing_min_stock: 'Minimum stok eksik',
+  missing_lead_time: 'Temin süresi eksik',
+  missing_demand_data: 'Son 30 günlük satış verisi yok',
+  missing_moq_or_case_data: 'MOQ veya paket/koli bilgisi eksik',
+  inbound_covered: 'Açık sipariş ihtiyacı karşılıyor',
+  stock_sufficient: 'Stok yeterli / net ihtiyaç yok',
+  mode_or_risk_guard: 'Seçilen mod için risk seviyesi yetersiz',
+  slow_sales: 'Düşük satış hızı, manuel değerlendirme',
 };
 
 const formatReasonTags = (tags = []) => {
@@ -799,6 +878,29 @@ const buildFreshnessText = (item = {}) => {
   return staleReasonLabel[firstReason] || 'Yeniden hesap gerekli';
 };
 
+const getTurkishReason = (item = {}) => {
+  const tags = Array.isArray(item.reasonTags) ? item.reasonTags : [];
+  const reasonCode = item.reasonCode || item.reason || (tags.length ? tags[0] : '');
+
+  const code = String(reasonCode || '').trim().toLowerCase();
+
+  if (code.includes('product_inactive')) return 'Ürün pasif olduğu için öneriye alınmadı';
+  if (code.includes('missing_supplier_mapping') || code.includes('supplier_mapping') || item.supplierMissing) return 'Tedarikçi eşleşmesi olmadığı için otomatik öneri oluşturulmadı';
+  if (code.includes('inactive_supplier') || code.includes('supplier_inactive')) return 'Tedarikçi pasif olduğu için öneri oluşturulmadı';
+  if (code.includes('missing_min_stock')) return 'Minimum veya kritik stok seviyesi eksik olduğu için otomatik öneri oluşturulmadı';
+  if (code.includes('missing_lead_time')) return 'Tedarik süresi eksik olduğu için otomatik öneri oluşturulmadı';
+  if (code.includes('inbound_covered') || code.includes('inbound_considered')) return 'Yoldaki sipariş mevcut ihtiyacı karşılıyor';
+  if (code.includes('slow_sales')) return 'Satış hızı düşük, manuel değerlendirme önerilir';
+  if (code.includes('missing_demand_data') || code.includes('no_recent_sales_sufficient_stock')) return 'Yeterli satış verisi olmadığı için otomatik öneri oluşturulmadı';
+  if (code.includes('no_reorder_need') || code.includes('need_qty_zero') || code.includes('sufficientstock') || code.includes('stock_sufficient')) return 'Mevcut stok seviyesi sipariş gerektirmiyor';
+  if (code.includes('missing_moq_or_case_data')) return 'MOQ veya koli bilgisi eksik olduğu için otomatik öneri oluşturulamadı';
+  if (code.includes('mode_or_risk_guard')) return 'Ürün, seçilen üretim modunun risk koşullarını karşılamıyor';
+
+  if (item.reason && item.reason !== '-') return item.reason;
+  if (item.actionableReason && item.actionableReason !== '-') return item.actionableReason;
+  return 'Bu ürün için otomatik öneri oluşturulmadı';
+};
+
 const formatPriorityStockout = (item = {}) => {
   if (Number.isFinite(item.daysToStockout)) {
     const days = Math.max(0, Number(item.daysToStockout));
@@ -863,11 +965,24 @@ function RecommendationTable({
   onOpenDetail,
   handleConvertToOrder,
   handleOpenComposeScreen,
+  handleOpenManualComposeScreen,
   setRejectTarget,
   processingId,
   isAdmin,
+  sectionType = 'pending',
 }) {
-  const allSelected = rows.length > 0 && rows.every((item) => selectedIds.includes(item.id));
+  const navigate = useNavigate();
+  const isPending = sectionType === 'pending';
+  const isManual = sectionType === 'manual_evaluation';
+  const isSkipped = sectionType === 'skipped';
+
+  const selectableRows = rows.filter((item) => {
+    if (isPending) return true;
+    if (isSkipped) return isSkippedSelectable(item);
+    if (sectionType === 'stockout') return isItemSelectableStockout(item);
+    return false;
+  });
+  const allSelected = selectableRows.length > 0 && selectableRows.every((item) => selectedIds.includes(item.id));
   const [openMenuId, setOpenMenuId] = useState('');
   const [menuPosition, setMenuPosition] = useState(null);
   const openMenuItem = rows.find((item) => item.id === openMenuId) || null;
@@ -920,10 +1035,15 @@ function RecommendationTable({
         return '';
       }
       const menuWidth = 236;
+      const menuHeight = 150;
       const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+      const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
       const left = Math.max(12, Math.min(rect.left, viewportWidth - menuWidth - 12));
+      const overflowsBottom = rect.bottom + 8 + menuHeight > viewportHeight;
+      const hasSpaceAbove = rect.top - menuHeight - 8 > 0;
+      const top = overflowsBottom && hasSpaceAbove ? rect.top - menuHeight - 8 : rect.bottom + 8;
       setMenuPosition({
-        top: rect.bottom + 8,
+        top,
         left,
       });
       return item.id;
@@ -931,50 +1051,50 @@ function RecommendationTable({
   };
 
   const toggleAll = (checked) => {
-    setSelectedIds((current) => toggleAllSelectedRows(current, rows, checked));
+    if (checked) {
+      const idsToSelect = selectableRows.map((item) => item.id);
+      setSelectedIds((current) => Array.from(new Set([...current, ...idsToSelect])));
+    } else {
+      const idsToRemove = new Set(selectableRows.map((item) => item.id));
+      setSelectedIds((current) => current.filter((id) => !idsToRemove.has(id)));
+    }
   };
 
   return (
-    <div className="table-wrapper analysis-table-wrapper">
+    <div className={`table-wrapper analysis-table-wrapper ${isSkipped ? 'ps-table-skipped' : ''}`}>
       <table className="data-table purchase-suggestions-table ps-main-table">
-        <colgroup>
-          <col className="ps-col-select" />
-          <col className="ps-col-product" />
-          <col className="ps-col-sold7" />
-          <col className="ps-col-avg-sales" />
-          <col className="ps-col-stockout" />
-          <col className="ps-col-lead-time" />
-          <col className="ps-col-confidence" />
-          <col className="ps-col-total-stock" />
-          <col className="ps-col-quantity" />
-          <col className="ps-col-supplier" />
-          <col className="ps-col-risk" />
-          <col className="ps-col-status" />
-          <col className="ps-col-actions" />
-        </colgroup>
         <thead>
           <tr>
-            <th className="analysis-cell-nowrap">
-              <label className="purchase-suggestions-checkbox" aria-label="Tümünü seç">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={(event) => toggleAll(event.target.checked)}
-                />
-              </label>
-            </th>
-            <th>Ürün</th>
-            <th>Son 7 Gün Satış</th>
-            <th>Ort. Günlük Satış</th>
-            <th>Tahmini Stok Bitiş</th>
-            <th>Temin Süresi</th>
-            <th>Güven Skoru</th>
-            <th>Toplam Stok</th>
-            <th>Önerilen Miktar</th>
-            <th>Tedarikçi</th>
-            <th>Risk</th>
-            <th>Durum</th>
-            <th className="analysis-cell-nowrap">İşlemler</th>
+            {(isPending || isSkipped || sectionType === 'stockout') && (
+              <th className="analysis-cell-nowrap ps-col-select">
+                <label className="purchase-suggestions-checkbox" aria-label="Tümünü seç">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={(event) => toggleAll(event.target.checked)}
+                    disabled={selectableRows.length === 0}
+                  />
+                </label>
+              </th>
+            )}
+            <th className="ps-col-product">Ürün</th>
+            {!isPending ? (
+              <th className="ps-col-reason">Gerekçe</th>
+            ) : (
+              <>
+                <th>Son 7 Gün Satış</th>
+                <th>Ort. Günlük Satış</th>
+                <th>Tahmini Stok Bitiş</th>
+                <th>Temin Süresi</th>
+                <th>Güven Skoru</th>
+              </>
+            )}
+            <th className="ps-col-stock">Toplam Stok</th>
+            {!isSkipped && <th>Önerilen Miktar</th>}
+            <th className="ps-col-supplier">Tedarikçi</th>
+            {isPending && <th>Risk</th>}
+            <th className="ps-col-status">Durum</th>
+            <th className="analysis-cell-nowrap ps-col-actions">İşlemler</th>
           </tr>
         </thead>
         <tbody>
@@ -985,17 +1105,27 @@ function RecommendationTable({
             return (
               <Fragment key={item.id}>
                 <tr className="purchase-suggestions-row">
-                  <td>
-                    <label className="purchase-suggestions-checkbox" aria-label={`${item.productName} için seç`}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(item.id)}
-                        onChange={(event) => toggleRow(item.id, event.target.checked)}
-                      />
-                      <span className="sr-only">Seçili</span>
-                    </label>
-                  </td>
-                  <td className="ps-product-cell">
+                  {(isPending || isSkipped || sectionType === 'stockout') && (
+                    <td className="ps-col-select">
+                      <label className="purchase-suggestions-checkbox" aria-label={`${item.productName} için seç`}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(item.id)}
+                          onChange={(event) => toggleRow(item.id, event.target.checked)}
+                          disabled={(isSkipped && !isSkippedSelectable(item)) || (sectionType === 'stockout' && !isItemSelectableStockout(item))}
+                          title={
+                            isSkipped && !isSkippedSelectable(item)
+                              ? getSkippedDisabledReason(item)
+                              : sectionType === 'stockout' && !isItemSelectableStockout(item)
+                              ? getSkippedDisabledReason(item)
+                              : ''
+                          }
+                        />
+                        <span className="sr-only">Seçili</span>
+                      </label>
+                    </td>
+                  )}
+                  <td className="ps-product-cell ps-col-product">
                     <div className="ps-product-stack">
                       <strong className="ps-product-name" title={displayValue(item.productName, 'Ürün adı yok')}>
                         {displayValue(item.productName, 'Ürün adı yok')}
@@ -1005,30 +1135,40 @@ function RecommendationTable({
                       </span>
                     </div>
                   </td>
-                  <td className="analysis-cell-nowrap ps-number-cell">
-                    {formatNumber(item.sold7 || 0)}
-                  </td>
-                  <td className="analysis-cell-nowrap ps-number-cell">
-                    {formatNumber(item.avgDailySales || 0)}
-                  </td>
-                  <td className="analysis-cell-nowrap">
-                    <StockoutDisplay item={item} />
-                  </td>
-                  <td className="analysis-cell-nowrap ps-number-cell">
-                    {formatNumber(item.leadTimeDays || 0)} gün
-                  </td>
-                  <td className="analysis-cell-nowrap">
-                    {item.confidenceText || 'İnceleme gerekli'}
-                  </td>
-                  <td className="analysis-cell-nowrap ps-number-cell">
+                  {!isPending ? (
+                    <td className="ps-reason-cell ps-col-reason" style={{ maxWidth: '300px', whiteSpace: 'normal', color: '#4b5563' }}>
+                      {item.actionableReason || 'Bu ürün için gerekçe belirtilmedi.'}
+                    </td>
+                  ) : (
+                    <>
+                      <td className="analysis-cell-nowrap ps-number-cell">
+                        {formatNumber(item.sold7 || 0)}
+                      </td>
+                      <td className="analysis-cell-nowrap ps-number-cell">
+                        {formatNumber(item.avgDailySales || 0)}
+                      </td>
+                      <td className="analysis-cell-nowrap">
+                        <StockoutDisplay item={item} />
+                      </td>
+                      <td className="analysis-cell-nowrap ps-number-cell">
+                        {formatNumber(item.leadTimeDays || 0)} gün
+                      </td>
+                      <td className="analysis-cell-nowrap">
+                        {item.confidenceText || 'İnceleme gerekli'}
+                      </td>
+                    </>
+                  )}
+                  <td className="analysis-cell-nowrap ps-number-cell ps-col-stock">
                     {totalStockValue === null ? 'Veri yok' : formatNumber(totalStockValue)}
                   </td>
-                  <td className="analysis-cell-nowrap">
-                    <span className="ps-quantity-cell" title={quantity.secondary || quantity.primary}>
-                      {quantity.primary}
-                    </span>
-                  </td>
-                  <td>
+                  {!isSkipped && (
+                    <td className="analysis-cell-nowrap">
+                      <span className="ps-quantity-cell" title={quantity.secondary || quantity.primary}>
+                        {quantity.primary}
+                      </span>
+                    </td>
+                  )}
+                  <td className="ps-col-supplier">
                     <div className="ps-supplier-cell">
                       <strong title={displayValue(item.supplierName, 'Tedarikçi bilgisi yok')}>
                         {displayValue(item.supplierName, 'Tedarikçi bilgisi yok')}
@@ -1037,29 +1177,164 @@ function RecommendationTable({
                       {item.supplierMissing ? <span>Varsayılan tedarikçi eksik</span> : null}
                     </div>
                   </td>
-                  <td className="analysis-cell-nowrap">
-                    <StatusBadge tone={riskTone[item.riskLevel] || 'neutral'}>
-                      {riskLabel[item.riskLevel] || 'Bilgi yok'}
-                    </StatusBadge>
-                  </td>
-                  <td className="analysis-cell-nowrap">
+                  {isPending && (
+                    <td className="analysis-cell-nowrap">
+                      <StatusBadge tone={riskTone[item.riskLevel] || 'neutral'}>
+                        {riskLabel[item.riskLevel] || 'Bilgi yok'}
+                      </StatusBadge>
+                    </td>
+                  )}
+                  <td className="analysis-cell-nowrap ps-col-status">
                     <StatusBadge tone={statusTone[item.status] || 'neutral'}>
                       {statusLabel[item.status] || item.status || 'Bilgi yok'}
                     </StatusBadge>
                   </td>
-                  <td className="ps-actions-cell">
+                  <td className="ps-actions-cell ps-col-actions">
                     <div className="table-actions purchase-suggestions-row-actions">
                       {isAdmin ? (
                         <>
-                          <button
-                            className="ps-action-chip ps-action-chip-primary"
-                            type="button"
-                            aria-label="Siparişe Dönüştür"
-                            onClick={() => handleConvertToOrder(item)}
-                            disabled={processingId === item.id || normalizeSuggestionStatus(item.status) !== 'pending'}
-                          >
-                            Siparişe Dönüştür
-                          </button>
+                          {isPending && (
+                            <button
+                              className="ps-action-chip ps-action-chip-primary"
+                              type="button"
+                              aria-label="Siparişe Dönüştür"
+                              onClick={() => handleConvertToOrder(item)}
+                              disabled={processingId === item.id || normalizeSuggestionStatus(item.status) !== 'pending'}
+                            >
+                              Siparişe Dönüştür
+                            </button>
+                          )}
+
+                          {isManual && (
+                            !item.supplierMissing ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-primary"
+                                type="button"
+                                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+                                onClick={() => handleOpenManualComposeScreen(item)}
+                                disabled={processingId === item.id}
+                              >
+                                Manuel Sipariş Hazırla
+                              </button>
+                            ) : (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate('/eslesmeler')}
+                              >
+                                Tedarikçi Eşleştir
+                              </button>
+                            )
+                          )}
+
+                          {isSkipped && (
+                            isSkippedSelectable(item) ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-primary"
+                                type="button"
+                                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+                                onClick={() => handleOpenManualComposeScreen(item)}
+                                disabled={processingId === item.id}
+                              >
+                                Manuel Sipariş Hazırla
+                              </button>
+                            ) : item.reasonTags?.includes('missing_supplier_mapping') || item.supplierMissing ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate('/eslesmeler')}
+                              >
+                                Tedarikçi Eşleştir
+                              </button>
+                            ) : item.reasonTags?.includes('inactive_supplier') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate('/tedarikciler')}
+                              >
+                                Tedarikçiyi Kontrol Et
+                              </button>
+                            ) : item.reasonTags?.includes('inbound_covered') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-neutral"
+                                type="button"
+                                onClick={() => navigate('/siparis-takibi')}
+                              >
+                                Yoldaki Siparişi Gör
+                              </button>
+                            ) : item.reasonTags?.includes('product_inactive') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-neutral"
+                                type="button"
+                                onClick={() => navigate(`/urunler?search=${item.sku}`)}
+                              >
+                                Ürün Detayını Gör
+                              </button>
+                            ) : item.reasonTags?.some((tag) => ['missing_min_stock', 'missing_lead_time', 'missing_moq_or_case_data'].includes(tag)) ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate(`/urunler?search=${item.sku}`)}
+                              >
+                                Eksik Tanımı Tamamla
+                              </button>
+                            ) : null
+                          )}
+
+                          {sectionType === 'stockout' && (
+                            isItemSelectableStockout(item) ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-primary"
+                                type="button"
+                                style={{ backgroundColor: '#2563eb', color: '#ffffff' }}
+                                onClick={() => handleOpenManualComposeScreen(item)}
+                                disabled={processingId === item.id}
+                              >
+                                Manuel Sipariş Hazırla
+                              </button>
+                            ) : item.reasonTags?.includes('missing_supplier_mapping') || item.supplierMissing ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate('/eslesmeler')}
+                              >
+                                Tedarikçi Eşleştir
+                              </button>
+                            ) : item.reasonTags?.includes('inactive_supplier') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate('/tedarikciler')}
+                              >
+                                Tedarikçiyi Kontrol Et
+                              </button>
+                            ) : item.reasonTags?.includes('inbound_covered') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-neutral"
+                                type="button"
+                                onClick={() => navigate('/siparis-takibi')}
+                              >
+                                Yoldaki Siparişi Gör
+                              </button>
+                            ) : item.reasonTags?.includes('product_inactive') ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-neutral"
+                                type="button"
+                                onClick={() => navigate(`/urunler?search=${item.sku}`)}
+                              >
+                                Ürün Detayını Gör
+                              </button>
+                            ) : item.reasonTags?.some((tag) => ['missing_min_stock', 'missing_lead_time', 'missing_moq_or_case_data'].includes(tag)) ? (
+                              <button
+                                className="ps-action-chip ps-action-chip-warning"
+                                type="button"
+                                onClick={() => navigate(`/urunler?search=${item.sku}`)}
+                              >
+                                Eksik Tanımı Tamamla
+                              </button>
+                            ) : null
+                          )}
+
                           <div className="ps-row-menu">
                             <button
                               className="ps-row-menu-trigger"
@@ -1071,7 +1346,7 @@ function RecommendationTable({
                               onClick={(event) => openRowMenu(event, item)}
                             >
                               <MoreHorizontal size={16} aria-hidden="true" />
-                              <span>Diğer</span>
+                              <span>Seçenekler</span>
                             </button>
                           </div>
                         </>
@@ -1102,30 +1377,34 @@ function RecommendationTable({
           >
             Detay
           </button>
-          <button
-            className="ps-menu-action"
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              closeRowMenu();
-              handleOpenComposeScreen(openMenuItem);
-            }}
-            disabled={processingId === openMenuItem.id || normalizeSuggestionStatus(openMenuItem.status) !== 'pending'}
-          >
-            Öneriyi Taslakta Düzenle
-          </button>
-          <button
-            className="ps-menu-action ps-menu-action-danger"
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              closeRowMenu();
-              setRejectTarget(openMenuItem);
-            }}
-            disabled={processingId === openMenuItem.id || normalizeSuggestionStatus(openMenuItem.status) !== 'pending'}
-          >
-            Reddet
-          </button>
+          {sectionType === 'pending' && (
+            <>
+              <button
+                className="ps-menu-action"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowMenu();
+                  handleOpenComposeScreen(openMenuItem);
+                }}
+                disabled={processingId === openMenuItem.id || normalizeSuggestionStatus(openMenuItem.status) !== 'pending'}
+              >
+                Öneriyi Taslakta Düzenle
+              </button>
+              <button
+                className="ps-menu-action ps-menu-action-danger"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeRowMenu();
+                  setRejectTarget(openMenuItem);
+                }}
+                disabled={processingId === openMenuItem.id || normalizeSuggestionStatus(openMenuItem.status) !== 'pending'}
+              >
+                Reddet
+              </button>
+            </>
+          )}
         </div>,
         document.body
       ) : null}
@@ -1289,6 +1568,26 @@ function RecommendationDetailModal({
   );
 }
 
+const normalizeCreatedOrderResult = (order = {}) => {
+  const id = String(order.id || order.linkedOrderId || '').trim();
+  const orderNumber = String(order.orderNumber || order.linkedOrderNumber || '').trim();
+  const status = String(order.currentStatus || order.current_status || order.status || '').trim();
+  if (!id || !orderNumber || !status) {
+    throw new Error('Sipariş oluşturma yanıtında kimlik, sipariş numarası veya durum bilgisi eksik.');
+  }
+  const isAwaitingApproval = status === 'submitted_for_approval';
+  return {
+    id,
+    orderNumber,
+    status,
+    title: isAwaitingApproval ? 'Sipariş onaya gönderildi' : 'Sipariş oluşturuldu',
+    detail: isAwaitingApproval
+      ? `${orderNumber} Onay Bekleyen Siparişler alanında görüntülenebilir.`
+      : `${orderNumber} Sipariş Takibi sayfasında görüntülenebilir.`,
+    actionLabel: isAwaitingApproval ? 'Onay Bekleyenlere Git' : 'Detaya Git',
+  };
+};
+
 export default function PurchaseSuggestions() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -1328,6 +1627,7 @@ export default function PurchaseSuggestions() {
   const [archivePage, setArchivePage] = useState(1);
   const [isArchiveOpen, setIsArchiveOpen] = useState(false);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
+  const [activeSectionTab, setActiveSectionTab] = useState('pending'); // 'pending', 'manual_evaluation', 'skipped'
 
   const generationInFlightRef = useRef(false);
   const hasBootstrappedRef = useRef(false);
@@ -1354,7 +1654,9 @@ export default function PurchaseSuggestions() {
       const loadActive = shouldLoadActiveSuggestions(query);
       const loadArchive = (requestedLoadArchive || Boolean(query.status && isArchivedSuggestionStatus(query.status))) && shouldLoadArchiveSuggestions(query);
       const activeQuery = loadActive
-         ? buildSuggestionQueryParams(query, { page: requestedListPage, statusGroup: query.status ? '' : 'active' })
+         ? (activeSectionTab === 'stockout'
+           ? buildSuggestionQueryParams({ ...query, status: '', stockoutEligible: 'true' }, { page: requestedListPage })
+           : buildSuggestionQueryParams({ ...query, status: SECTION_TAB_STATUS[activeSectionTab] || SECTION_TAB_STATUS.pending }, { page: requestedListPage }))
         : null;
       const archiveQuery = loadArchive
          ? buildSuggestionQueryParams(query, { page: requestedArchivePage, statusGroup: query.status ? '' : 'archive' })
@@ -1438,10 +1740,19 @@ export default function PurchaseSuggestions() {
     try {
       generationInFlightRef.current = true;
       setProcessingId(reason === 'auto' ? 'generate' : reason);
-      await procurementService.generateSuggestions(generationOptions);
-      await loadData(filters, { listPage, archivePage, loadArchive: isArchiveOpen });
+      const generationResult = await procurementService.generateSuggestions(generationOptions);
+      const generationSummary = generationResult?.summary || generationResult?.data?.summary || null;
+      if (generationSummary) setGeneratorSummary(generationSummary);
+      await loadData(filters, { listPage: 1, archivePage, loadArchive: isArchiveOpen });
       if (reason !== 'auto') {
-        setToast({ type: 'success', title: 'Sipariş Önerileri', message: 'Talep analizi tamamlandı, öneriler yenilendi.' });
+        const dominantReason = generationSummary?.reasonBreakdown?.[0];
+        const resultText = generationSummary
+          ? `${formatNumber(generationSummary.pendingCount || 0)} bekleyen, ${formatNumber(generationSummary.manualEvaluationCount || 0)} manuel, ${formatNumber(generationSummary.skippedCount || 0)} öneriye alınmayan kayıt.`
+          : 'Öneri kayıtları yenilendi.';
+        const reasonText = dominantReason
+          ? ` Baskın neden: ${dominantReason.text || reasonTagLabel[dominantReason.code] || dominantReason.code} (${formatNumber(dominantReason.count)} ürün).`
+          : '';
+        setToast({ type: 'success', title: 'Talep analizi tamamlandı', message: `${resultText}${reasonText}` });
       }
     } catch (error) {
       setToast({ type: 'error', title: 'Sipariş Önerileri', message: toUserFacingOperationError(error, 'Öneriler şu anda oluşturulamadı.') });
@@ -1470,7 +1781,7 @@ export default function PurchaseSuggestions() {
       void loadData(filters, { listPage, archivePage, loadArchive: isArchiveOpen });
     }, 300);
     return () => window.clearTimeout(timeoutId);
-  }, [filters, listPage, archivePage, isArchiveOpen]);
+  }, [filters, listPage, archivePage, isArchiveOpen, activeSectionTab]);
 
   const supplierOptionsByProduct = useMemo(() => {
     const map = new Map();
@@ -1522,7 +1833,10 @@ export default function PurchaseSuggestions() {
       const suggestedQty = Number(item.suggestedQty || buildSuggestionQuantity({ ...rowContext, avgDailySales, leadTimeDays }));
       const dataFreshness = item.dataFreshness || { isStale: Boolean(item.isStale), reasons: item.staleReasons || [] };
       const isStale = Boolean(item.isStale || dataFreshness.isStale);
-      const confidenceScore = computeConfidenceScore({ ...rowContext, avgDailySales, leadTimeDays, daysToStockout, suggestedQty, dataFreshness, isStale });
+      const backendConfidenceScore = Number(item.confidenceScore);
+      const confidenceScore = Number.isFinite(backendConfidenceScore)
+        ? Math.max(0, Math.min(100, Math.round(backendConfidenceScore)))
+        : computeConfidenceScore({ ...rowContext, avgDailySales, leadTimeDays, daysToStockout, suggestedQty, dataFreshness, isStale });
       const explanation = buildRecommendationExplanation({ ...rowContext, avgDailySales, leadTimeDays, suggestedQty, confidenceScore, dataFreshness, isStale });
       const salesTrend = Array.isArray(item.salesTrendLast14Days) 
         ? item.salesTrendLast14Days
@@ -1558,7 +1872,9 @@ export default function PurchaseSuggestions() {
         trendDirection: resolveTrendDirection(item),
         explanation,
         salesTrend,
-        actionableReason: buildBetterReason({ ...item, sold7: Number(item.sold7 || 0), leadTimeDays, currentStock: Number(item.currentStock || 0), criticalStock: Number(item.criticalStock || 0) }),
+        actionableReason: ['manual_evaluation', 'skipped'].includes(effectiveStatus)
+          ? getTurkishReason({ ...item, supplierMissing: !chosenSupplierId })
+          : buildBetterReason({ ...item, sold7: Number(item.sold7 || 0), leadTimeDays, currentStock: Number(item.currentStock || 0), criticalStock: Number(item.criticalStock || 0), supplierMissing: !chosenSupplierId }),
         actionAt: getArchiveActionAt(item),
         actionBy: resolveArchiveActor(item),
       };
@@ -1579,9 +1895,17 @@ export default function PurchaseSuggestions() {
     [enrichedRows]
   );
 
-  const activeFilteredRows = useMemo(
+  const allActiveFilteredRows = useMemo(
     () => filteredRows.filter((item) => isActiveSuggestionStatus(item.status)),
     [filteredRows]
+  );
+
+  const activeFilteredRows = useMemo(
+    () => filteredRows.filter((item) => {
+      const status = normalizeSuggestionStatus(item.status);
+      return isActiveSuggestionStatus(status) && status === (SECTION_TAB_STATUS[activeSectionTab] || SECTION_TAB_STATUS.pending);
+    }),
+    [filteredRows, activeSectionTab]
   );
 
   const archiveFilteredRows = useMemo(
@@ -1590,13 +1914,22 @@ export default function PurchaseSuggestions() {
   );
 
   const summary = useMemo(() => ({
-    total: Number(filteredSummary?.activeCount ?? activeFilteredRows.length),
-    pending: Number(filteredSummary?.pendingCount ?? activeFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'pending').length),
-    approved: Number(archiveFilteredSummary?.approvedCount ?? archiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'approved').length),
-    criticalRisk: Number(filteredSummary?.highRiskCount ?? activeFilteredRows.filter((item) => ['critical', 'high'].includes(String(item.riskLevel || '').toLowerCase())).length),
-    calendarSensitive: activeFilteredRows.filter((item) => containsCalendarSignal(item.reasonTags)).length,
-    urgentByLeadTime: activeFilteredRows.filter((item) => Number(item.daysToStockout || 999) <= Number(item.leadTimeDays || 0) + 2).length,
-  }), [activeFilteredRows, archiveFilteredRows, archiveFilteredSummary, filteredSummary]);
+    total: Number(filteredSummary?.activeCount ?? allActiveFilteredRows.length),
+    pending: Number(filteredSummary?.pendingCount ?? allActiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'pending').length),
+    manualEvaluation: Number(filteredSummary?.manualEvaluationCount ?? allActiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'manual_evaluation').length),
+    skipped: Number(filteredSummary?.skippedCount ?? allActiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'skipped').length),
+    approved: Number(
+      archiveFilteredSummary?.convertedCount
+      ?? archiveFilteredRows.filter((item) => normalizeSuggestionStatus(item.status) === 'converted').length
+    ),
+    criticalRisk: Number(filteredSummary?.highRiskCount ?? allActiveFilteredRows.filter((item) => ['critical', 'high'].includes(String(item.riskLevel || '').toLowerCase())).length),
+    calendarSensitive: allActiveFilteredRows.filter((item) => containsCalendarSignal(item.reasonTags)).length,
+    urgentByLeadTime: allActiveFilteredRows.filter((item) => Number(item.daysToStockout || 999) <= Number(item.leadTimeDays || 0) + 2).length,
+    stockoutCount: Number(filteredSummary?.stockoutCount ?? generatorSummary?.stockoutCount ?? 0),
+    archive: Number(generatorSummary?.archiveCount ?? archiveFilteredSummary?.archiveCount ?? archivePagination.total ?? 0),
+    evaluated: Number(generatorSummary?.totalEvaluated || 0),
+    salesDataAvailable: Math.max(0, Number(generatorSummary?.totalEvaluated || 0) - Number(generatorSummary?.noRecentSalesCount || 0)),
+  }), [allActiveFilteredRows, archiveFilteredRows, archiveFilteredSummary, archivePagination.total, filteredSummary, generatorSummary]);
 
   const pagedRecommendationRows = activeFilteredRows;
 
@@ -1607,7 +1940,7 @@ export default function PurchaseSuggestions() {
 
   const purchaseRiskChartData = useMemo(() => {
     const map = { critical: 0, high: 0, medium: 0, low: 0 };
-    activeFilteredRows.forEach((item) => {
+    allActiveFilteredRows.forEach((item) => {
       const key = String(item.riskLevel || '').toLowerCase('tr-TR');
       if (key in map) map[key] += 1;
     });
@@ -1617,7 +1950,7 @@ export default function PurchaseSuggestions() {
       { name: 'Orta', count: map.medium },
       { name: 'Düşük', count: map.low },
     ];
-  }, [activeFilteredRows]);
+  }, [allActiveFilteredRows]);
 
   const purchaseStatusChartData = useMemo(() => ([
     { name: 'Bekleyen', count: summary.pending },
@@ -1627,6 +1960,18 @@ export default function PurchaseSuggestions() {
   ]), [archiveFilteredRows, summary]);
 
   const reasonDistributionData = useMemo(() => {
+    const generationReasons = Array.isArray(generatorSummary?.reasonBreakdown)
+      ? generatorSummary.reasonBreakdown.filter((item) => Number(item.count || 0) > 0)
+      : [];
+    if (generationReasons.length) {
+      const total = generationReasons.reduce((sum, item) => sum + Number(item.count || 0), 0);
+      return generationReasons.slice(0, 8).map((item, index) => ({
+        name: item.text || reasonTagLabel[item.code] || item.code,
+        count: Number(item.count || 0),
+        percent: total ? Math.round((Number(item.count || 0) / total) * 100) : 0,
+        color: reasonDistributionColors[index % reasonDistributionColors.length],
+      }));
+    }
     const counts = new Map();
     activeFilteredRows.forEach((item) => {
       getReasonDistributionSignals(item).forEach((category) => {
@@ -1643,14 +1988,9 @@ export default function PurchaseSuggestions() {
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'tr-TR'))
       .slice(0, 8)
       .map((item, index) => ({ ...item, color: reasonDistributionColors[index % reasonDistributionColors.length] }));
-  }, [activeFilteredRows]);
+  }, [activeFilteredRows, generatorSummary]);
 
-  const reasonDistributionTotal = activeFilteredRows.length;
   const reasonDistributionMaxCount = Math.max(1, ...reasonDistributionData.map((item) => item.count));
-  const reasonDistributionLowData = reasonDistributionTotal > 0 && (
-    reasonDistributionData.length <= 1
-    || Number(reasonDistributionData[0].percent || 0) >= 86
-  );
 
   const selectedRows = useMemo(() => {
     const selectedSet = new Set(selectedIds);
@@ -1673,13 +2013,22 @@ export default function PurchaseSuggestions() {
     missingLeadTime: Number(generatorSummary?.missingLeadTimeCount || 0),
     noRecentSales: Number(generatorSummary?.noRecentSalesCount || 0),
     sufficientStock: Number(generatorSummary?.sufficientStockCount || 0),
-    lookbackDays: 30,
+    missingSupplier: Number(generatorSummary?.missingSupplierMappingCount || 0),
+    missingMoq: Number(generatorSummary?.missingMoqOrCaseDataCount || 0),
+    inboundCovered: Number(generatorSummary?.suppressedByInboundCount || 0),
+    modeGuard: Number(generatorSummary?.skippedByModeOrRiskCount || 0),
+    lookbackDays: Number(generatorSummary?.lookbackDays || 30),
   }), [generatorSummary]);
+
+  const dominantDiagnosticReasons = useMemo(
+    () => (Array.isArray(generatorSummary?.reasonBreakdown) ? generatorSummary.reasonBreakdown.slice(0, 4) : []),
+    [generatorSummary]
+  );
 
   useEffect(() => {
     setListPage(1);
     setArchivePage(1);
-  }, [activePreset, filters, groupBySupplier]);
+  }, [activePreset, filters, groupBySupplier, activeSectionTab]);
 
   useEffect(() => {
     const activeIdSet = new Set(activeRows.map((item) => item.id));
@@ -1723,7 +2072,7 @@ export default function PurchaseSuggestions() {
     return {
       validItems,
       invalidReasons,
-      href: `/siparis-olustur${params.toString()}`,
+      href: `/siparis-olustur?${params.toString()}`,
       state: {
         from: '/siparis-onerileri',
         purchaseSuggestionHandoffId: handoffId,
@@ -1880,8 +2229,24 @@ export default function PurchaseSuggestions() {
     const invalidReasons = [];
     const createRequests = [];
     const seenKeys = new Set();
+    let suitabilityExcluded = false;
 
+    // Filter out unsuitable items first
+    const suitableRows = [];
     inputRows.forEach((row) => {
+      const hasReasonTag = (tag) => Array.isArray(row.reasonTags) && row.reasonTags.includes(tag);
+      const isPassive = row.isActive === false || hasReasonTag('product_inactive');
+      const isInboundCovered = hasReasonTag('inbound_covered');
+      const supplierId = String(row.supplierId || row.supplier?.id || row.payload?.supplierId || '').trim();
+
+      if (isPassive || isInboundCovered || !supplierId) {
+        suitabilityExcluded = true;
+        return;
+      }
+      suitableRows.push(row);
+    });
+
+    suitableRows.forEach((row) => {
       const normalized = buildNavigationItem(row);
       if (!normalized.valid) {
         invalidReasons.push(normalized.reason);
@@ -1895,24 +2260,23 @@ export default function PurchaseSuggestions() {
     });
 
     if (!validItems.length) {
-      return { validItems: [], invalidReasons };
+      return { validItems: [], invalidReasons, createRequests, suitabilityExcluded };
     }
 
     const availability = await Promise.all(validItems.map((item) => ensureDraftTarget(item, { allowCreate })));
-    const availableItems = availability
-      .filter((result) => result.ok)
-      .map((result) => result.item);
-    availability
-      .filter((result) => result.requiresSupplierProductCreate)
-      .forEach((result) => createRequests.push(result));
-    const unavailableReasons = availability
-      .filter((result) => !result.ok && !result.requiresSupplierProductCreate)
-      .map((result) => result.reason)
-      .filter(Boolean);
-    invalidReasons.push(...unavailableReasons);
+    const availableItems = [];
+    availability.forEach((result) => {
+      if (result.ok) {
+        availableItems.push(result.item);
+      } else if (result.requiresSupplierProductCreate) {
+        createRequests.push(result);
+      } else {
+        invalidReasons.push(result.reason);
+      }
+    });
 
     if (!availableItems.length) {
-      return { validItems: [], invalidReasons, createRequests };
+      return { validItems: [], invalidReasons, createRequests, suitabilityExcluded };
     }
 
     const handoffId = writeSuggestionHandoff({
@@ -1931,7 +2295,8 @@ export default function PurchaseSuggestions() {
       validItems: availableItems,
       invalidReasons,
       createRequests,
-      href: `/siparis-olustur${params.toString()}`,
+      suitabilityExcluded,
+      href: `/siparis-olustur?${params.toString()}`,
       state: {
         from: '/siparis-onerileri',
         purchaseSuggestionHandoffId: handoffId,
@@ -1951,18 +2316,51 @@ export default function PurchaseSuggestions() {
   const handleOpenComposeScreen = async (item) => {
     try {
       setProcessingId(item.id || 'compose');
-      const { validItems, invalidReasons, createRequests, href, state } = await buildDraftNavigationPayload([item], 'single');
+      const { validItems, invalidReasons, createRequests, href, state, suitabilityExcluded } = await buildDraftNavigationPayload([item], 'single');
       if (createRequests.length) {
         setDraftCreateTarget({ mode: 'single', rows: [item], message: createRequests[0].reason });
         return;
       }
       if (!validItems.length) {
         setToast({ type: 'error', title: 'Taslakta Düzenle', message: invalidReasons[0] || 'Öneriye bağlı taslak bulunamadı.' });
+        if (suitabilityExcluded) {
+          setToast({ type: 'warning', title: 'Uygun Olmayan Ürün', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+        }
         return;
       }
 
-      if (invalidReasons.length) {
+      if (suitabilityExcluded) {
+        setToast({ type: 'warning', title: 'Uygun Olmayan Ürün', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+      } else if (invalidReasons.length) {
         setToast({ type: 'warning', title: 'Taslakta Düzenle', message: invalidReasons[0] });
+      }
+
+      navigate(href, { state });
+    } finally {
+      setProcessingId('');
+    }
+  };
+
+  const handleOpenManualComposeScreen = async (item) => {
+    try {
+      setProcessingId(item.id || 'compose');
+      const { validItems, invalidReasons, createRequests, href, state, suitabilityExcluded } = await buildDraftNavigationPayload([item], 'manual');
+      if (createRequests?.length) {
+        setDraftCreateTarget({ mode: 'manual', rows: [item], message: createRequests[0].reason });
+        return;
+      }
+      if (!validItems.length) {
+        setToast({ type: 'error', title: 'Manuel Sipariş Hazırla', message: invalidReasons[0] || 'Öneriye bağlı uygun ürün bulunamadı.' });
+        if (suitabilityExcluded) {
+          setToast({ type: 'warning', title: 'Uygun Olmayan Ürün', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+        }
+        return;
+      }
+
+      if (suitabilityExcluded) {
+        setToast({ type: 'warning', title: 'Uygun Olmayan Ürün', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+      } else if (invalidReasons.length) {
+        setToast({ type: 'warning', title: 'Manuel Sipariş Hazırla', message: invalidReasons[0] });
       }
 
       navigate(href, { state });
@@ -1973,28 +2371,35 @@ export default function PurchaseSuggestions() {
 
   const handleConfirmDraftCreate = async () => {
     if (!draftCreateTarget.rows.length) return;
+    const isManual = draftCreateTarget.mode === 'manual';
+    const actionTitle = isManual ? 'Manuel Sipariş Hazırla' : 'Taslakta Düzenle';
     try {
       setProcessingId('draft-create');
-      const { validItems, invalidReasons, href, state } = await buildDraftNavigationPayload(
+      const { validItems, invalidReasons, href, state, suitabilityExcluded } = await buildDraftNavigationPayload(
         draftCreateTarget.rows,
         draftCreateTarget.mode || 'single',
         { allowCreate: true }
       );
       if (!validItems.length) {
-        setToast({ type: 'error', title: 'Taslakta Düzenle', message: invalidReasons[0] || 'Taslak için tedarikçi eşleşmesi oluşturulamadı.' });
+        setToast({ type: 'error', title: actionTitle, message: invalidReasons[0] || 'Taslak için tedarikçi eşleşmesi oluşturulamadı.' });
+        if (suitabilityExcluded) {
+          setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+        }
         return;
       }
-      if (invalidReasons.length) {
+      if (suitabilityExcluded) {
+        setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+      } else if (invalidReasons.length) {
         setToast({
           type: 'warning',
-          title: 'Taslakta Düzenle',
+          title: actionTitle,
           message: `${formatNumber(validItems.length)} öneri aktarıldı, ${formatNumber(invalidReasons.length)} kayıt atlandı.`,
         });
       }
       setDraftCreateTarget(null);
       navigate(href, { state });
     } catch (error) {
-      setToast({ type: 'error', title: 'Taslakta Düzenle', message: toUserFacingOperationError(error, 'Taslak için tedarikçi eşleşmesi oluşturulamadı.') });
+      setToast({ type: 'error', title: actionTitle, message: toUserFacingOperationError(error, 'Taslak için tedarikçi eşleşmesi oluşturulamadı.') });
     } finally {
       setProcessingId('');
     }
@@ -2008,6 +2413,7 @@ export default function PurchaseSuggestions() {
         from: '/siparis-onerileri',
         openOrderId: orderId,
         openOrderNumber: orderNumber,
+        openOrderStatus: order.status || '',
       },
     });
   };
@@ -2017,16 +2423,12 @@ export default function PurchaseSuggestions() {
     try {
       setProcessingId(item.id);
       const order = await procurementService.approveSuggestion(item.id, {});
-      setCreatedOrderNotice({
-        id: order.id || order.linkedOrderId || '',
-        orderNumber: order.orderNumber || order.linkedOrderNumber || '',
-      });
+      const createdOrder = normalizeCreatedOrderResult(order);
+      setCreatedOrderNotice(createdOrder);
       setToast({
         type: 'success',
-        title: 'Sipariş Oluşturuldu',
-        message: order.orderNumber
-           ? `${order.orderNumber} başarıyla oluşturuldu.`
-          : 'Sipariş başarıyla oluşturuldu.',
+        title: createdOrder.title,
+        message: createdOrder.detail,
       });
       setSelectedIds((current) => current.filter((id) => id !== item.id));
       await loadData(filters, { listPage, archivePage, loadArchive: isArchiveOpen });
@@ -2086,7 +2488,7 @@ export default function PurchaseSuggestions() {
       setProcessingId(`bulk-${actionType}`);
 
       if (actionType === 'compose') {
-        const { validItems, invalidReasons, createRequests, href, state } = await buildDraftNavigationPayload(selectedRows, 'bulk');
+        const { validItems, invalidReasons, createRequests, href, state, suitabilityExcluded } = await buildDraftNavigationPayload(selectedRows, 'bulk');
         if (createRequests.length) {
           setDraftCreateTarget({
             mode: 'bulk',
@@ -2097,10 +2499,15 @@ export default function PurchaseSuggestions() {
         }
         if (!validItems.length) {
           setToast({ type: 'error', title: 'Taslakta Düzenle', message: invalidReasons[0] || 'Taslağa aktarılabilecek öneri bulunamadı.' });
+          if (suitabilityExcluded) {
+            setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+          }
           return;
         }
 
-        if (invalidReasons.length) {
+        if (suitabilityExcluded) {
+          setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+        } else if (invalidReasons.length) {
           setToast({
             type: 'warning',
             title: 'Taslakta Düzenle',
@@ -2111,11 +2518,40 @@ export default function PurchaseSuggestions() {
         navigate(href, { state });
       }
 
+      if (actionType === 'manual') {
+        const { validItems, invalidReasons, createRequests, href, state, suitabilityExcluded } = await buildDraftNavigationPayload(selectedRows, 'manual');
+        if (createRequests?.length) {
+          setDraftCreateTarget({
+            mode: 'manual',
+            rows: selectedRows,
+            message: `${formatNumber(createRequests.length)} öneri için tedarikçi eşleşmesi oluşturulacak.`,
+          });
+          return;
+        }
+        if (!validItems.length) {
+          setToast({ type: 'error', title: 'Manuel Sipariş Hazırla', message: invalidReasons[0] || 'Seçili ürünlerden sipariş hazırlanamadı.' });
+          if (suitabilityExcluded) {
+            setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+          }
+          return;
+        }
+        if (suitabilityExcluded) {
+          setToast({ type: 'warning', title: 'Uygun Olmayan Ürünler', message: 'Bazı ürünler tedarikçi/uygunluk eksikliği nedeniyle siparişe aktarılamadı.' });
+        } else if (invalidReasons.length) {
+          setToast({
+            type: 'warning',
+            title: 'Manuel Sipariş Hazırla',
+            message: `${formatNumber(validItems.length)} ürün aktarıldı, ${formatNumber(invalidReasons.length)} kayıt atlandı.`,
+          });
+        }
+        navigate(href, { state });
+      }
+
       if (actionType === 'convert') {
         const results = [];
         for (const item of selectedRows) {
           try {
-            const order = await procurementService.approveSuggestion(item.id, {});
+            const order = normalizeCreatedOrderResult(await procurementService.approveSuggestion(item.id, {}));
             results.push({ ok: true, item, order });
           } catch (error) {
             results.push({ ok: false, item, error });
@@ -2124,12 +2560,9 @@ export default function PurchaseSuggestions() {
 
         const successCount = results.filter((result) => result.ok).length;
         const failed = results.filter((result) => !result.ok);
-        const firstOrder = results.find((result) => result.ok).order || null;
+        const firstOrder = results.find((result) => result.ok)?.order || null;
         if (firstOrder) {
-          setCreatedOrderNotice({
-            id: firstOrder.id || firstOrder.linkedOrderId || '',
-            orderNumber: firstOrder.orderNumber || firstOrder.linkedOrderNumber || '',
-          });
+          setCreatedOrderNotice(firstOrder);
         }
         setSelectedIds([]);
         await loadData(filters, { listPage, archivePage, loadArchive: isArchiveOpen });
@@ -2149,8 +2582,8 @@ export default function PurchaseSuggestions() {
 
         setToast({
           type: 'success',
-          title: 'Siparişler Oluşturuldu',
-          message: `${formatNumber(successCount)} öneri siparişe dönüştürüldü.`,
+          title: 'Siparişler Onaya Gönderildi',
+          message: `${formatNumber(successCount)} öneri siparişe dönüştürüldü ve onay bekleyen siparişlere eklendi.`,
         });
       }
 
@@ -2200,6 +2633,14 @@ export default function PurchaseSuggestions() {
     });
   };
 
+  const hasActiveFilters = Boolean(
+    filters.search ||
+    filters.supplierId ||
+    filters.riskLevel ||
+    filters.preset ||
+    (filters.status && filters.status !== activeSectionTab)
+  );
+
   const listMetricCards = [
     { key: 'total', label: 'Toplam', value: summary.total, icon: ClipboardList, tone: 'blue', caption: 'Filtreye uyan öneri' },
     { key: 'pending', label: 'Bekleyen', value: summary.pending, icon: Clock3, tone: 'amber', caption: 'Karar bekleyen satır' },
@@ -2246,11 +2687,11 @@ export default function PurchaseSuggestions() {
           <div className="ps-order-created-notice" role="status" aria-live="polite">
             <CheckCircle2 size={18} />
             <div>
-              <strong>Sipariş başarıyla oluşturuldu.</strong>
-              <span>{createdOrderNotice.orderNumber ? `${createdOrderNotice.orderNumber} için detayları Sipariş Takibi sayfasından açabilirsiniz.` : 'Detayları Sipariş Takibi sayfasından açabilirsiniz.'}</span>
+              <strong>{createdOrderNotice.title}</strong>
+              <span>{createdOrderNotice.detail}</span>
             </div>
             <button type="button" className="ghost-button ps-btn" onClick={() => openLinkedOrder(createdOrderNotice)}>
-              Detaya Git
+              {createdOrderNotice.actionLabel}
             </button>
             <button type="button" className="ghost-button ps-notice-close" aria-label="Bilgilendirmeyi kapat" onClick={() => setCreatedOrderNotice(null)}>
               ×
@@ -2261,27 +2702,52 @@ export default function PurchaseSuggestions() {
         <section className="ps-kpi-grid" aria-label="KPI özet">
           <div className="ps-kpi ps-kpi-blue">
             <span className="ps-kpi-icon"><ClipboardList size={18} /></span>
-            <div><div className="ps-kpi-title">Toplam Öneri</div><div className="ps-kpi-value">{formatNumber(summary.total)}</div></div>
+            <div><div className="ps-kpi-title">Bekleyen Öneri</div><div className="ps-kpi-value">{formatNumber(summary.pending)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-amber">
             <span className="ps-kpi-icon"><Clock3 size={18} /></span>
-            <div><div className="ps-kpi-title">Bekleyen</div><div className="ps-kpi-value">{formatNumber(summary.pending)}</div></div>
+            <div><div className="ps-kpi-title">Manuel Değerlendirme</div><div className="ps-kpi-value">{formatNumber(summary.manualEvaluation)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-green">
-            <span className="ps-kpi-icon"><CheckCircle2 size={18} /></span>
-            <div><div className="ps-kpi-title">Siparişe Dönüşen</div><div className="ps-kpi-value">{formatNumber(summary.approved)}</div></div>
+            <span className="ps-kpi-icon"><Info size={18} /></span>
+            <div><div className="ps-kpi-title">Öneriye Alınmayan</div><div className="ps-kpi-value">{formatNumber(summary.skipped)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-red">
             <span className="ps-kpi-icon"><AlertTriangle size={18} /></span>
             <div><div className="ps-kpi-title">Yüksek/Kritik Risk</div><div className="ps-kpi-value">{formatNumber(summary.criticalRisk)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-purple">
-            <span className="ps-kpi-icon"><CalendarDays size={18} /></span>
-            <div><div className="ps-kpi-title">Dönemsel Yoğunluk</div><div className="ps-kpi-value">{formatNumber(summary.calendarSensitive)}</div></div>
+            <span className="ps-kpi-icon"><ClipboardList size={18} /></span>
+            <div><div className="ps-kpi-title">Arşiv</div><div className="ps-kpi-value">{formatNumber(summary.archive)}</div></div>
           </div>
           <div className="ps-kpi ps-kpi-cyan">
-            <span className="ps-kpi-icon"><Truck size={18} /></span>
-            <div><div className="ps-kpi-title">Temin Kaynaklı Acil</div><div className="ps-kpi-value">{formatNumber(summary.urgentByLeadTime)}</div></div>
+            <span className="ps-kpi-icon"><CalendarDays size={18} /></span>
+            <div><div className="ps-kpi-title">30 Günlük Satış Verisi</div><div className="ps-kpi-value">{formatNumber(summary.salesDataAvailable)}</div></div>
+          </div>
+        </section>
+
+        <section className="ps-diagnostic-strip" aria-label="Öneri motoru tanı özeti">
+          <div className="ps-diagnostic-copy">
+            <span className="ps-diagnostic-icon"><Info size={18} /></span>
+            <div>
+              <strong>Öneri motoru {formatNumber(summary.evaluated)} ürünü son {formatNumber(emptyBreakdown.lookbackDays)} günlük satış, stok, tedarikçi ve açık sipariş verileriyle değerlendirdi.</strong>
+              <span>
+                Bekleyen öneri oluşmadığında aşağıdaki nedenler bunun bir hesaplama hatası mı, yoksa iş koşullarının sonucu mu olduğunu açıklar.
+              </span>
+            </div>
+          </div>
+          <div className="ps-diagnostic-reasons">
+            {dominantDiagnosticReasons.length ? dominantDiagnosticReasons.map((item) => (
+              <div key={item.code}>
+                <strong>{formatNumber(item.count)}</strong>
+                <span>{item.text || reasonTagLabel[item.code] || item.code}</span>
+              </div>
+            )) : (
+              <div>
+                <strong>0</strong>
+                <span>Henüz tanı özeti oluşmadı</span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -2342,7 +2808,7 @@ export default function PurchaseSuggestions() {
               <p>Önerilerin hangi operasyonel nedenlerle oluştuğunu gösterir.</p>
             </div>
             <div className="ps-card-body">
-              {reasonDistributionData.length && !reasonDistributionLowData ? (
+              {reasonDistributionData.length ? (
                 <div className="ps-reason-distribution-chart" role="img" aria-label="Sipariş önerisi neden dağılımı">
                   {reasonDistributionData.map((item) => (
                     <div
@@ -2369,8 +2835,8 @@ export default function PurchaseSuggestions() {
               ) : (
                 <div className="ps-empty-state" role="status">
                   <Info size={18} />
-                  <strong>{reasonDistributionTotal ? 'Öneriler tek ana nedende yoğunlaşıyor' : 'Henüz veri oluşmadı'}</strong>
-                  <span>{reasonDistributionTotal ? 'Dağılım gösterecek kadar çeşitli öneri nedeni oluşmadı. Liste satırlarında ürün bazlı gerekçeleri inceleyebilirsiniz.' : 'Öneri nedenleri oluştuğunda operasyon baskısı burada özetlenir.'}</span>
+                  <strong>Henüz tanı verisi oluşmadı</strong>
+                  <span>Öneri motoru çalıştırıldığında uygunluk ve engel nedenleri burada özetlenir.</span>
                 </div>
               )}
             </div>
@@ -2400,9 +2866,21 @@ export default function PurchaseSuggestions() {
                 <div className="ps-filter-control-row">
                 <label className="field-group ps-filter-field ps-filter-field--status">
                   <span>Durum</span>
-                  <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}>
+                  <select
+                    value={filters.status}
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setFilters((current) => ({ ...current, status: val }));
+                      if (val === 'pending' || val === 'manual_evaluation' || val === 'skipped') {
+                        setActiveSectionTab(val);
+                      }
+                      setSelectedIds([]);
+                    }}
+                  >
                     <option value="">Tüm Durumlar</option>
-                    <option value="pending">Bekleyen</option>
+                    <option value="pending">Otomatik Öneri (Bekleyen)</option>
+                    <option value="manual_evaluation">Manuel Değerlendirme</option>
+                    <option value="skipped">Öneriye Alınmadı</option>
                     <option value="approved">Siparişe Dönüştü</option>
                     <option value="rejected">Reddedildi</option>
                     <option value="archived">Arşivlendi</option>
@@ -2490,7 +2968,13 @@ export default function PurchaseSuggestions() {
                 <div className="mod-card-icon mod-icon-indigo"><PackageCheck size={16} /></div>
                 <div>
                   <h3>Sipariş Öneri Listesi</h3>
-                  <p>Ürün bazında önerilen miktarı ve risk sinyallerini görün.</p>
+                  <p>
+                    {activeSectionTab === 'skipped'
+                      ? 'Bu ürünler otomatik sipariş önerisine alınmadı. Stok tükenmiş ve tedarikçi bilgisi uygun olan ürünleri seçerek manuel sipariş hazırlayabilirsiniz.'
+                      : activeSectionTab === 'stockout'
+                      ? 'Stoğu 0 olan ve siparişe uygun ürünleri buradan seçip sipariş hazırlayabilirsiniz.'
+                      : 'Ürün bazında önerilen miktarı ve risk sinyallerini görün.'}
+                  </p>
                 </div>
               </div>
               <MinimalPaginationControls
@@ -2500,6 +2984,69 @@ export default function PurchaseSuggestions() {
                 onPageChange={setListPage}
                 label="Sipariş öneri listesi üst sayfalama"
               />
+            </div>
+
+            <div className="ps-section-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSectionTab === 'pending'}
+                className={`ps-section-tab-btn ${activeSectionTab === 'pending' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setActiveSectionTab('pending');
+                  setListPage(1);
+                  setFilters((old) => ({ ...old, status: '' }));
+                  setSelectedIds([]);
+                }}
+              >
+                <span>Otomatik Öneriler</span>
+                <span className="ps-tab-badge is-pending">{summary.pending}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSectionTab === 'manual_evaluation'}
+                className={`ps-section-tab-btn ${activeSectionTab === 'manual_evaluation' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setActiveSectionTab('manual_evaluation');
+                  setListPage(1);
+                  setFilters((old) => ({ ...old, status: '' }));
+                  setSelectedIds([]);
+                }}
+              >
+                <span>Manuel Değerlendirme</span>
+                <span className="ps-tab-badge is-manual">{summary.manualEvaluation}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSectionTab === 'skipped'}
+                className={`ps-section-tab-btn ${activeSectionTab === 'skipped' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setActiveSectionTab('skipped');
+                  setListPage(1);
+                  setFilters((old) => ({ ...old, status: '' }));
+                  setSelectedIds([]);
+                }}
+              >
+                <span>Öneriye Alınmayanlar</span>
+                <span className="ps-tab-badge is-skipped">{summary.skipped}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeSectionTab === 'stockout'}
+                className={`ps-section-tab-btn ${activeSectionTab === 'stockout' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setActiveSectionTab('stockout');
+                  setListPage(1);
+                  setFilters((old) => ({ ...old, status: '' }));
+                  setSelectedIds([]);
+                }}
+              >
+                <span>Stoğu Tükenmiş Ürünler</span>
+                <span className="ps-tab-badge is-stockout">{summary.stockoutCount}</span>
+              </button>
             </div>
 
             <div className="ps-metric-grid" aria-label="Liste metrikleri">
@@ -2524,16 +3071,29 @@ export default function PurchaseSuggestions() {
                 <strong>{formatNumber(selectedRows.length)} öneri seçildi</strong>
                 <span>{formatNumber(selectedSupplierCount)} tedarikçiye dağılmış durumda.</span>
               </div>
-            <div className="ps-bulk-actions">
-                <button type="button" className="primary-button ps-btn" onClick={() => runBulkAction('compose')} disabled={isBulkProcessing}>Toplu Siparişe Gönder</button>
-                <button type="button" className="ghost-button ps-btn" onClick={() => runBulkAction('convert')} disabled={isBulkProcessing}>Toplu Siparişe Dönüştür</button>
+              <div className="ps-bulk-actions">
+                {activeSectionTab === 'skipped' || activeSectionTab === 'stockout' ? (
+                  <button
+                    type="button"
+                    className="primary-button ps-btn"
+                    onClick={() => runBulkAction('manual')}
+                    disabled={isBulkProcessing}
+                  >
+                    Seçili Ürünlerden Sipariş Hazırla
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="primary-button ps-btn" onClick={() => runBulkAction('compose')} disabled={isBulkProcessing}>Toplu Siparişe Gönder</button>
+                    <button type="button" className="ghost-button ps-btn" onClick={() => runBulkAction('convert')} disabled={isBulkProcessing}>Toplu Siparişe Dönüştür</button>
+                  </>
+                )}
               </div>
             </div>
           ) : null}
 
           {isLoading ? (
             <div className="table-panel loading-state"><span className="loader"></span><p>Veriler yükleniyor...</p></div>
-          ) : activeFilteredRows.length === 0 && activeTotal > 0 ? (
+          ) : activeFilteredRows.length === 0 && hasActiveFilters ? (
             <div className="ps-empty-card" data-testid="order-recommendations-filter-empty-state">
               <div className="ps-empty-head">
                 <Info size={18} />
@@ -2552,54 +3112,97 @@ export default function PurchaseSuggestions() {
                 </button>
               </div>
             </div>
-          ) : activeFilteredRows.length === 0 && archiveTotal > 0 ? (
-            <div className="ps-empty-card">
-              <div className="ps-empty-head">
-                <Info size={18} />
-                <div>
-                  <h4>Aktif sipariş önerisi kalmadı</h4>
-                  <p>Siparişe dönüşen, reddedilen veya yeniden hesap gerektiren öneriler aşağıdaki arşiv tablosunda tutuluyor.</p>
-                </div>
-              </div>
-            </div>
-          ) : activeTotal === 0 ? (
+          ) : activeFilteredRows.length === 0 ? (
             <div className="ps-empty-card" data-testid="order-recommendations-empty-state">
               <div className="ps-empty-head">
                 <Info size={18} />
                 <div>
-                  <h4>Şu anda net sipariş ihtiyacı görünmüyor</h4>
-                  <p>Kritik stok altında ürün yok veya mevcut/yoldaki siparişler ihtiyacı karşılıyor olabilir. Öneri üretimi, net ihtiyaç oluştuğunda pending kayıt yaratır.</p>
+                  {activeSectionTab === 'pending' ? (
+                    <>
+                      <h4>Otomatik sipariş önerisi bulunmuyor</h4>
+                      <p>
+                        {dominantDiagnosticReasons[0]
+                          ? `Motor çalıştı; en baskın engel ${dominantDiagnosticReasons[0].text || reasonTagLabel[dominantDiagnosticReasons[0].code] || dominantDiagnosticReasons[0].code} (${formatNumber(dominantDiagnosticReasons[0].count)} ürün).`
+                          : 'Motor çalıştı ancak mevcut stok ve tedarik koşulları otomatik sipariş ihtiyacı üretmedi.'}
+                        {' '}Manuel değerlendirme ve öneriye alınmayan kayıtlar diğer sekmelerde görülebilir.
+                      </p>
+                    </>
+                  ) : activeSectionTab === 'manual_evaluation' ? (
+                    <>
+                      <h4>Manuel değerlendirme bekleyen ürün bulunmuyor</h4>
+                      <p>Manuel değerlendirme bekleyen ürün bulunmuyor.</p>
+                    </>
+                  ) : activeSectionTab === 'stockout' ? (
+                    <>
+                      <h4>Stoğu tükenmiş uygun ürün bulunmuyor</h4>
+                      <p>Siparişe uygun ve stoğu tükenmiş durumda olan herhangi bir ürün bulunmuyor.</p>
+                    </>
+                  ) : (
+                    <>
+                      <h4>Öneriye alınmayan ürün bulunmuyor</h4>
+                      <p>Öneriye alınmayan ürün bulunmuyor.</p>
+                    </>
+                  )}
                 </div>
               </div>
-              <div className="ps-empty-metrics">
-                <div>
-                  <strong>{formatNumber(emptyBreakdown.missingMinStock)}</strong>
-                  <span>Min. stok tanımı eksik ürün</span>
-                  <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
-                </div>
-                <div>
-                  <strong>{formatNumber(emptyBreakdown.missingLeadTime)}</strong>
-                  <span>Temin tanımı eksik ürün</span>
-                  <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
-                </div>
-                <div>
-                  <strong>{formatNumber(emptyBreakdown.noRecentSales)}</strong>
-                  <span>Son {emptyBreakdown.lookbackDays} günde satışı olmayan ürün</span>
-                  <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
-                </div>
-                <div>
-                  <strong>{formatNumber(emptyBreakdown.sufficientStock)}</strong>
-                  <span>Stoku yeterli ürün</span>
-                  <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
-                </div>
-              </div>
-              <div className="ps-empty-actions">
-                <button className="primary-button ps-btn" type="button" onClick={() => regenerateSuggestions('manual')} disabled={isGeneratingSuggestions}>
-                  Yeniden Hesapla
-                </button>
-                <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/urunler')}>Eksik Verileri Tamamla</button>
-                <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/siparis-olustur')}>Tedarikçi Ayarlarına Git</button>
-              </div>
+              {activeSectionTab === 'pending' && (
+                <>
+                  <div className="ps-empty-metrics">
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.missingMinStock)}</strong>
+                      <span>Min. stok tanımı eksik ürün</span>
+                      <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.missingLeadTime)}</strong>
+                      <span>Temin tanımı eksik ürün</span>
+                      <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.noRecentSales)}</strong>
+                      <span>Son {emptyBreakdown.lookbackDays} günde satışı olmayan ürün</span>
+                      <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.sufficientStock)}</strong>
+                      <span>Stoku yeterli / net ihtiyacı olmayan ürün</span>
+                      <small>Mevcut ve yoldaki stok hedef seviyeyi karşılıyor.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.missingSupplier)}</strong>
+                      <span>Tedarikçi eşleşmesi eksik ürün</span>
+                      <small>Aktif supplier-product eşleşmesi olmadan otomatik öneri kurulmaz.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.missingMoq)}</strong>
+                      <span>MOQ veya paket/koli bilgisi eksik ürün</span>
+                      <small>Sipariş miktarı güvenle yuvarlanamadığı için öneri bastırılır.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.inboundCovered)}</strong>
+                      <span>Açık siparişi ihtiyacı karşılayan ürün</span>
+                      <small>Yoldaki miktar hedef stoğu karşıladığı için yeni sipariş önerilmez.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(emptyBreakdown.modeGuard)}</strong>
+                      <span>Risk/mod koşulunu karşılamayan ürün</span>
+                      <small>Net ihtiyaç olsa bile seçilen üretim modunun öncelik eşiği sağlanmadı.</small>
+                    </div>
+                    <div>
+                      <strong>{formatNumber(summary.salesDataAvailable)}</strong>
+                      <span>Son {emptyBreakdown.lookbackDays} günde satış verisi bulunan ürün</span>
+                      <small>Genel üretim özeti; aktif filtrelerden bağımsızdır.</small>
+                    </div>
+                  </div>
+                  <div className="ps-empty-actions">
+                    <button className="primary-button ps-btn" type="button" onClick={() => regenerateSuggestions('manual')} disabled={isGeneratingSuggestions}>
+                      Yeniden Hesapla
+                    </button>
+                    <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/urunler')}>Eksik Verileri Tamamla</button>
+                    <button className="ghost-button ps-btn" type="button" onClick={() => navigate('/siparis-olustur')}>Tedarikçi Ayarlarına Git</button>
+                  </div>
+                </>
+              )}
             </div>
           ) : groupBySupplier ? (
             <div className="purchase-suggestions-group-list" data-testid="supplier-grouping-ui">
@@ -2616,9 +3219,11 @@ export default function PurchaseSuggestions() {
                     onOpenDetail={setDetailTarget}
                     handleConvertToOrder={handleConvertToOrder}
                     handleOpenComposeScreen={handleOpenComposeScreen}
+                    handleOpenManualComposeScreen={handleOpenManualComposeScreen}
                     setRejectTarget={setRejectTarget}
                     processingId={processingId}
                     isAdmin={isAdmin}
+                    sectionType={activeSectionTab}
                   />
                 </section>
               ))}
@@ -2631,9 +3236,11 @@ export default function PurchaseSuggestions() {
               onOpenDetail={setDetailTarget}
               handleConvertToOrder={handleConvertToOrder}
               handleOpenComposeScreen={handleOpenComposeScreen}
+              handleOpenManualComposeScreen={handleOpenManualComposeScreen}
               setRejectTarget={setRejectTarget}
               processingId={processingId}
               isAdmin={isAdmin}
+              sectionType={activeSectionTab}
             />
           )}
           </section>
@@ -2663,12 +3270,12 @@ export default function PurchaseSuggestions() {
                 <div className="ps-empty-head">
                   <Info size={18} />
                   <div>
-                    <h4>Ar?iv ilk a??l??ta y?klenmedi.</h4>
-                    <p>Ar?iv kay?tlar? yaln?z bu b?l?m a??ld???nda sayfal? olarak al?n?r.</p>
+                    <h4>Arşiv ilk açılışta yüklenmedi.</h4>
+                    <p>Arşiv kayıtları yalnız bu bölüm açıldığında sayfalı olarak alınır.</p>
                   </div>
                 </div>
                 <button type="button" className="primary-button ps-btn" onClick={() => { setIsArchiveOpen(true); if (!archiveLoaded) void loadData(filters, { listPage, archivePage, loadArchive: true }); }}>
-                  Ar?ivi G?ster
+                  Arşivi Göster
                 </button>
               </div>
             ) : archiveFilteredRows.length ? (

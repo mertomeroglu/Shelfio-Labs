@@ -113,4 +113,13 @@ export const productController = {
       next(error);
     }
   },
+
+  async assignLocation(req, res, next) {
+    try {
+      const data = await productService.assignLocation(req.params.id, req.body, req.user);
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
 };

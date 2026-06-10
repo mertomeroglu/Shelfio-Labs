@@ -49,7 +49,7 @@ const resolveCategoryName = ({ product = {}, category = {} } = {}) => {
   const safeCategory = category && typeof category === 'object' ? category : {};
   return String(
     product.categoryName
-    || product.category
+    || (product.category && typeof product.category === 'string' ? product.category : '')
     || safeCategory.name
     || product.category?.name
     || ''

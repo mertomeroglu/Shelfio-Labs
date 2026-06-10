@@ -1,4 +1,5 @@
 import { warehouseService } from '../services/warehouseService.js';
+import { sectionService } from '../services/sectionService.js';
 
 export const warehouseController = {
   async listLocations(req, res, next) {
@@ -41,6 +42,15 @@ export const warehouseController = {
     try {
       const data = await warehouseService.updateLocation(req.params.id, req.body);
       res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async scanForReplenishment(req, res, next) {
+    try {
+      const result = await sectionService.runTransferAutomationScan(req.body || {});
+      res.json(result);
     } catch (error) {
       next(error);
     }

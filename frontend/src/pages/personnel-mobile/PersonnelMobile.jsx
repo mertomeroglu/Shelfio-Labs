@@ -61,6 +61,7 @@ export default function PersonnelMobile() {
   const { user } = useAuth();
   const scannerRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [activitiesLoading, setActivitiesLoading] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [activities, setActivities] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -71,18 +72,34 @@ export default function PersonnelMobile() {
 
   useEffect(() => {
     let mounted = true;
-    const loadData = async () => {
+    const loadTasks = async () => {
       setIsLoading(true);
-      const [taskRows, activityRows] = await Promise.allSettled([
-        taskService.list(),
-        user?.id ? userService.listActivities(user.id, { limit: 10 }) : Promise.resolve([]),
-      ]);
-      if (!mounted) return;
-      setTasks(taskRows.status === 'fulfilled' && Array.isArray(taskRows.value) ? taskRows.value : []);
-      setActivities(activityRows.status === 'fulfilled' && Array.isArray(activityRows.value) ? activityRows.value : []);
-      setIsLoading(false);
+      try {
+        const taskRows = await taskService.list();
+        if (!mounted) return;
+        setTasks(Array.isArray(taskRows) ? taskRows : []);
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
     };
-    void loadData();
+
+    const loadActivities = async () => {
+      if (!user?.id) {
+        if (mounted) setActivities([]);
+        return;
+      }
+      setActivitiesLoading(true);
+      try {
+        const activityRows = await userService.listActivities(user.id, { limit: 10 });
+        if (!mounted) return;
+        setActivities(Array.isArray(activityRows) ? activityRows : []);
+      } finally {
+        if (mounted) setActivitiesLoading(false);
+      }
+    };
+
+    void loadTasks();
+    void loadActivities();
     return () => {
       mounted = false;
     };
@@ -249,7 +266,9 @@ export default function PersonnelMobile() {
         <div className="personnel-section-head">
           <h2 className="personnel-section-title-emphasized"><Activity size={18} className="personnel-title-icon personnel-title-icon-activity" /> Son Aktiviteler</h2>
         </div>
-        {recentActivities.length === 0 ? <div className="personnel-empty-state">Bu kullanıcı için son aktivite kaydı bulunmuyor.</div> : (
+        {activitiesLoading ? <div className="personnel-empty-state">Aktivite yükleniyor...</div> : null}
+        {!activitiesLoading && recentActivities.length === 0 ? <div className="personnel-empty-state">Bu kullanıcı için son aktivite kaydı bulunmuyor.</div> : null}
+        {!activitiesLoading && recentActivities.length > 0 ? (
           <div className="personnel-list">
             {recentActivities.map((item) => (
               <div key={item.id} className="personnel-info-row" style={{ padding: '12px' }}>
@@ -261,7 +280,7 @@ export default function PersonnelMobile() {
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   );

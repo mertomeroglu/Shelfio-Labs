@@ -262,7 +262,7 @@ export const howToUseGuides = [
     summary: 'Son kullanma tarihi olan parti stoklarını, risk bantlarını ve imha adaylarını takip eder.',
     purpose: 'SKT yaklaşan veya geçmiş ürünlerde aksiyon önceliğini netleştirir; yöneticinin riskli stok değerini, parti bazlı stok miktarını ve imha bekleyen kayıtları güvenilir şekilde okumasını sağlar.',
     capabilities: [
-      'SKT politikası uygun olan parti kayıtlarını batch bazlı listeleme.',
+      'SKT politikası uygun olan ürün gruplarını son kullanma tarihine göre listeleme.',
       'Geçmiş, bugün, 1-3 gün, 4-7 gün ve 7+ gün risk bantlarını tekil dağılım olarak görme.',
       'Kategori, tedarikçi, risk seviyesi, SKT durumu, lokasyon ve tarih aralığına göre filtreleme.',
       'Depo stoku, reyon stoku ve toplam stok bilgisini aynı parti satırında karşılaştırma.',
@@ -290,7 +290,7 @@ export const howToUseGuides = [
       'Filtreleri temizleyip KPI ile tablo sayısını karşılaştırmak yanlış daraltılmış listeyi fark etmeyi kolaylaştırır.',
     ],
     related: ['Ürünler', 'Stok İşlemleri', 'Fiyat & Talep Analizi', 'Raporlar'],
-    keywords: ['skt', 'son kullanma tarihi', 'imha', 'parti', 'batch', 'risk dağılımı', 'stok değeri'],
+    keywords: ['skt', 'son kullanma tarihi', 'imha', 'parti', 'risk dağılımı', 'stok değeri'],
   },
   {
     id: 'depo-transfer-talepleri',
@@ -572,6 +572,37 @@ export const howToUseGuides = [
     keywords: ['sipariş oluştur', 'tedarikçi ürünleri', 'katalog', 'satın alma'],
   },
   {
+    id: 'tedarikci-urunleri',
+    title: 'Tedarikçi Ürünleri',
+    route: '/tedarikci-urunleri',
+    group: 'Tedarik ve Satın Alma',
+    icon: 'Wallet',
+    summary: 'Tedarikçilerin gönderdiği ürün listesini, fiyatları ve eşleşme durumlarını ayrı bir çalışma alanında toplar.',
+    purpose: 'Siparişe girmeden önce hangi tedarikçide hangi ürünün bulunduğunu ve ürün bilgisinin mağaza kayıtlarıyla uyumunu kontrol etmeyi kolaylaştırır.',
+    capabilities: [
+      'Tedarikçi bazında ürün kataloğunu görüntüleme.',
+      'Fiyat, koli bilgisi ve ürün kodu farklılıklarını karşılaştırma.',
+      'Mağaza ürünleriyle eşleşmeyen veya doğrulama isteyen kayıtları ayırt etme.',
+      'Sipariş hazırlığı öncesinde temiz ve güvenilir ürün listesi oluşturma.',
+    ],
+    steps: [
+      'Önce tedarikçiyi seçin ve ürün listesini filtreleyin.',
+      'Ürün adı, barkod, koli bilgisi ve fiyat alanlarını birlikte kontrol edin.',
+      'Uyumsuz kayıtları siparişe taşımadan önce doğrulayın.',
+      'Hazır ürünleri sipariş oluşturma akışına yönlendirin.',
+    ],
+    warnings: [
+      'Yanlış eşleşen veya eski fiyat taşıyan kayıtlar sipariş toplamını bozabilir.',
+      'Tedarikçi ürün bilgisi doğrulanmadan toplu siparişe geçmek operasyon hatası yaratabilir.',
+    ],
+    tips: [
+      'Aynı ürün farklı tedarikçilerde varsa fiyat ve koli bilgisini yan yana değerlendirin.',
+      'Sık tekrar eden uyumsuzluklar için Eşleşmeler ekranını da birlikte kontrol edin.',
+    ],
+    related: ['Sipariş Oluştur', 'Tedarikçiler', 'Eşleşmeler', 'Sipariş Önerileri'],
+    keywords: ['tedarikçi ürünleri', 'katalog', 'fiyat karşılaştırma', 'eşleşme', 'satın alma'],
+  },
+  {
     id: 'siparis-takibi',
     title: 'Sipariş Takibi',
     route: '/siparis-takibi',
@@ -790,6 +821,37 @@ export const howToUseGuides = [
     ],
     related: ['Personel Yönetimi', 'Erişim Talepleri', 'Sistem Ayarları'],
     keywords: ['rol', 'yetki', 'permission', 'departman', 'erişim'],
+  },
+  {
+    id: 'erisim-taleplerim',
+    title: 'Erişim Taleplerim',
+    route: '/erisim-taleplerim',
+    group: 'Sistem Yönetimi',
+    icon: 'ShieldPlus',
+    summary: 'Kendi gönderdiğiniz erişim taleplerinin durumunu takip etmenizi sağlar.',
+    purpose: 'Görmediğiniz bir sayfa için açtığınız talebin onay, red veya bekleme durumunu tek ekranda izleyebilmeniz için kullanılır.',
+    capabilities: [
+      'Gönderilmiş taleplerin güncel durumunu görme.',
+      'Hangi sayfa için talep açıldığını ve gerekçeyi hatırlama.',
+      'Onaylanan talepler sonrasında tekrar erişim denemesi yapma.',
+      'Reddedilen taleplerde yeni ve daha net gerekçeyle tekrar başvurma.',
+    ],
+    steps: [
+      'Gönderdiğiniz talebi listeden seçin.',
+      'Talep edilen sayfa ve açıklama bilgisini kontrol edin.',
+      'Durum onaylandıysa ilgili sayfayı tekrar açın.',
+      'Talep reddedildiyse gerekçeyi okuyup gerekiyorsa yeni talep oluşturun.',
+    ],
+    warnings: [
+      'Talep onaylanmadan ilgili ekrana erişim açılamaz.',
+      'Eksik veya belirsiz gerekçe yazılan talepler daha uzun sürede sonuçlanabilir.',
+    ],
+    tips: [
+      'Talepte işi neden yapmanız gerektiğini kısa ve net yazmak onay sürecini hızlandırır.',
+      'Aynı konuda bekleyen talep varken tekrar tekrar yeni talep açmak yerine mevcut durumu takip edin.',
+    ],
+    related: ['Erişim Talepleri', 'Rol Yönetimi', 'Personel Yönetimi'],
+    keywords: ['erişim taleplerim', 'yetki durumu', 'talep takibi', 'sayfa erişimi'],
   },
   {
     id: 'erisim-talepleri',

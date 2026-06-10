@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -754,39 +754,30 @@ export default function Dashboard() {
     return rows
       .map((row) => {
         const normalized = normalizePurchaseOrderStatus(row?.currentStatus || row?.status, '');
-        const timestamp = new Date(row?.createdAt || row?.updatedAt || 0).getTime();
         const visibleStatus = normalized ? mapPurchaseOrderStatusToVisibleStatus(normalized) : '';
-        return normalized ? { ...row, normalizedStatus: normalized, visibleStatus, timestamp } : null;
+        const isTerminal = COMPLETED_PURCHASE_ORDER_STATUSES.has(normalized) || normalized === 'cancelled';
+        
+        // Priority for order timestamp logic
+        const timestamp = new Date(row?.completedAt || row?.cancelledAt || row?.updatedAt || row?.createdAt || 0).getTime();
+        return normalized ? { ...row, normalizedStatus: normalized, visibleStatus, timestamp, isTerminal } : null;
       })
-      .filter((row) => row && (!since || (Number.isFinite(row.timestamp) && row.timestamp >= since)));
+      .filter((row) => {
+        if (!row) return false;
+        // Keep active orders always visible regardless of the selected time range
+        if (!row.isTerminal) return true;
+        // Filter terminal/cancelled orders based on completion/cancellation timestamp
+        return !since || (Number.isFinite(row.timestamp) && row.timestamp >= since);
+      });
   }, [data?.orderApprovalLeadReport, lifecycleTimeFilter]);
 
-  const lifecycleAllOrders = useMemo(() => {
-    const rows = Array.isArray(data?.orderApprovalLeadReport) ? data.orderApprovalLeadReport : [];
-    return rows
-      .map((row) => {
-        const normalized = normalizePurchaseOrderStatus(row?.currentStatus || row?.status, '');
-        const timestamp = new Date(row?.createdAt || row?.updatedAt || 0).getTime();
-        const completedTimestamp = new Date(row?.completedAt || row?.updatedAt || row?.createdAt || 0).getTime();
-        const visibleStatus = normalized ? mapPurchaseOrderStatusToVisibleStatus(normalized) : '';
-        return normalized ? { ...row, normalizedStatus: normalized, visibleStatus, timestamp, completedTimestamp } : null;
-      })
-      .filter(Boolean);
-  }, [data?.orderApprovalLeadReport]);
-
   const lifecycleEmptyStateSummary = useMemo(() => {
-    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     return {
-      openOrders: lifecycleAllOrders.filter((order) => OPEN_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)).length,
-      goodsReceiptWaiting: lifecycleAllOrders.filter((order) => GOODS_RECEIPT_WAITING_STATUSES.has(order.normalizedStatus)).length,
-      stockEntryWaiting: lifecycleAllOrders.filter((order) => STOCK_ENTRY_WAITING_STATUSES.has(order.normalizedStatus)).length,
-      completedLast7Days: lifecycleAllOrders.filter((order) => (
-        COMPLETED_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)
-        && Number.isFinite(order.completedTimestamp)
-        && order.completedTimestamp >= sevenDaysAgo
-      )).length,
+      openOrders: lifecycleOrders.filter((order) => OPEN_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)).length,
+      goodsReceiptWaiting: lifecycleOrders.filter((order) => GOODS_RECEIPT_WAITING_STATUSES.has(order.normalizedStatus)).length,
+      stockEntryWaiting: lifecycleOrders.filter((order) => STOCK_ENTRY_WAITING_STATUSES.has(order.normalizedStatus)).length,
+      completedCount: lifecycleOrders.filter((order) => COMPLETED_PURCHASE_ORDER_STATUSES.has(order.normalizedStatus)).length,
     };
-  }, [lifecycleAllOrders]);
+  }, [lifecycleOrders]);
 
   const lifecycleCounts = useMemo(() => {
     const countMap = new Map(DASHBOARD_LIFECYCLE_ORDER.map((key) => [key, 0]));
@@ -861,6 +852,11 @@ export default function Dashboard() {
     settingsSnapshot = {},
   } = data || {};
   const storeTimezone = settingsSnapshot.timezone || 'Europe/Istanbul';
+  const completedLabel = lifecycleTimeFilter === '24h'
+    ? 'Son 24 saat tamamlanan'
+    : lifecycleTimeFilter === '7d'
+      ? 'Son 7 gün tamamlanan'
+      : 'Toplam tamamlanan';
 
   return (
     <div className="dashboard-redesign">
@@ -959,7 +955,7 @@ export default function Dashboard() {
                         <div className="lifecycle-empty-metric"><span>Açık sipariş</span><strong>{lifecycleEmptyStateSummary.openOrders.toLocaleString('tr-TR')}</strong></div>
                         <div className="lifecycle-empty-metric"><span>Mal kabul bekleyen</span><strong>{lifecycleEmptyStateSummary.goodsReceiptWaiting.toLocaleString('tr-TR')}</strong></div>
                         <div className="lifecycle-empty-metric"><span>Stok girişi bekleyen</span><strong>{lifecycleEmptyStateSummary.stockEntryWaiting.toLocaleString('tr-TR')}</strong></div>
-                        <div className="lifecycle-empty-metric"><span>Son 7 gün tamamlanan</span><strong>{lifecycleEmptyStateSummary.completedLast7Days.toLocaleString('tr-TR')}</strong></div>
+                        <div className="lifecycle-empty-metric"><span>{completedLabel}</span><strong>{lifecycleEmptyStateSummary.completedCount.toLocaleString('tr-TR')}</strong></div>
                       </div>
                       <div className="lifecycle-empty-actions lifecycle-sparse-actions">
                         <button type="button" className="primary-button" onClick={() => navigate('/siparis-olustur')}><ClipboardList size={14} /> Yeni Sipariş Oluştur</button>
@@ -984,7 +980,7 @@ export default function Dashboard() {
                     <div className="lifecycle-empty-metric"><span>Açık sipariş</span><strong>{lifecycleEmptyStateSummary.openOrders.toLocaleString('tr-TR')}</strong></div>
                     <div className="lifecycle-empty-metric"><span>Mal kabul bekleyen</span><strong>{lifecycleEmptyStateSummary.goodsReceiptWaiting.toLocaleString('tr-TR')}</strong></div>
                     <div className="lifecycle-empty-metric"><span>Stok girişi bekleyen</span><strong>{lifecycleEmptyStateSummary.stockEntryWaiting.toLocaleString('tr-TR')}</strong></div>
-                    <div className="lifecycle-empty-metric"><span>Son 7 gün tamamlanan</span><strong>{lifecycleEmptyStateSummary.completedLast7Days.toLocaleString('tr-TR')}</strong></div>
+                    <div className="lifecycle-empty-metric"><span>{completedLabel}</span><strong>{lifecycleEmptyStateSummary.completedCount.toLocaleString('tr-TR')}</strong></div>
                   </div>
                   <div className="lifecycle-empty-actions">
                     <button type="button" className="primary-button" onClick={() => navigate('/siparis-olustur')}><ClipboardList size={14} /> Yeni Sipariş Oluştur</button>

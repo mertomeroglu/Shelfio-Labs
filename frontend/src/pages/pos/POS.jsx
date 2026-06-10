@@ -35,6 +35,18 @@ const beepSuccess = () => { playBeep(880, 80, 0.1); setTimeout(() => playBeep(13
 const beepRemove = () => { playBeep(640, 70, 0.09); setTimeout(() => playBeep(520, 90, 0.09), 75); };
 const beepError = () => playBeep(300, 200, 0.15);
 
+export const parseMobileOrderHandoffScan = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('{')) return '';
+  try {
+    const payload = JSON.parse(raw);
+    if (payload?.type !== 'mobile_order_handoff') return '';
+    return String(payload?.code || '').trim().toUpperCase();
+  } catch {
+    return '';
+  }
+};
+
 /* Constants */
 const PAYMENT_METHODS = [
   { key: 'cash', label: 'Nakit', icon: Banknote, color: '#16a34a' },
@@ -363,6 +375,10 @@ export default function POS({ deskCode = 'B1' }) {
 
   /* Effects */
   useEffect(() => {
+    void posService.preparePdfRuntime().catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (barcodeRef.current && !paymentModal && !showHistory && !exitModal && !showSearch && !returnModal && !showReceipt && !showInvoice && !priceModal && !mobileOrderModal) {
       barcodeRef.current.focus();
     }
@@ -643,6 +659,27 @@ export default function POS({ deskCode = 'B1' }) {
     if (!code) return;
     setScanning(true);
     try {
+      const mobileOrderScanCode = parseMobileOrderHandoffScan(code);
+      if (mobileOrderScanCode) {
+        setMobileOrderModal(true);
+        setMobileOrderCode(mobileOrderScanCode);
+        setMobileOrderPreview(null);
+        setMobileOrderError('');
+        setMobileOrderLoading(true);
+        try {
+          const data = await posService.lookupMobileOrder(mobileOrderScanCode);
+          setMobileOrderPreview(data);
+          beepSuccess();
+        } catch (error) {
+          beepError();
+          setMobileOrderError(error?.message || 'Mobil sipariş bulunamadı.');
+        } finally {
+          setMobileOrderLoading(false);
+        }
+        setBarcode('');
+        return;
+      }
+
       try {
         const product = await posService.findByBarcode(code);
         addToCart(product);
@@ -1048,7 +1085,10 @@ export default function POS({ deskCode = 'B1' }) {
       setCart([]); setSelectedId(null); setDiscountRate('0'); setBarcode(''); setLastAction(null); setActiveMobileOrder(null);
       setPayments([]); setSplitMode(false); setGiftCardCode(''); setAppliedGiftCard(null);
       beepSuccess();
-      showToast('success', `Satış tamamlandı - ${result.referenceNo}`);
+      showToast(
+        result.mobileOrderWarning ? 'error' : 'success',
+        result.mobileOrderWarning || `Satış tamamlandı - ${result.referenceNo}`
+      );
       setShowReceipt(true);
     } catch (error) {
       beepError(); showToast('error', error.message || 'Satış tamamlanamadı');
@@ -1380,20 +1420,28 @@ export default function POS({ deskCode = 'B1' }) {
   };
 
   /*  Print Receipt  */
-  const printReceipt = async () => {
-    if (!receiptData) return;
+  const printReceipt = (record) => {
+    const data = record || receiptData;
+    if (!data) return;
     try {
-      await posService.downloadReceiptPdf(receiptData, { deskCode });
+      posService.printReceiptPdf(data, { deskCode });
     } catch {
       showToast('error', 'Fiş PDF oluşturulamadı');
     }
   };
 
   /* nvoice  */
-  const printEInvoice = async () => {
-    if (!receiptData) return;
+  const printEInvoice = (record) => {
+    const data = record || receiptData;
+    if (!data) return;
     try {
-      await posService.downloadInvoicePdf(receiptData, { deskCode });
+      const missingFields = posService.getInvoiceWarnings(data);
+      if (missingFields.length > 0) {
+        showToast('warning', `Fatura çıktısında ${missingFields.join(', ')} eksik; belge taslak bilgi çıktısı olarak yazdırılıyor.`);
+      }
+      void posService.printInvoicePdf(data, { deskCode }).catch(() => {
+        showToast('error', 'Fatura PDF oluÅŸturulamadÄ±');
+      });
     } catch {
       showToast('error', 'Fatura PDF oluşturulamadı');
     }
@@ -1445,8 +1493,8 @@ export default function POS({ deskCode = 'B1' }) {
                   {historyDetail.changeAmount > 0 && <span>Para Üstü: {formatPrice(historyDetail.changeAmount)}</span>}
                 </div>
                 <div className="pos-detail-actions">
-                  <button className="pos-btn pos-btn-primary" type="button" onClick={() => { setReceiptData(historyDetail); printReceipt(); }}><Printer size={16} /> Fiş Yazdır</button>
-                  <button className="pos-btn pos-btn-secondary" type="button" onClick={() => { setReceiptData(historyDetail); printEInvoice(); }}><FileText size={16} /> e-Fatura</button>
+                  <button className="pos-btn pos-btn-primary" type="button" onClick={() => printReceipt(historyDetail)}><Printer size={16} /> Fiş Yazdır</button>
+                  <button className="pos-btn pos-btn-secondary" type="button" onClick={() => printEInvoice(historyDetail)}><FileText size={16} /> e-Fatura</button>
                 </div>
               </div>
             </div>
@@ -1553,8 +1601,8 @@ export default function POS({ deskCode = 'B1' }) {
           </div>
 
           <div className="pos-receipt-actions">
-            <button className="pos-receipt-action-btn" type="button" onClick={printReceipt}><Printer size={22} /><span>Fiş Yazdır</span></button>
-            <button className="pos-receipt-action-btn" type="button" onClick={printEInvoice}><FileText size={22} /><span>e-Fatura</span></button>
+            <button className="pos-receipt-action-btn" type="button" onClick={() => printReceipt(receiptData)}><Printer size={22} /><span>Fiş Yazdır</span></button>
+            <button className="pos-receipt-action-btn" type="button" onClick={() => printEInvoice(receiptData)}><FileText size={22} /><span>e-Fatura</span></button>
             <button className="pos-receipt-action-btn pos-receipt-new" type="button" onClick={() => { setShowReceipt(false); setReceiptData(null); }}>
               <ShoppingCart size={22} /><span>Yeni Satış</span>
             </button>

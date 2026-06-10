@@ -45,7 +45,6 @@ const FILTER_DEFAULTS = {
   hasSuggestion: '',
   primaryAction: '',
   categoryId: '',
-  supplierId: '',
   campaignEligibility: '',
   conflict: '',
   blockingReason: '',
@@ -2487,7 +2486,6 @@ function PricingAnalysis() {
       const baseAnalysisParams = {
         universe: 'listed_active',
         categoryId: filters.categoryId,
-        supplierId: filters.supplierId,
         riskLevel: filters.risk,
         sktStatus: normalizeSktStatusFilter(filters.sktStatus) || undefined,
         salesSpeed: filters.salesSpeed,
@@ -2678,17 +2676,6 @@ function PricingAnalysis() {
     return [...uniqueMap.values()];
   }, [analysis, products]);
 
-  const supplierOptions = useMemo(() => {
-    const optionMap = new Map();
-    [...recommendationRows, ...products].forEach((item) => {
-      const value = String(item?.supplierId || item?.supplier?.id || '').trim();
-      if (!value || optionMap.has(value)) return;
-      const label = item?.supplierName || item?.supplier?.name || value;
-      optionMap.set(value, { value, label });
-    });
-    return [...optionMap.values()].sort((a, b) => a.label.localeCompare(b.label, 'tr-TR'));
-  }, [products, recommendationRows]);
-
   const filteredDecisionRows = useMemo(() => {
     let rows = recommendationRows;
 
@@ -2756,7 +2743,6 @@ function PricingAnalysis() {
         if (filters.hasSuggestion === false && [PRICING_ACTION_TYPES.DISCOUNT, PRICING_ACTION_TYPES.CAMPAIGN, PRICING_ACTION_TYPES.ORDER].includes(row.actionType)) return false;
         if (filters.primaryAction && row.actionType !== filters.primaryAction) return false;
         if (filters.categoryId && String(row.categoryId || row.productCategoryId || '').trim() !== String(filters.categoryId).trim()) return false;
-        if (filters.supplierId && String(row.supplierId || '').trim() !== String(filters.supplierId).trim()) return false;
         if (criticalFilterActive && !(row.actionType === PRICING_ACTION_TYPES.DISCOUNT || row.expirationRisk === 'critical' || row.riskLevel === 'critical')) return false;
         return true;
       })
@@ -2981,7 +2967,6 @@ function PricingAnalysis() {
       filters.salesSpeed,
       filters.primaryAction,
       filters.categoryId,
-      filters.supplierId,
       filters.campaignEligibility,
       filters.conflict,
       filters.blockingReason,
@@ -3030,7 +3015,6 @@ function PricingAnalysis() {
     try {
       const detail = await pricingAnalysisService.getDetail(row.productId || rowId, {
         categoryId: filters.categoryId,
-        supplierId: filters.supplierId,
         riskLevel: filters.risk,
         sktStatus: filters.sktStatus,
         salesSpeed: filters.salesSpeed,
@@ -3625,18 +3609,6 @@ function PricingAnalysis() {
                   </option>
                 );
               })}
-            </select>
-          </label>
-          <label className="field-group pricing-filter-field">
-            <span>Tedarikçi</span>
-            <select
-              value={filters.supplierId}
-              onChange={(event) => setFilters((prev) => ({ ...prev, supplierId: event.target.value }))}
-            >
-              <option value="">Tüm tedarikçiler</option>
-              {supplierOptions.map((supplier) => (
-                <option key={supplier.value} value={supplier.value}>{supplier.label}</option>
-              ))}
             </select>
           </label>
           <label className="field-group pricing-filter-field">

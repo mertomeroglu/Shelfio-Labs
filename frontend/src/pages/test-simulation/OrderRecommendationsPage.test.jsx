@@ -1,5 +1,5 @@
 ﻿import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import PurchaseSuggestions from '../purchase-suggestions/PurchaseSuggestions.jsx';
 
 const mockListSuggestions = vi.fn();
@@ -76,8 +76,11 @@ describe('OrderRecommendationsPage', () => {
   test('renders top summary cards without calculation formula copy', async () => {
     renderPage();
 
-    expect(await screen.findByText('Toplam Öneri')).toBeInTheDocument();
-    expect((await screen.findAllByText('Bekleyen')).length).toBeGreaterThan(0);
+    const summary = screen.getByLabelText('KPI özet');
+    expect(await within(summary).findByText('Bekleyen Öneri')).toBeInTheDocument();
+    expect(within(summary).getByText('Manuel Değerlendirme')).toBeInTheDocument();
+    expect(within(summary).getByText('Öneriye Alınmayan')).toBeInTheDocument();
+    expect(within(summary).getByText('Arşiv')).toBeInTheDocument();
     expect(screen.queryByText(/Önerilen miktar =/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Sipariş öneri listesi üst sayfalama')).toBeInTheDocument();
   });

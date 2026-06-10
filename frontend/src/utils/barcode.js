@@ -35,3 +35,12 @@ export function getBarcodeCandidates(value) {
   const normalized = normalizeBarcodeInput(raw);
   return Array.from(new Set([raw, normalized].filter(Boolean)));
 }
+
+export function isLikelyBarcodeOrSku(value) {
+  const raw = String(value || '').trim();
+  if (!raw || /\s/.test(raw)) return false;
+  const normalized = normalizeBarcodeInput(raw);
+  return normalized.length >= 3
+    && /[0-9]/.test(normalized)
+    && /^[a-z0-9._/]+$/i.test(normalized);
+}

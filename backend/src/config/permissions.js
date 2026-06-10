@@ -72,6 +72,11 @@ export const PERMISSIONS = {
   PROXIMITY_ZONES_MANAGE: 'proximity:zones:manage',
   PROXIMITY_RULES_MANAGE: 'proximity:rules:manage',
   PROXIMITY_LOGS_VIEW: 'proximity:logs:view',
+
+  LAYOUT_VIEW: 'layout:view',
+  LAYOUT_MANAGE: 'layout:manage',
+  LAYOUT_PUBLISH: 'layout:publish',
+  LOCATION_PRODUCT_ASSIGN: 'location:product:assign',
 };
 
 export const ROLE_PERMISSIONS = {
@@ -112,6 +117,8 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.PROCUREMENT_APPROVE,
     PERMISSIONS.NOTIFICATION_VIEW,
     PERMISSIONS.NOTIFICATION_MANAGE,
+    PERMISSIONS.LAYOUT_VIEW,
+    PERMISSIONS.LOCATION_PRODUCT_ASSIGN,
   ],
   cashier: [
     PERMISSIONS.PERMISSION_EFFECTIVE_VIEW,
@@ -129,6 +136,7 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.SECTION_VIEW,
     PERMISSIONS.TRANSFER_REQUEST_VIEW,
     PERMISSIONS.NOTIFICATION_VIEW,
+    PERMISSIONS.LAYOUT_VIEW,
   ],
   komisyon_b: ['*'],
   komisyon_c: ['*'],

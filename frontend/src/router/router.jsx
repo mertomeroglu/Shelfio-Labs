@@ -37,6 +37,7 @@ const MyAccessRequests = lazy(() => import('../pages/access-requests/MyAccessReq
 const AccessRequestsAdmin = lazy(() => import('../pages/access-requests-admin/AccessRequestsAdmin.jsx'));
 const WarehouseTransferRequests = lazy(() => import('../pages/warehouse-transfer-requests/WarehouseTransferRequests.jsx'));
 const LocationManagement = lazy(() => import('../pages/location-management/LocationManagement.jsx'));
+const LocationLayoutEditorPage = lazy(() => import('../pages/location-management/LocationLayoutEditorPage.jsx'));
 const RoleManagement = lazy(() => import('../pages/role-management/RoleManagement.jsx'));
 const CustomerManagement = lazy(() => import('../pages/customer-management/CustomerManagement.jsx'));
 const ProximityManagement = lazy(() => import('../pages/proximity-management/ProximityManagement.jsx'));
@@ -463,6 +464,15 @@ export const router = createBrowserRouter([
             element: <Navigate to="/pos-kasa" replace />,
           },
         ],
+      },
+      {
+        path: '/lokasyon-duzenle',
+        element: (
+          <ProtectedRoute>
+            {withRouteSuspense(<LocationLayoutEditorPage />)}
+          </ProtectedRoute>
+        ),
+        errorElement: <RouteError />,
       },
       {
         path: '/kasa',

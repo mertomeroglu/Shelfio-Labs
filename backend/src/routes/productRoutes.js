@@ -14,6 +14,7 @@ router.get('/barcode/:barcode', requirePermission(PERMISSIONS.PRODUCT_VIEW), pro
 router.get('/:id', requirePermission(PERMISSIONS.PRODUCT_VIEW), productController.getById);
 router.post('/', requirePermission(PERMISSIONS.PRODUCT_CREATE), productController.create);
 router.put('/:id', requirePermission(PERMISSIONS.PRODUCT_UPDATE), productController.update);
+router.post('/:id/assign-location', requirePermission(PERMISSIONS.LOCATION_PRODUCT_ASSIGN), productController.assignLocation);
 router.delete('/:id', requirePermission(PERMISSIONS.PRODUCT_DELETE), productController.remove);
 
 export default router;

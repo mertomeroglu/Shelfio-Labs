@@ -32,7 +32,9 @@ const baseFilters = {
 };
 
 const isExpiredRow = (row) => Number(row.daysToExpiry) < 0;
-const isDisposalEligibleRow = (row) => isExpiredRow(row) && row.isSktApplicable !== false && Number(row.totalQuantity || 0) > 0;
+const isRequiredSktRow = (row) => row?.sktPolicy === 'required';
+const isDisposalEligibleRow = (row) => row.disposalEligible === true
+  || (isExpiredRow(row) && isRequiredSktRow(row) && Number(row.totalQuantity || 0) > 0);
 const formatRiskLabel = (label) => label === 'SKT geçmiş' ? 'Geçmiş' : label;
 
 const formatLastUpdated = (value) => {
@@ -64,7 +66,7 @@ const SORT_KEYS = {
 const toApiSort = (sort = {}) => `${SORT_KEYS[sort.key] || 'skt'}_${sort.direction === 'desc' ? 'desc' : 'asc'}`;
 
 const downloadCsv = (rows, fileName = 'skt-takibi.csv') => {
-  const headers = ['Ürün adı', 'SKU', 'Barkod', 'Parti No', 'SKT Tarihi', 'Kalan gün', 'Depo stok', 'Reyon stok', 'Toplam stok', 'Kategori', 'Tedarikçi', 'Risk'];
+  const headers = ['Ürün adı', 'SKU', 'Barkod', 'SKT Grubu', 'SKT Tarihi', 'Kalan gün', 'Depo stok', 'Reyon stok', 'Toplam stok', 'Kategori', 'Tedarikçi', 'Risk'];
   const body = rows.map((row) => [
     row.productName,
     row.sku,
@@ -129,8 +131,8 @@ export default function StockExpiryTracking() {
         expiredSort: toApiSort(expiredSort),
         trackingSort: toApiSort(trackingSort),
       });
-      setExpiredRows(Array.isArray(result?.expiredRows) ? result.expiredRows : []);
-      setTrackingRows(Array.isArray(result?.trackingRows) ? result.trackingRows : []);
+      setExpiredRows((Array.isArray(result?.expiredRows) ? result.expiredRows : []).filter(isRequiredSktRow));
+      setTrackingRows((Array.isArray(result?.trackingRows) ? result.trackingRows : []).filter(isRequiredSktRow));
       setSummary(result?.summary || EMPTY_SUMMARY);
       setCharts(result?.charts || { categoryBuckets: [] });
       setFilterOptions(result?.options || { categories: [], suppliers: [] });
@@ -166,7 +168,7 @@ export default function StockExpiryTracking() {
   const openDispose = (targetRows) => {
     const safeRows = (Array.isArray(targetRows) ? targetRows : []).filter(isDisposalEligibleRow);
     if (!safeRows.length) {
-      setToast({ type: 'error', title: 'SKT Takibi', message: 'İmha için yalnız SKT politikası uygun, stoklu ve tarihi geçmiş partiler seçilebilir.' });
+      setToast({ type: 'error', title: 'SKT Takibi', message: 'İmha için yalnız SKT politikası zorunlu, stoklu ve tarihi geçmiş SKT grupları seçilebilir.' });
       return;
     }
     setDisposeTarget(safeRows);
@@ -183,10 +185,18 @@ export default function StockExpiryTracking() {
         reason: 'SKT geçmiş ürün imhası',
         note: disposeNote,
       });
+      const disposedCount = Number(result?.disposedBatchCount || 0);
+      const skippedCount = Number(result?.skippedBatchCount || 0);
+      if (disposedCount <= 0) {
+        const reason = result?.skipped?.[0]?.message || 'Seçili ürünlerde imha edilebilir miktar bulunamadı.';
+        throw new Error(reason);
+      }
       setToast({
-        type: 'success',
+        type: skippedCount > 0 ? 'warning' : 'success',
         title: 'SKT Takibi',
-        message: `${formatNumber(result?.disposedBatchCount || targetRows.length)} parti batch düzeyinde imha edildi.`,
+        message: skippedCount > 0
+          ? `${formatNumber(disposedCount)} SKT grubu imha edildi, ${formatNumber(skippedCount)} kayıt atlandı.`
+          : `${formatNumber(disposedCount)} SKT grubu için imha ve stok hareketi kaydı oluşturuldu.`,
       });
       setDisposeTarget(null);
       setDisposeNote('');
@@ -199,13 +209,14 @@ export default function StockExpiryTracking() {
     }
   };
 
-  const allVisibleExpiredSelected = expiredRows.length > 0 && expiredRows.every((row) => selectedIds.some((id) => String(id) === String(row.id)));
+  const eligibleVisibleRows = expiredRows.filter(isDisposalEligibleRow);
+  const allVisibleExpiredSelected = eligibleVisibleRows.length > 0 && eligibleVisibleRows.every((row) => selectedIds.some((id) => String(id) === String(row.id)));
 
   const sharedColumns = [
     { key: 'productName', label: 'Ürün adı', className: 'stock-expiry-page__cell-wide', render: (row) => <span className="stock-expiry-page__cell-clamp">{formatUnit(row.productName)}</span> },
     { key: 'sku', label: 'SKU' },
     { key: 'barcode', label: 'Barkod', render: (row) => row.barcode || '-' },
-    { key: 'batchNo', label: 'Parti No' },
+    { key: 'batchNo', label: 'SKT Grubu' },
     { key: 'skt', label: 'SKT Tarihi', render: (row) => formatDate(row.skt), sortValue: (row) => new Date(row.skt).getTime() },
     {
       key: 'daysToExpiry',
@@ -251,7 +262,8 @@ export default function StockExpiryTracking() {
               ? Array.from(new Set([...current, row.id]))
               : current.filter((id) => String(id) !== String(row.id)));
           }}
-          aria-label={`${row.batchNo} partisini seç`}
+          aria-label={`${row.batchNo} SKT grubunu seç`}
+          disabled={!isDisposalEligibleRow(row)}
         />
       ),
       sortable: false,
@@ -303,7 +315,7 @@ export default function StockExpiryTracking() {
 
       <ExpiryTableSection
         title="SKT Geçmiş"
-        description="SKT'si geçmiş stoklu ürünler. İmha yalnız SKT politikası uygun partilerde yapılır."
+        description="SKT'si geçmiş stoklu ürünler. İmha yalnız SKT politikası zorunlu ürün gruplarında yapılır."
         icon={<History size={18} />}
         rows={expiredRows}
         total={pagination.expired.total}
@@ -313,8 +325,8 @@ export default function StockExpiryTracking() {
               <input
                 type="checkbox"
                 checked={allVisibleExpiredSelected}
-                onChange={(event) => setSelectedIds(event.target.checked ? expiredRows.map((row) => row.id) : [])}
-                disabled={!expiredRows.length}
+                onChange={(event) => setSelectedIds(event.target.checked ? eligibleVisibleRows.map((row) => row.id) : [])}
+                disabled={!eligibleVisibleRows.length}
               />
               <span>Tümünü seç</span>
             </label>
@@ -332,7 +344,7 @@ export default function StockExpiryTracking() {
           rows={expiredRows}
           keyField="id"
           isLoading={loading}
-          emptyMessage="SKT'si geçmiş batch bulunmuyor."
+          emptyMessage="SKT'si geçmiş ürün grubu bulunmuyor."
           initialSort={{ key: 'skt', direction: 'asc' }}
           pageSize={10}
           serverPagination={pagination.expired}
@@ -367,7 +379,7 @@ export default function StockExpiryTracking() {
           rows={trackingRows}
           keyField="id"
           isLoading={loading}
-          emptyMessage="SKT takip için aktif batch bulunmuyor."
+          emptyMessage="SKT takip için aktif ürün grubu bulunmuyor."
           initialSort={{ key: 'skt', direction: 'asc' }}
           pageSize={10}
           serverPagination={pagination.tracking}
@@ -387,7 +399,7 @@ export default function StockExpiryTracking() {
 
       <FormModal
         isOpen={Boolean(detailRow)}
-        title="Parti Detayı"
+        title="SKT Grubu Detayı"
         description={detailRow ? `${detailRow.productName} / ${detailRow.batchNo}` : ''}
         onClose={() => setDetailRow(null)}
         modalClassName="stock-expiry-page__detail-modal"
@@ -398,7 +410,7 @@ export default function StockExpiryTracking() {
             <div><span>Ürün</span><strong>{formatUnit(detailRow.productName)}</strong></div>
             <div><span>SKU</span><strong>{detailRow.sku}</strong></div>
             <div><span>Barkod</span><strong>{detailRow.barcode}</strong></div>
-            <div><span>Parti No</span><strong>{detailRow.batchNo}</strong></div>
+            <div><span>SKT Grubu</span><strong>{detailRow.batchNo}</strong></div>
             <div><span>SKT</span><strong>{formatDate(detailRow.skt)}</strong></div>
             <div><span>Durum</span><StatusBadge tone={detailRow.riskTone}>{formatRiskLabel(detailRow.riskLabel)}</StatusBadge></div>
             <div><span>Depo stok</span><strong>{formatNumber(detailRow.warehouseQuantity)}</strong></div>
@@ -414,8 +426,8 @@ export default function StockExpiryTracking() {
 
       <FormModal
         isOpen={Boolean(disposeTarget)}
-        title="SKT Geçmiş Parti İmhası"
-        description={disposeTarget ? `${formatNumber(disposeTarget.length)} parti batch düzeyinde imha edilecek.` : ''}
+        title="İmha İşlemini Onayla"
+        description={disposeTarget ? `${formatNumber(disposeTarget.length)} seçili SKT grubundaki ürünler imha kaydına alınacak.` : ''}
         onClose={() => {
           if (!processing) {
             setDisposeTarget(null);
@@ -425,14 +437,14 @@ export default function StockExpiryTracking() {
         confirmOnDirtyClose={false}
       >
         <div className="modal-form movement-expired-disposal-modal">
-          <div className="movement-critical-note">Varsayılan imha nedeni: SKT geçmiş ürün imhası</div>
+          <div className="movement-critical-note">Seçili son kullanma tarihi grubundaki ürünler imha kaydına alınacak ve stok hareketleri otomatik oluşturulacak.</div>
           <label className="field-group">
             <span>Ek Not</span>
             <textarea value={disposeNote} onChange={(event) => setDisposeNote(event.target.value)} placeholder="İmha onayı için ek not" disabled={processing} />
           </label>
           <div className="modal-actions app-dialog-actions">
             <button className="outline-button" type="button" onClick={() => { setDisposeTarget(null); setDisposeNote(''); }} disabled={processing}>Vazgeç</button>
-            <button className="danger-button" type="button" onClick={confirmDispose} disabled={processing}>{processing ? 'İmha Ediliyor...' : 'Evet, İmha Et'}</button>
+            <button className="danger-button" type="button" onClick={confirmDispose} disabled={processing}>{processing ? 'İmha Ediliyor...' : 'İmhayı Onayla'}</button>
           </div>
         </div>
       </FormModal>
@@ -463,7 +475,7 @@ function ExpiryOverview({ summary, charts, totalRows }) {
     <section className="stock-expiry-page__overview" aria-label="SKT analiz grafikleri">
       <ChartPanel
         title="SKT Risk Dağılımı"
-        description={`${formatNumber(totalRows)} SKT partisi tekil risk bantlarında`}
+        description={`${formatNumber(totalRows)} SKT grubu tekil risk bantlarında`}
         icon={<CheckCircle2 size={16} />}
       >
         <HorizontalBarChart items={riskBuckets} />
@@ -477,14 +489,14 @@ function ExpiryOverview({ summary, charts, totalRows }) {
       </ChartPanel>
       <ChartPanel
         title="Kategori Bazlı Yoğunluk"
-        description="Geçmiş ve 7 gün içindeki riskli partilerin kategori kırılımı"
+        description="Geçmiş ve 7 gün içindeki riskli SKT gruplarının kategori kırılımı"
         icon={<Package size={16} />}
       >
         <HorizontalBarChart items={categoryBuckets} emptyText="Riskli kategori bulunmuyor" />
       </ChartPanel>
       <ChartPanel
         title="Aksiyon Durumu"
-        description="SKT geçmiş ve takipteki stoklu parti dağılımı"
+        description="SKT geçmiş ve takipteki stoklu ürün gruplarının dağılımı"
         icon={<Trash2 size={16} />}
       >
         <ColumnChart items={actionBuckets} />
@@ -555,9 +567,9 @@ function ColumnChart({ items = [], emptyText = 'Veri bulunmuyor' }) {
 function ExpiryFilters({ filters, updateFilters, categoryOptions, supplierOptions }) {
   return (
     <section className="stock-expiry-page__panel stock-expiry-page__filters">
-      <SectionHeader icon={<Filter size={18} />} title="Filtreler" description="SKT risklerini ürün, parti, konum ve süreye göre daraltın." />
+      <SectionHeader icon={<Filter size={18} />} title="Filtreler" description="SKT risklerini ürün, SKT grubu, konum ve süreye göre daraltın." />
       <div className="stock-expiry-page__filter-grid">
-        <label className="stock-expiry-page__field stock-expiry-page__field--search"><span>Arama</span><input value={filters.search} onChange={(event) => updateFilters({ search: event.target.value })} placeholder="Ürün, SKU, barkod veya parti" /></label>
+        <label className="stock-expiry-page__field stock-expiry-page__field--search"><span>Arama</span><input value={filters.search} onChange={(event) => updateFilters({ search: event.target.value })} placeholder="Ürün, SKU, barkod veya SKT grubu" /></label>
         <label className="stock-expiry-page__field"><span>Kategori</span><select value={filters.category} onChange={(event) => updateFilters({ category: event.target.value })}><option value="">Tümü</option>{categoryOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="stock-expiry-page__field"><span>Tedarikçi</span><select value={filters.supplier} onChange={(event) => updateFilters({ supplier: event.target.value })}><option value="">Tümü</option>{supplierOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="stock-expiry-page__field"><span>Risk seviyesi</span><select value={filters.risk} onChange={(event) => updateFilters({ risk: event.target.value })}><option value="">Tümü</option><option value="expired">SKT geçmiş</option><option value="today">Bugün kritik</option><option value="3days">1-3 gün</option><option value="7days">4-7 gün</option><option value="later">7+ gün</option></select></label>
@@ -578,7 +590,7 @@ function ExpiryTableSection({ children, title, description, icon, rows, total = 
           <span className="stock-expiry-page__section-icon">{icon}</span>
           <div>
             <h3>{title}</h3>
-            <p>{description} <strong>{formatNumber(total)} parti</strong></p>
+            <p>{description} <strong>{formatNumber(total)} SKT grubu</strong></p>
           </div>
         </div>
         <div className="stock-expiry-page__toolbar">{actions}</div>

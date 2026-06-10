@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { formatReturnReasonLabel } from './formatters.js';
 import { SUPPORT_CONTACT } from '../constants/contact.js';
+import shelfioLogoUrl from '../assets/logo.png';
 
 const STORE_LEGAL_INFO = {
   companyName: 'Shelfio Magazacilik Ltd. Sti.',
@@ -34,6 +35,7 @@ const DESK_LABELS = {
 
 let pdfMakeInstance = null;
 let pdfFontsModule = null;
+let shelfioLogoDataUrlPromise = null;
 
 const loadPdfRuntime = async () => {
   if (pdfMakeInstance && pdfFontsModule) {
@@ -76,6 +78,29 @@ const ensurePdfReady = async () => {
   }
 
   return pdfMake;
+};
+
+export const preparePosPdfRuntime = () => ensurePdfReady();
+
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onloadend = () => resolve(reader.result);
+  reader.onerror = reject;
+  reader.readAsDataURL(blob);
+});
+
+const getShelfioLogoDataUrl = () => {
+  if (!shelfioLogoDataUrlPromise) {
+    shelfioLogoDataUrlPromise = fetch(shelfioLogoUrl)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Shelfio logosu PDF icin yuklenemedi.');
+        }
+        return response.blob();
+      })
+      .then(blobToDataUrl);
+  }
+  return shelfioLogoDataUrlPromise;
 };
 
 const formatCurrency = (value) => new Intl.NumberFormat('tr-TR', {
@@ -241,6 +266,11 @@ const buildInvoiceDocDefinition = (record, options = {}) => {
   const paymentSummary = buildPaymentText(record);
   const deskCode = record.deskCode || options.deskCode || '';
   const deskLabel = DESK_LABELS[deskCode] || deskCode || '-';
+  const customer = record.customer || {};
+  const customerName = customer.name || customer.companyName || 'Genel Tüketici';
+  const customerTaxId = customer.taxNumber || customer.vkn || customer.tckn || '';
+  const customerAddress = customer.address || [customer.district, customer.city].filter(Boolean).join(' / ');
+  const invoiceLogo = options.logoDataUrl;
 
   const itemRows = (record.items || []).map((item, index) => {
     const lineTotal = Number(item.totalPrice || 0);
@@ -270,8 +300,15 @@ const buildInvoiceDocDefinition = (record, options = {}) => {
       {
         columns: [
           [
-            { text: 'e-ARSIV FATURA', style: 'invoiceTitle' },
-            { text: 'Elektronik Ticari Belge', style: 'invoiceSub' },
+            {
+              image: invoiceLogo,
+              width: 132,
+              height: 38,
+              fit: [132, 38],
+              alignment: 'left',
+              margin: [0, 0, 0, 2],
+            },
+            { text: 'e-Fatura / e-Arşiv entegrasyon belgesi değildir', style: 'invoiceSub' },
           ],
           [
             { text: `Fatura No: ${invoiceNo}`, alignment: 'right', bold: true },
@@ -304,10 +341,10 @@ const buildInvoiceDocDefinition = (record, options = {}) => {
             width: '*',
             stack: [
               { text: 'ALICI', style: 'boxTitle' },
-              { text: `Firma: ${record.customer?.name || 'Genel Tüketici'}` },
-              { text: 'VKN: 1567957351' },
-              ...(record.customer?.phone ? [{ text: `Telefon: ${record.customer.phone}` }] : []),
-              { text: 'Adres: İzmir / Türkiye' },
+              { text: `Firma: ${customerName}` },
+              { text: `VKN/TCKN: ${customerTaxId || 'Belirtilmedi'}` },
+              ...(customer.phone ? [{ text: `Telefon: ${customer.phone}` }] : []),
+              { text: `Adres: ${customerAddress || 'Belirtilmedi'}` },
             ],
             margin: [6, 0, 0, 0],
             style: 'metaBox',
@@ -361,12 +398,11 @@ const buildInvoiceDocDefinition = (record, options = {}) => {
       },
       {
         margin: [0, 16, 0, 0],
-        text: 'Bu belge, 213 sayılı Vergi Usul Kanunu kapsamında elektronik ortamda düzenlenmiştir. Fiziksel imza gerektirmez.',
+        text: 'Bu çıktı satış bilgilerini gösterir; mali mühürlü e-Fatura veya e-Arşiv belgesi yerine geçmez.',
         style: 'invoiceFooter',
       },
     ],
     styles: {
-      invoiceTitle: { fontSize: 20, bold: true, color: '#1d4ed8' },
       invoiceSub: { color: '#64748b', margin: [0, 2, 0, 0] },
       boxTitle: { bold: true, color: '#1d4ed8', margin: [0, 0, 0, 6] },
       metaBox: { margin: [0, 0, 0, 0], fontSize: 9 },
@@ -376,25 +412,57 @@ const buildInvoiceDocDefinition = (record, options = {}) => {
   };
 };
 
-export const downloadPosReceiptPdf = async (record, options = {}) => {
-  if (!record) {
-    throw new Error('Belge verisi bulunamadı.');
+const ensurePdfReadySync = () => {
+  if (pdfMakeInstance && pdfFontsModule) {
+    const embeddedVfs = resolveEmbeddedPdfVfs(pdfFontsModule);
+    const hasEmbeddedFonts = Object.keys(embeddedVfs).length > 0;
+    if (typeof pdfMakeInstance.addVirtualFileSystem === 'function' && hasEmbeddedFonts) {
+      pdfMakeInstance.addVirtualFileSystem(embeddedVfs);
+    } else if ((!pdfMakeInstance.vfs || Object.keys(pdfMakeInstance.vfs).length === 0) && hasEmbeddedFonts) {
+      pdfMakeInstance.vfs = embeddedVfs;
+    }
+    return pdfMakeInstance;
   }
-  const pdfMake = await ensurePdfReady();
-  const fileName = `fis-${record.referenceNo || record.id || 'islem'}.pdf`;
-  const docDefinition = buildReceiptDocDefinition(record, options);
-  pdfMake.createPdf(docDefinition).download(fileName);
+  return null;
 };
 
-export const downloadPosInvoicePdf = async (record, options = {}) => {
+export const printPosReceiptPdf = (record, options = {}) => {
   if (!record) {
     throw new Error('Belge verisi bulunamadı.');
   }
-  const pdfMake = await ensurePdfReady();
-  const fileName = `fatura-${record.referenceNo || record.id || 'islem'}.pdf`;
-  const docDefinition = buildInvoiceDocDefinition(record, options);
-  pdfMake.createPdf(docDefinition).download(fileName);
+  const syncPdfMake = ensurePdfReadySync();
+  if (syncPdfMake) {
+    const docDefinition = buildReceiptDocDefinition(record, options);
+    syncPdfMake.createPdf(docDefinition).print();
+    return;
+  }
+  return ensurePdfReady().then((pdfMake) => {
+    const docDefinition = buildReceiptDocDefinition(record, options);
+    pdfMake.createPdf(docDefinition).print();
+  });
 };
+
+export const getPosInvoiceWarnings = (record = {}) => {
+  const customer = record.customer || {};
+  const missing = [];
+  if (!(customer.name || customer.companyName)) missing.push('alıcı adı');
+  if (!(customer.taxNumber || customer.vkn || customer.tckn)) missing.push('VKN/TCKN');
+  if (!(customer.address || customer.city || customer.district)) missing.push('adres');
+  return missing;
+};
+
+export const printPosInvoicePdf = (record, options = {}) => {
+  if (!record) {
+    throw new Error('Belge verisi bulunamadı.');
+  }
+  return Promise.all([ensurePdfReady(), getShelfioLogoDataUrl()]).then(([pdfMake, logoDataUrl]) => {
+    const docDefinition = buildInvoiceDocDefinition(record, { ...options, logoDataUrl });
+    pdfMake.createPdf(docDefinition).print();
+  });
+};
+
+export const downloadPosReceiptPdf = printPosReceiptPdf;
+export const downloadPosInvoicePdf = printPosInvoicePdf;
 
 const unwrapSalesList = (payload) => {
   if (Array.isArray(payload)) return payload;
@@ -445,8 +513,12 @@ export const posService = {
     return api.get(`/pos/day-end${qs ? '?' + qs : ''}`);
   },
   closeDayEnd: (payload = {}) => api.post('/pos/day-end/close', payload),
-  downloadReceiptPdf: (record, options) => downloadPosReceiptPdf(record, options),
-  downloadInvoicePdf: (record, options) => downloadPosInvoicePdf(record, options),
+  preparePdfRuntime: () => preparePosPdfRuntime(),
+  printReceiptPdf: (record, options) => printPosReceiptPdf(record, options),
+  printInvoicePdf: (record, options) => printPosInvoicePdf(record, options),
+  getInvoiceWarnings: (record) => getPosInvoiceWarnings(record),
+  downloadReceiptPdf: (record, options) => printPosReceiptPdf(record, options),
+  downloadInvoicePdf: (record, options) => printPosInvoicePdf(record, options),
   lookupMobileOrder: (code) => api.post('/pos/mobile-orders/lookup', { code }),
   pullMobileOrder: (id) => api.post(`/pos/mobile-orders/${id}/pull`),
   completeMobileOrder: (id, salePayload) => api.post(`/pos/mobile-orders/${id}/complete`, salePayload),

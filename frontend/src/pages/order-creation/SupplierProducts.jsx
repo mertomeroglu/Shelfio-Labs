@@ -105,7 +105,9 @@ const toEntityKey = (value) => String(value ?? '').trim();
 
 const normalizeSuggestionIntent = (value = '') => {
   const normalized = String(value || '').trim().toLocaleLowerCase('tr-TR');
-  return normalized === 'bulk' ? 'bulk' : 'single';
+  if (normalized === 'bulk') return 'bulk';
+  if (normalized === 'manual') return 'manual';
+  return 'single';
 };
 
 const parseSuggestionQueryList = (value = '') => String(value || '')
@@ -256,7 +258,7 @@ const extractPurchaseSuggestionPayload = ({ locationState, searchParams }) => {
     handoffId,
     handoff,
     intent,
-    items: normalizeSuggestionIntent(intent) === 'single' ? deduped.slice(0, 1) : deduped,
+    items: intent === 'single' ? deduped.slice(0, 1) : deduped,
   };
 };
 
@@ -5468,7 +5470,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
       return;
     }
 
-    if (intent === 'single') {
+    if (intent === 'single' || (intent === 'manual' && candidateItems.length === 1)) {
       const target = resolvedSelections[0];
       setOrderFlowMode(ORDER_FLOW_MODES.PRODUCT);
       selectProductForComparison(target.row.productId);
@@ -5488,7 +5490,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
         }
       );
       if (didOpen) {
-        clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
+        clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: false });
       } else {
         suggestionAutoOpenSignatureRef.current = '';
       }
@@ -5519,7 +5521,7 @@ export default function SupplierProducts({ initialView = 'compare' }) {
     selectProductForComparison(resolvedSelections[0]?.row?.productId || '');
     setBulkNoteTab('operational');
     setIsBulkOrderModalOpen(true);
-    clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: true });
+    clearPurchaseSuggestionNavigationContext({ handoffId, removeHandoff: false });
 
     const unresolvedCount = candidateItems.length - resolvedSelections.length;
     const skippedCount = unresolvedCount + invalidQuantityItems.length;

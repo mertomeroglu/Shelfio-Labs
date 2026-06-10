@@ -1,4 +1,4 @@
-﻿import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { AppError } from '../utils/appError.js';
 import { customerRepo } from '../repositories/customerRepository.js';
 import { customerOrderRepo } from '../repositories/customerOrderRepository.js';
@@ -588,7 +588,7 @@ export const customerService = {
       .filter(Boolean);
 
     if (!checkoutItems.length) {
-      throw new AppError(400, 'SipariÃ…Å¸e aktarÃ„Â±lacak geÃƒÂ§erli sepet ÃƒÂ¼rÃƒÂ¼nÃƒÂ¼ bulunamadÃ„Â±');
+      throw new AppError(400, 'Siparişe aktarılacak geçerli sepet ürünü bulunamadı');
     }
 
     const totalAmount = checkoutItems.reduce((sum, item) => sum + (Number(item.unitPrice || 0) * Number(item.quantity || 0)), 0);
@@ -648,23 +648,23 @@ export const customerService = {
 
   async assignGiftCard(id, payload) {
     const code = normalizeCodeValue(payload?.code);
-    if (!code) throw new AppError(400, 'Hediye kartÄ± kodu zorunludur');
+    if (!code) throw new AppError(400, 'Hediye kartı kodu zorunludur');
 
     const customer = await customerRepo.findById(id);
     if (!customer) throw new AppError(404, 'Musteri bulunamadi');
 
     const { campaignCardByCode } = await getGiftCardCatalogState();
     const sourceCard = campaignCardByCode.get(code);
-    if (!sourceCard) throw new AppError(404, 'Girilen hediye kartÄ± kodu bulunamadÄ± veya aktif deÄŸil');
-    if (!isGiftCardAssignable(sourceCard)) throw new AppError(409, 'Bu hediye kartÄ± atanabilir durumda deÄŸil');
+    if (!sourceCard) throw new AppError(404, 'Girilen hediye kartı kodu bulunamadı veya aktif değil');
+    if (!isGiftCardAssignable(sourceCard)) throw new AppError(409, 'Bu hediye kartı atanabilir durumda değil');
 
     const alreadyAssigned = false;
-    if (alreadyAssigned) throw new AppError(409, 'Bu hediye kartÄ± baÅŸka bir mÃ¼ÅŸteriye zaten atanmÄ±ÅŸ');
+    if (alreadyAssigned) throw new AppError(409, 'Bu hediye kartı başka bir müşteriye zaten atanmış');
 
     const row = await customerRepo.updateById(id, (x) => {
       const existingCards = Array.isArray(x.giftCards) ? x.giftCards : [];
       if (existingCards.some((card) => normalizeCodeValue(card?.code) === code)) {
-        throw new AppError(409, 'Bu hediye kartÄ± bu mÃ¼ÅŸteriye zaten atanmÄ±ÅŸ');
+        throw new AppError(409, 'Bu hediye kartı bu müşteriye zaten atanmış');
       }
 
       return {
@@ -702,8 +702,8 @@ export const customerService = {
     const customerIds = Array.from(new Set(
       Array.isArray(payload.customerIds) ? payload.customerIds.map((id) => String(id || '').trim()).filter(Boolean) : []
     ));
-    if (!code) throw new AppError(400, 'Hediye kartÄ± kodu zorunludur');
-    if (!customerIds.length) throw new AppError(400, 'En az bir mÃ¼ÅŸteri seÃ§melisiniz');
+    if (!code) throw new AppError(400, 'Hediye kartı kodu zorunludur');
+    if (!customerIds.length) throw new AppError(400, 'En az bir müşteri seçmelisiniz');
 
     let assignedCount = 0;
     let skippedCount = 0;

@@ -5,8 +5,17 @@ import { productRepo } from '../repositories/productRepository.js';
 import { supplierCatalogVersionRepo } from '../repositories/supplierCatalogVersionRepository.js';
 import { supplierProductRepo } from '../repositories/supplierProductRepository.js';
 import { supplierRepo } from '../repositories/supplierRepository.js';
+import { getPrisma } from '../providers/postgresProvider.js';
+import { getActiveTenantId } from '../tenant/tenantContext.js';
 import { normalizeUnit } from '../utils/unitSystem.js';
 import { resolveProductBaseUnit } from '../utils/productUnitQuality.js';
+import {
+  compareNormalizedCatalogPrices,
+  evaluateCatalogPriceChange,
+  normalizeCatalogPrice,
+  normalizePurchasePriceBasis,
+  parseCatalogNumber,
+} from '../domain/catalogPricePolicy.js';
 
 
 const CATALOG_MATCH_STATUSES = {
@@ -63,7 +72,12 @@ const FIELD_ALIASES = {
   unit: ['birim', 'unit', 'olcubirimi'],
   unitsPerCase: ['koliici', 'unitspercase', 'quantitypercase', 'koli'],
   purchasePrice: ['alisfiyati', 'purchaseprice', 'price', 'fiyat'],
+  purchasePriceBasis: ['purchasepricebasis', 'pricebasis', 'fiyatbazi', 'fiyatbazı', 'alisfiyatbazi', 'alışfiyatbazı'],
+  unitPrice: ['unitprice', 'birimfiyat', 'birimalisfiyati'],
+  casePrice: ['caseprice', 'kolifiyati', 'kolialisfiyati'],
+  packagePrice: ['packageprice', 'paketfiyati', 'paketalisfiyati'],
   minimumOrderQty: ['moq', 'minimumorderqty', 'minorderqty', 'minimumsiparis'],
+  minimumOrderUnit: ['moqbirimi', 'minimumorderunit', 'minorderunit', 'minimumsiparisbirimi', 'siparisbirimi'],
   leadTimeDays: ['terminsuresi', 'leadtimedays', 'leadtime', 'teslimsuresi'],
   campaignInfo: ['kampanya', 'kampanyabilgisi', 'campaign', 'discount', 'campaigninfo'],
   categoryName: ['kategori', 'category', 'categoryname'],
@@ -89,6 +103,7 @@ const FIELD_ALIASES = {
   recommendedSalePrice: ['recommendedsaleprice', 'onerilensatisfiyati', 'saleprice'],
   currency: ['currency', 'parabirimi'],
   vatRate: ['vatrate', 'kdv', 'kdvorani'],
+  vatIncluded: ['vatincluded', 'kdvdahil', 'kdvdahildir'],
   discountRate: ['discountrate', 'indirimorani'],
   discountAmount: ['discountamount', 'indirimtutari'],
   campaignPrice: ['campaignprice', 'kampanyafiyati'],
@@ -147,10 +162,7 @@ const normalizeComparable = (value) => normalizeText(value).toLocaleLowerCase('t
 const normalizeKey = (value) => normalizeText(value).toLowerCase('tr-TR').replace(/[^a-z0-9ığüşöç]/g, '');
 
 const toNumberOrNull = (value) => {
-  if (value === null || value === undefined || value === '') return null;
-  const normalized = String(value).replace(/\./g, '').replace(',', '.');
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseCatalogNumber(value).value;
 };
 
 const toBooleanOrNull = (value) => {
@@ -227,6 +239,9 @@ const evaluateMatchGuards = ({ row, product, reason }) => {
   }
 
   const guardIssues = [];
+  if (row.barcode && product.barcode && normalizeText(row.barcode) !== normalizeText(product.barcode)) {
+    guardIssues.push('barcode_conflict');
+  }
   if (valuesConflict(row.brand, product.brand)) guardIssues.push('brand_conflict');
   if (valuesConflict(row.unit, product.unit)) guardIssues.push('unit_conflict');
   if (isPackSizeConflict(row.unitsPerCase, product.unitsPerCase)) guardIssues.push('pack_size_conflict');
@@ -284,9 +299,24 @@ const normalizeImportRow = (row = {}, index = 0) => {
     categoryName,
     unit: normalizeUnit(rawUnit, categoryName),
   }).unit;
-  const unitsPerCase = toNumberOrNull(readImportField(row, 'unitsPerCase')) || 1;
-  const purchasePrice = toNumberOrNull(readImportField(row, 'purchasePrice'));
+  const unitsPerCase = toNumberOrNull(readImportField(row, 'unitsPerCase'));
+  const explicitUnitPrice = readImportField(row, 'unitPrice');
+  const explicitCasePrice = readImportField(row, 'casePrice');
+  const explicitPackagePrice = readImportField(row, 'packagePrice');
+  const explicitBasis = readImportField(row, 'purchasePriceBasis');
+  const rawPurchasePrice = explicitUnitPrice || explicitCasePrice || explicitPackagePrice
+    || readImportField(row, 'purchasePrice');
+  const purchasePriceBasis = explicitUnitPrice
+    ? 'unit'
+    : explicitCasePrice
+      ? 'case'
+      : explicitPackagePrice
+        ? 'package'
+        : normalizePurchasePriceBasis(explicitBasis);
+  const purchasePriceParse = parseCatalogNumber(rawPurchasePrice);
+  const purchasePrice = purchasePriceParse.value;
   const minimumOrderQty = toNumberOrNull(readImportField(row, 'minimumOrderQty')) || 1;
+  const minimumOrderUnit = normalizeText(readImportField(row, 'minimumOrderUnit'));
   const leadTimeDays = toNumberOrNull(readImportField(row, 'leadTimeDays'));
   const campaignInfo = normalizeText(readImportField(row, 'campaignInfo'));
   const brand = normalizeText(readImportField(row, 'brand'));
@@ -302,6 +332,10 @@ const normalizeImportRow = (row = {}, index = 0) => {
       'unit',
       'unitsPerCase',
       'purchasePrice',
+      'purchasePriceBasis',
+      'unitPrice',
+      'casePrice',
+      'packagePrice',
       'minimumOrderQty',
       'leadTimeDays',
       'campaignInfo',
@@ -310,6 +344,7 @@ const normalizeImportRow = (row = {}, index = 0) => {
       'isActive',
       'currency',
       'vatRate',
+      'vatIncluded',
       'listPrice',
       'recommendedSalePrice',
     ].includes(fieldName)) return;
@@ -329,6 +364,7 @@ const normalizeImportRow = (row = {}, index = 0) => {
   return {
     rowId: `row-${index + 1}`,
     rowNumber: index + 1,
+    rowNumber: index + 1,
     excelProductName: productName,
     supplierProductCode,
     barcode,
@@ -336,7 +372,13 @@ const normalizeImportRow = (row = {}, index = 0) => {
     unit,
     unitsPerCase,
     purchasePrice,
+    purchasePriceBasis,
+    rawPurchasePrice,
+    parsedPurchasePrice: purchasePrice,
+    priceParseConfidence: purchasePriceParse.confidence,
+    priceParseReason: purchasePriceParse.reason,
     minimumOrderQty,
+    minimumOrderUnit,
     leadTimeDays: leadTimeDays || 0,
     campaignInfo,
     categoryName,
@@ -344,6 +386,8 @@ const normalizeImportRow = (row = {}, index = 0) => {
     isActive: activeParsed ?? true,
     currency: normalizeText(readImportField(row, 'currency')) || 'TRY',
     vatRate: toNumberOrNull(readImportField(row, 'vatRate')),
+    taxRate: toNumberOrNull(readImportField(row, 'vatRate')),
+    vatIncluded: toBooleanOrNull(readImportField(row, 'vatIncluded')),
     listPrice: toNumberOrNull(readImportField(row, 'listPrice')),
     recommendedSalePrice: toNumberOrNull(readImportField(row, 'recommendedSalePrice')),
     ...extraFields,
@@ -351,36 +395,69 @@ const normalizeImportRow = (row = {}, index = 0) => {
   };
 };
 
-const findBestProductMatch = ({ row, products, supplierProducts, supplierId }) => {
-  const barcodeMatch = row.barcode
-     ? products.find((item) => normalizeText(item.barcode) && normalizeText(item.barcode) === row.barcode)
-    : null;
+const buildMatchIndexes = ({ products, supplierProducts, supplierId }) => ({
+  barcode: new Map(products
+    .filter((item) => normalizeText(item.barcode))
+    .map((item) => [normalizeText(item.barcode), item])),
+  sku: new Map(products
+    .filter((item) => normalizeText(item.sku))
+    .map((item) => [normalizeText(item.sku), item])),
+  supplierCode: new Map(supplierProducts
+    .filter((item) => String(item.supplierId) === String(supplierId) && normalizeText(item.supplierProductCode))
+    .map((item) => [normalizeText(item.supplierProductCode), item])),
+  productById: new Map(products.map((item) => [String(item.id), item])),
+});
+
+const findBestProductMatch = ({ row, products, indexes }) => {
+  const barcodeMatch = row.barcode ? indexes.barcode.get(row.barcode) : null;
   if (barcodeMatch) {
-    return { product: barcodeMatch, score: 0.98, reason: 'barcode' };
+    return { product: barcodeMatch, score: 1, reason: 'barcode', matchedBy: 'barcode' };
   }
 
   const supplierCodeMatch = row.supplierProductCode
-     ? supplierProducts.find((item) => String(item.supplierId) === String(supplierId) && normalizeText(item.supplierProductCode) === row.supplierProductCode)
+    ? indexes.supplierCode.get(row.supplierProductCode)
     : null;
 
   if (supplierCodeMatch) {
-    const product = products.find((item) => String(item.id) === String(supplierCodeMatch.productId));
+    const product = indexes.productById.get(String(supplierCodeMatch.productId));
     if (product) {
-      return { product, score: 0.94, reason: 'supplier_product_code' };
+      return {
+        product,
+        score: 0.95,
+        reason: 'supplier_product_code',
+        matchedBy: 'supplierProductCode',
+      };
     }
+  }
+
+  const skuMatch = row.sku ? indexes.sku.get(row.sku) : null;
+  if (skuMatch) {
+    return { product: skuMatch, score: 0.9, reason: 'sku', matchedBy: 'sku' };
   }
 
   let best = null;
   for (const product of products) {
-    const skuScore = row.sku && normalizeText(product.sku) === row.sku ? 1 : 0;
+    if (
+      row.barcode
+      && product.barcode
+      && normalizeText(row.barcode) !== normalizeText(product.barcode)
+    ) continue;
     const nameScore = scoreNameSimilarity(row.excelProductName, product.name);
-    const score = Math.max(skuScore * 0.95, nameScore);
+    const exactName = normalizeComparable(row.excelProductName) === normalizeComparable(product.name);
+    const brandMatches = row.brand && normalizeComparable(row.brand) === normalizeComparable(product.brand);
+    const categoryMatches = row.categoryName
+      && normalizeComparable(row.categoryName) === normalizeComparable(getProductCategoryName(product));
+    const score = exactName
+      ? Math.min(0.69, 0.65 + (brandMatches ? 0.02 : 0) + (categoryMatches ? 0.02 : 0))
+      : nameScore >= 0.35
+        ? Math.min(0.6, 0.4 + (nameScore * 0.2))
+        : nameScore;
     if (!best || score > best.score) {
-      best = { product, score, reason: skuScore ? 'sku' : 'name_similarity' };
+      best = { product, score, reason: 'name_similarity', matchedBy: 'productName' };
     }
   }
 
-  return best && best.score >= 0.45 ? best : null;
+  return best && best.score >= 0.4 ? best : null;
 };
 
 const collectLegacyRowErrors = ({ row, duplicateBarcodeRows, duplicateSupplierCodeRows }) => {
@@ -420,7 +497,6 @@ const collectRowErrors = ({ row, duplicateBarcodeRows, duplicateSupplierCodeRows
   const missingRequiredFieldNames = [];
 
   if (!row.excelProductName) missingRequiredFieldNames.push('productName');
-  if (!row.barcode && !row.supplierProductCode) missingRequiredFieldNames.push('supplierProductCode|barcode');
   if (row.purchasePrice === null || row.purchasePrice <= 0) missingRequiredFieldNames.push('purchasePrice');
   if (!row.unit) missingRequiredFieldNames.push('unit');
   if (!row.categoryName) missingRequiredFieldNames.push('categoryName');
@@ -525,13 +601,432 @@ const stripVersionPayload = (version) => ({
   summary: version.summary || {},
 });
 
+const parsePositiveInt = (value, fallback, max = 250) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+};
+
+const buildPagination = ({ page, limit, total }) => {
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return {
+    page,
+    limit,
+    total,
+    totalPages,
+    hasNextPage: page < totalPages,
+    hasPreviousPage: page > 1,
+  };
+};
+
+const CATALOG_LIST_SORTS = Object.freeze({
+  createdAt_desc: ['createdAt', 'desc'],
+  createdAt_asc: ['createdAt', 'asc'],
+  updatedAt_desc: ['updatedAt', 'desc'],
+  updatedAt_asc: ['updatedAt', 'asc'],
+  name_asc: ['catalogName', 'asc'],
+  name_desc: ['catalogName', 'desc'],
+  catalogName_asc: ['catalogName', 'asc'],
+  catalogName_desc: ['catalogName', 'desc'],
+  supplierName_asc: ['supplierName', 'asc'],
+  supplierName_desc: ['supplierName', 'desc'],
+  itemCount_asc: ['itemCount', 'asc'],
+  itemCount_desc: ['itemCount', 'desc'],
+  totalRowCount_asc: ['itemCount', 'asc'],
+  totalRowCount_desc: ['itemCount', 'desc'],
+  uploadedAt_asc: ['createdAt', 'asc'],
+  uploadedAt_desc: ['createdAt', 'desc'],
+});
+
+const parseCatalogListQuery = (query = {}) => {
+  const page = parsePositiveInt(query.page, 1, 100000);
+  const limit = parsePositiveInt(query.limit, 25, 100);
+  return {
+    page,
+    limit,
+    search: normalizeComparable(query.search || query.query),
+    supplierId: normalizeText(query.supplierId),
+    status: normalizeText(query.status),
+    sort: CATALOG_LIST_SORTS[query.sort] || CATALOG_LIST_SORTS.createdAt_desc,
+  };
+};
+
+const readJsonObject = (value) => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+);
+
+const readCatalogVersionSummary = (row = {}) => {
+  const payload = readJsonObject(row.payload);
+  const summary = readJsonObject(payload.summary);
+  const itemCount = Number(
+    payload.totalRowCount
+    ?? summary.appliedCount
+    ?? summary.matchedCount
+    ?? row.rowCount
+    ?? 0
+  );
+  const matchedCount = Number(summary.matchedCount ?? summary.appliedCount ?? itemCount);
+  const unmatchedCount = Number(
+    summary.unmatchedCount
+    ?? summary.invalidCount
+    ?? summary.conflictCount
+    ?? Math.max(0, itemCount - matchedCount)
+  );
+  const isActive = (payload.isActive ?? row.status === 'active') === true;
+
+  return {
+    id: row.id,
+    name: payload.catalogName || payload.fileName || `Katalog ${row.id}`,
+    catalogName: payload.catalogName || payload.fileName || `Katalog ${row.id}`,
+    supplierId: row.supplierId || payload.supplierId || '',
+    supplierName: payload.supplierName || row.supplierName || '-',
+    supplierCode: payload.supplierCode || row.supplierCode || '',
+    itemCount,
+    totalRowCount: itemCount,
+    matchedCount,
+    unmatchedCount,
+    status: row.status || payload.status || (isActive ? 'active' : 'archived'),
+    isActive,
+    isActiveVersion: isActive,
+    sourceType: payload.sourceType || 'import',
+    sourceLabel: payload.sourceLabel || 'Manuel Yükleme',
+    fileName: payload.fileName || '',
+    importId: payload.importId || null,
+    versionNo: Number(payload.versionNo || 1),
+    verificationStatus: payload.verificationStatus || 'verified',
+    importStatus: payload.importStatus || 'completed',
+    downloadable: payload.downloadable ?? true,
+    viewable: payload.viewable ?? true,
+    uploadedAt: toIsoDateString(payload.uploadedAt || row.createdAt),
+    validityStart: toIsoDateString(payload.validityStart || row.createdAt),
+    validityEnd: toIsoDateString(payload.validityEnd),
+    activatedAt: toIsoDateString(payload.activatedAt),
+    archivedAt: toIsoDateString(payload.archivedAt),
+    createdAt: toIsoDateString(row.createdAt),
+    updatedAt: toIsoDateString(row.updatedAt || row.createdAt),
+  };
+};
+
+const sortCatalogListRows = (rows, [key, direction]) => {
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const leftValue = left[key] ?? '';
+    const rightValue = right[key] ?? '';
+    if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+      return (leftValue - rightValue) * multiplier;
+    }
+    if (key === 'createdAt' || key === 'updatedAt') {
+      return (new Date(leftValue || 0).getTime() - new Date(rightValue || 0).getTime()) * multiplier;
+    }
+    return String(leftValue).localeCompare(String(rightValue), 'tr') * multiplier;
+  });
+};
+
+const matchesCatalogListFilters = (row, filters) => {
+  if (filters.supplierId && String(row.supplierId) !== filters.supplierId) return false;
+  if (filters.status && String(row.status) !== filters.status) return false;
+  if (!filters.search) return true;
+  return normalizeComparable([
+    row.name,
+    row.supplierName,
+    row.supplierCode,
+    row.fileName,
+    row.status,
+    row.sourceLabel,
+  ].filter(Boolean).join(' ')).includes(filters.search);
+};
+
+const getLightweightCatalogRows = async () => {
+  const prisma = await getPrisma();
+  const tenantId = getActiveTenantId();
+  const [versionRows, generatedGroups] = await Promise.all([
+    prisma.$queryRawUnsafe(`
+      SELECT
+        v.id,
+        v.supplier_id AS "supplierId",
+        v.status,
+        v.created_at AS "createdAt",
+        v.updated_at AS "updatedAt",
+        v.payload - 'supplierProductSnapshot' - 'rows' AS payload,
+        CASE WHEN jsonb_typeof(v.rows) = 'array' THEN jsonb_array_length(v.rows) ELSE 0 END AS "rowCount",
+        s.name AS "supplierName",
+        COALESCE(s.supplier_code, s.code) AS "supplierCode"
+      FROM supplier_catalog_versions v
+      LEFT JOIN suppliers s
+        ON s.id = v.supplier_id
+       AND s.tenant_id = v.tenant_id
+      WHERE v.tenant_id = $1
+    `, tenantId),
+    prisma.supplierProduct.groupBy({
+      by: ['supplierId'],
+      where: {
+        tenantId,
+        isActive: { not: false },
+        supplierId: { not: null },
+      },
+      _count: { _all: true },
+      _min: { createdAt: true },
+      _max: { updatedAt: true },
+    }),
+  ]);
+
+  const realRows = versionRows.map(readCatalogVersionSummary);
+  const suppliersWithCatalog = new Set(realRows.map((row) => String(row.supplierId || '')).filter(Boolean));
+  const generatedSupplierIds = generatedGroups
+    .map((group) => String(group.supplierId || ''))
+    .filter((supplierId) => supplierId && !suppliersWithCatalog.has(supplierId));
+  const generatedSuppliers = generatedSupplierIds.length
+    ? await prisma.supplier.findMany({
+      where: { tenantId, id: { in: generatedSupplierIds } },
+      select: {
+        id: true,
+        name: true,
+        supplierCode: true,
+        code: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    })
+    : [];
+  const supplierMap = new Map(generatedSuppliers.map((supplier) => [String(supplier.id), supplier]));
+  const generatedRows = generatedGroups
+    .filter((group) => generatedSupplierIds.includes(String(group.supplierId || '')))
+    .map((group) => {
+      const supplierId = String(group.supplierId);
+      const supplier = supplierMap.get(supplierId) || {};
+      const itemCount = Number(group._count?._all || 0);
+      const createdAt = group._min?.createdAt || supplier.createdAt || null;
+      const updatedAt = group._max?.updatedAt || supplier.updatedAt || createdAt;
+      return {
+        id: `gen-catv-${supplierId}`,
+        name: `${supplier.name || supplierId} Ürün Kataloğu`,
+        catalogName: `${supplier.name || supplierId} Ürün Kataloğu`,
+        supplierId,
+        supplierName: supplier.name || supplierId,
+        supplierCode: supplier.supplierCode || supplier.code || supplierId,
+        itemCount,
+        totalRowCount: itemCount,
+        matchedCount: itemCount,
+        unmatchedCount: 0,
+        status: 'active',
+        isActive: true,
+        isActiveVersion: true,
+        sourceType: 'generated',
+        sourceLabel: 'Sistemden Üretildi',
+        fileName: `${supplier.name || supplierId} - Sistem Kataloğu`,
+        importId: null,
+        versionNo: 1,
+        verificationStatus: 'verified',
+        importStatus: 'completed',
+        downloadable: true,
+        viewable: true,
+        uploadedAt: toIsoDateString(createdAt),
+        validityStart: toIsoDateString(createdAt),
+        validityEnd: null,
+        activatedAt: toIsoDateString(createdAt),
+        archivedAt: null,
+        createdAt: toIsoDateString(createdAt),
+        updatedAt: toIsoDateString(updatedAt),
+      };
+    });
+
+  return [...realRows, ...generatedRows];
+};
+
+const mapCatalogItemRow = (supplierProduct = {}, product = {}, rowIndex = 1) => ({
+  rowIndex,
+  productId: supplierProduct.productId || product.id || '',
+  sku: supplierProduct.supplierSku || product.sku || '-',
+  barcode: supplierProduct.barcode || product.barcode || '-',
+  supplierProductCode: supplierProduct.supplierProductCode || '-',
+  productName: supplierProduct.supplierProductName || product.name || '-',
+  brand: product.brand || '-',
+  categoryName: product.categoryName || product.etiket || '-',
+  subCategory: product.etiket || '-',
+  unit: product.unit || supplierProduct.priceUnit || 'Adet',
+  unitsPerCase: supplierProduct.unitsPerCase || product.unitsPerCase || 1,
+  casesPerPallet: supplierProduct.casesPerPallet || product.casesPerPallet || 1,
+  storageType: product.requiredStorageType || 'Ortam',
+  purchasePrice: supplierProduct.purchasePrice || 0,
+  minimumOrderQty: supplierProduct.minimumOrderQty || supplierProduct.minOrderQty || 1,
+  leadTimeDays: supplierProduct.leadTimeDays || 3,
+  currency: supplierProduct.currency || 'TRY',
+  isActive: supplierProduct.isActive !== false,
+});
+
+const getVersionPayload = (version = {}) => (
+  version.payload && typeof version.payload === 'object' && !Array.isArray(version.payload)
+    ? version.payload
+    : {}
+);
+
+const toIsoDateString = (value) => (value instanceof Date ? value.toISOString() : value || null);
+
+const buildCatalogListRow = (version = {}) => {
+  const payload = getVersionPayload(version);
+  const summary = payload.summary || version.summary || {};
+  const supplierProductSnapshot = Array.isArray(payload.supplierProductSnapshot) ? payload.supplierProductSnapshot : [];
+  const rows = Array.isArray(version.rows) ? version.rows : Array.isArray(payload.rows) ? payload.rows : [];
+  const totalRowCount = Number(
+    payload.totalRowCount
+    ?? summary.appliedCount
+    ?? summary.matchedCount
+    ?? supplierProductSnapshot.length
+    ?? rows.length
+    ?? 0
+  );
+  const isActive = (payload.isActive ?? version.isActive) === true || String(version.status || payload.status || '') === 'active';
+  return {
+    id: version.id,
+    supplierId: version.supplierId || payload.supplierId || '',
+    supplierCode: payload.supplierCode || '',
+    supplierName: payload.supplierName || '',
+    importId: payload.importId || null,
+    fileName: payload.fileName || '',
+    catalogName: payload.catalogName || payload.fileName || '',
+    uploadedAt: toIsoDateString(payload.uploadedAt || version.createdAt),
+    validityStart: toIsoDateString(payload.validityStart || version.createdAt),
+    validityEnd: toIsoDateString(payload.validityEnd),
+    isActive,
+    isActiveVersion: isActive,
+    status: version.status || payload.status || (isActive ? 'active' : 'archived'),
+    sourceType: payload.sourceType || 'import',
+    sourceLabel: payload.sourceLabel || 'Manuel Yükleme',
+    versionNo: payload.versionNo || 1,
+    totalRowCount,
+    verificationStatus: payload.verificationStatus || 'verified',
+    importStatus: payload.importStatus || 'completed',
+    downloadable: payload.downloadable ?? true,
+    viewable: payload.viewable ?? true,
+    activatedAt: toIsoDateString(payload.activatedAt),
+    archivedAt: toIsoDateString(payload.archivedAt),
+    summary,
+    createdAt: toIsoDateString(version.createdAt || payload.createdAt),
+    updatedAt: toIsoDateString(version.updatedAt || payload.updatedAt || version.createdAt),
+  };
+};
+
+const buildGeneratedCatalogRow = ({ supplier = {}, count = 0, createdAt = null }) => ({
+  id: `gen-catv-${supplier.id}`,
+  supplierId: supplier.id,
+  supplierCode: supplier.supplierCode || supplier.code || supplier.id,
+  supplierName: supplier.name || supplier.id,
+  importId: null,
+  fileName: `${supplier.name || supplier.id} - Sistem Kataloğu`,
+  catalogName: `${supplier.name || supplier.id} Ürün Kataloğu`,
+  uploadedAt: toIsoDateString(createdAt || supplier.createdAt || new Date().toISOString()),
+  validityStart: toIsoDateString(createdAt || supplier.createdAt || new Date().toISOString()),
+  validityEnd: null,
+  isActive: true,
+  isActiveVersion: true,
+  status: 'active',
+  sourceType: 'generated',
+  sourceLabel: 'Sistemden Üretildi',
+  versionNo: 1,
+  totalRowCount: Number(count || 0),
+  verificationStatus: 'verified',
+  importStatus: 'completed',
+  downloadable: true,
+  viewable: true,
+  activatedAt: toIsoDateString(createdAt || supplier.createdAt || new Date().toISOString()),
+  archivedAt: null,
+  summary: {
+    matchedCount: Number(count || 0),
+    newProductCount: 0,
+    updateCount: 0,
+    invalidCount: 0,
+  },
+  createdAt: toIsoDateString(createdAt || supplier.createdAt || new Date().toISOString()),
+  updatedAt: toIsoDateString(supplier.updatedAt || createdAt || supplier.createdAt || new Date().toISOString()),
+});
+
+const catalogMatchesSearch = (row, query) => {
+  if (!query) return true;
+  const haystack = [
+    row.supplierName,
+    row.supplierCode,
+    row.catalogName,
+    row.fileName,
+    row.status,
+    row.sourceLabel,
+  ].filter(Boolean).join(' ');
+  return normalizeComparable(haystack).includes(query);
+};
+
+const sortCatalogRows = (rows = [], sort = 'uploadedAt_desc') => {
+  const [key = 'uploadedAt', direction = 'desc'] = String(sort || 'uploadedAt_desc').split('_');
+  const dir = direction === 'asc' ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const leftValue = left[key] ?? '';
+    const rightValue = right[key] ?? '';
+    if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+      return (leftValue - rightValue) * dir;
+    }
+    return String(leftValue).localeCompare(String(rightValue), 'tr') * dir;
+  });
+};
+
+const mapSupplierProductCatalogRow = (sp = {}, index = 0) => {
+  const product = sp.product || {};
+  return {
+    rowIndex: index + 1,
+    productId: sp.productId || product.id || '',
+    sku: sp.supplierSku || product.sku || '-',
+    barcode: sp.barcode || product.barcode || '-',
+    productName: sp.supplierProductName || product.name || '-',
+    brand: product.brand || '-',
+    categoryName: product.categoryName || product.etiket || '-',
+    subCategory: product.etiket || '-',
+    unit: product.unit || sp.priceUnit || 'Adet',
+    unitsPerCase: sp.unitsPerCase || product.unitsPerCase || 1,
+    casesPerPallet: sp.casesPerPallet || product.casesPerPallet || 1,
+    storageType: product.requiredStorageType || 'Ortam',
+    purchasePrice: sp.purchasePrice || 0,
+    listPrice: sp.listPrice ?? product.salePrice ?? '',
+    recommendedSalePrice: sp.recommendedSalePrice ?? product.salePrice ?? '',
+    vatRate: sp.vatRate ?? '',
+    packSize: sp.packSize || '',
+    quantityPerPackage: sp.quantityPerPackage || '',
+    availabilityStatus: sp.availabilityStatus || '',
+    supplierStockQty: sp.supplierStockQty ?? '',
+    supplierNote: sp.supplierNote || '',
+    productDescription: sp.productDescription || product.productDescription || product.description || '',
+    salePrice: product.salePrice || 0,
+    previousSalePrice: product.previousSalePrice || null,
+    lastPriceChangePercent: product.lastPriceChangePercent || null,
+    priceHistory: Array.isArray(product.priceHistory) ? product.priceHistory : [],
+    moqUnitPrice: sp.purchasePrice || 0,
+    bulk10PlusUnitPrice: sp.tierPrice10Case || sp.purchasePrice || 0,
+    minimumOrderQty: sp.minimumOrderQty || sp.minOrderQty || 1,
+    leadTimeDays: sp.leadTimeDays || 3,
+    currency: sp.currency || 'TRY',
+    supplierProductCode: sp.supplierProductCode || '-',
+    isActive: sp.isActive !== false,
+  };
+};
+
+const catalogItemMatchesSearch = (row, query) => {
+  if (!query) return true;
+  return normalizeComparable([
+    row.productName,
+    row.sku,
+    row.barcode,
+    row.supplierProductCode,
+    row.brand,
+    row.categoryName,
+  ].filter(Boolean).join(' ')).includes(query);
+};
+
 const buildPreviewRows = ({ rows, products, supplierProducts, supplierId }) => {
   const { duplicateBarcodeRows, duplicateSupplierCodeRows } = buildDuplicateSets(rows);
+  const matchIndexes = buildMatchIndexes({ products, supplierProducts, supplierId });
 
   return rows.map((row) => {
-    const { errors, missingRequiredFieldNames } = collectRowErrors({ row, duplicateBarcodeRows, duplicateSupplierCodeRows });
+    const rowValidation = collectRowErrors({ row, duplicateBarcodeRows, duplicateSupplierCodeRows });
+    const errors = [...rowValidation.errors];
+    const { missingRequiredFieldNames } = rowValidation;
 
-    const bestMatch = findBestProductMatch({ row, products, supplierProducts, supplierId });
+    const bestMatch = findBestProductMatch({ row, products, indexes: matchIndexes });
     const matchedProduct = bestMatch?.product || null;
     const matchedProductId = matchedProduct?.id || '';
     const matchedProductName = matchedProduct?.name || '';
@@ -544,10 +1039,32 @@ const buildPreviewRows = ({ rows, products, supplierProducts, supplierId }) => {
     const existingSupplierProduct = matchedProductId
        ? supplierProducts.find((item) => String(item.supplierId) === String(supplierId) && String(item.productId) === String(matchedProductId))
       : null;
+    const newPriceNormalization = normalizeCatalogPrice({
+      purchasePrice: row.purchasePrice,
+      purchasePriceBasis: row.purchasePriceBasis,
+      unitsPerCase: row.unitsPerCase,
+      packSize: row.packSize,
+      unit: row.unit,
+    });
+    const priceParseNeedsReview = row.priceParseConfidence === 'low'
+      && row.purchasePrice !== null;
+    const oldPurchasePriceBasis = normalizePurchasePriceBasis(
+      existingSupplierProduct?.purchasePriceBasis || existingSupplierProduct?.priceUnit,
+    );
+    const oldPriceNormalization = existingSupplierProduct
+      ? normalizeCatalogPrice({
+        purchasePrice: existingSupplierProduct.purchasePrice,
+        purchasePriceBasis: oldPurchasePriceBasis,
+        unitsPerCase: existingSupplierProduct.unitsPerCase,
+        packSize: existingSupplierProduct.packSize,
+        unit: matchedProduct?.unit || existingSupplierProduct.priceUnit,
+      })
+      : null;
 
     let classification = CATALOG_CLASSIFICATIONS.NEW_PRODUCT;
     let matchStatus = CATALOG_MATCH_STATUSES.NEW_PRODUCT;
     let actionType = ACTION_TYPES.CREATE_NEW_PRODUCT;
+    let canonicalMatchStatus = 'new_product_candidate';
 
     if (errors.length) {
       classification = duplicateBarcode || duplicateSupplierCode
@@ -555,22 +1072,67 @@ const buildPreviewRows = ({ rows, products, supplierProducts, supplierId }) => {
         : CATALOG_CLASSIFICATIONS.MISSING;
       matchStatus = CATALOG_MATCH_STATUSES.INVALID;
       actionType = duplicateBarcode || duplicateSupplierCode ? ACTION_TYPES.CONFLICT : ACTION_TYPES.INVALID;
-    } else if (bestMatch && confidenceScore >= 92 && guardResult.canAutoMatch) {
+      canonicalMatchStatus = 'invalid_row';
+    } else if (bestMatch && confidenceScore >= 90 && guardResult.canAutoMatch) {
       const updateType = resolveUpdateType({ row, existing: existingSupplierProduct });
       classification = updateType === 'Değişiklik Yok' ? CATALOG_CLASSIFICATIONS.MATCHED : CATALOG_CLASSIFICATIONS.UPDATE;
       matchStatus = CATALOG_MATCH_STATUSES.MATCHED;
       actionType = ACTION_TYPES.MATCHED;
-    } else if (bestMatch && confidenceScore >= 45) {
+      canonicalMatchStatus = 'matched_existing_product';
+    } else if (bestMatch && confidenceScore >= 40) {
       classification = CATALOG_CLASSIFICATIONS.UPDATE;
       matchStatus = CATALOG_MATCH_STATUSES.MANUAL;
       actionType = ACTION_TYPES.MANUAL_MATCH;
+      canonicalMatchStatus = 'ambiguous_match';
     }
+
+    const priceComparison = canonicalMatchStatus === 'matched_existing_product' && existingSupplierProduct
+      ? compareNormalizedCatalogPrices({
+        oldPrice: {
+          ...oldPriceNormalization,
+          currency: existingSupplierProduct.currency || 'TRY',
+          taxRate: existingSupplierProduct.vatRate,
+          vatIncluded: existingSupplierProduct.vatIncluded,
+        },
+        newPrice: {
+          ...newPriceNormalization,
+          priceReviewRequired: newPriceNormalization.priceReviewRequired || priceParseNeedsReview,
+          currency: row.currency || 'TRY',
+          taxRate: row.taxRate,
+          vatIncluded: row.vatIncluded,
+        },
+      })
+      : null;
+    let diffStatus = canonicalMatchStatus === 'invalid_row'
+      ? 'invalid_row'
+      : canonicalMatchStatus === 'ambiguous_match'
+        ? 'ambiguous_match'
+        : canonicalMatchStatus === 'new_product_candidate'
+          ? (newPriceNormalization.priceReviewRequired || priceParseNeedsReview
+            ? 'price_review_required'
+            : 'new_product')
+          : priceComparison?.diffStatus || 'price_review_required';
+    const priceAnomalyReason = priceComparison?.priceAnomalyReason
+      || (priceParseNeedsReview ? 'price_parse_ambiguous' : null);
+    if (priceAnomalyReason === 'price_scale_suspected') {
+      errors.push(priceAnomalyReason);
+      diffStatus = 'invalid_row';
+      canonicalMatchStatus = 'invalid_row';
+      actionType = ACTION_TYPES.INVALID;
+    }
+    const priceReviewRequired = [
+      'price_review_required',
+      'currency_review_required',
+      'vat_review_required',
+    ].includes(diffStatus);
 
     const manualActionRequired = (
       actionType === ACTION_TYPES.CREATE_NEW_PRODUCT
       || actionType === ACTION_TYPES.MANUAL_MATCH
       || actionType === ACTION_TYPES.INVALID
       || actionType === ACTION_TYPES.CONFLICT
+      || priceReviewRequired
+      || priceComparison?.canAutoApprove === false
     );
     const reasonParts = [
       bestMatch?.reason ? `match:${bestMatch.reason}` : 'no_match',
@@ -588,18 +1150,40 @@ const buildPreviewRows = ({ rows, products, supplierProducts, supplierId }) => {
       matchedCategory: matchedProduct ? getProductCategoryName(matchedProduct) : '',
       matchedUnit: matchedProduct?.unit || '',
       confidenceScore,
+      matchConfidence: confidenceScore,
       confidenceLabel: confidenceLabelFor(confidenceScore),
       matchReason: bestMatch?.reason || '',
+      matchedBy: bestMatch?.matchedBy || 'none',
       existingSupplierProductId: existingSupplierProduct?.id || '',
       existingSupplierProductCode: existingSupplierProduct?.supplierProductCode || '',
       classification,
-      matchStatus,
+      matchStatus: canonicalMatchStatus,
+      legacyMatchStatus: matchStatus,
       updateType: resolveUpdateType({ row, existing: existingSupplierProduct }),
       actionType,
       decision: manualActionRequired ? 'manual_review_required' : 'auto_commit_ready',
       reason: reasonParts.join(' | '),
-      riskLevel: guardResult.riskLevel,
+      riskLevel: priceReviewRequired || priceParseNeedsReview
+        ? 'manual_review'
+        : priceComparison?.riskLevel || guardResult.riskLevel,
       blockingIssue: guardResult.blockingIssue,
+      diffStatus,
+      priceDifference: priceComparison?.difference ?? null,
+      priceChangePct: priceComparison?.changePct ?? null,
+      priceAnomalyReason,
+      priceReviewRequired,
+      riskReason: priceComparison?.riskReason
+        || (priceParseNeedsReview ? 'price_parse_ambiguous' : newPriceNormalization.priceNormalizationReason),
+      oldPurchasePriceBasis,
+      existingCurrency: existingSupplierProduct?.currency || 'TRY',
+      existingTaxRate: existingSupplierProduct?.vatRate ?? null,
+      existingVatIncluded: existingSupplierProduct?.vatIncluded ?? null,
+      normalizedOldUnitPurchasePrice: oldPriceNormalization?.normalizedUnitPurchasePrice ?? null,
+      normalizedOldCasePurchasePrice: oldPriceNormalization?.normalizedCasePurchasePrice ?? null,
+      normalizedUnitPurchasePrice: newPriceNormalization.normalizedUnitPurchasePrice,
+      normalizedCasePurchasePrice: newPriceNormalization.normalizedCasePurchasePrice,
+      priceNormalizationConfidence: newPriceNormalization.priceNormalizationConfidence,
+      priceNormalizationReason: newPriceNormalization.priceNormalizationReason,
       duplicateBarcode,
       duplicateSupplierCode,
       invalidBarcode,
@@ -613,9 +1197,9 @@ const buildPreviewRows = ({ rows, products, supplierProducts, supplierId }) => {
           : actionType === ACTION_TYPES.INVALID || actionType === ACTION_TYPES.CONFLICT
             ? 'Fix catalog row before commit'
             : 'Commit supplier product update',
-      canCommit: actionType === ACTION_TYPES.MATCHED,
+      canCommit: actionType === ACTION_TYPES.MATCHED && priceComparison?.canAutoApprove === true,
       willCreateProduct: false,
-      willUpdateSupplierProduct: actionType === ACTION_TYPES.MATCHED,
+      willUpdateSupplierProduct: actionType === ACTION_TYPES.MATCHED && priceComparison?.canAutoApprove === true,
       willSkipPendingApproval: actionType === ACTION_TYPES.CREATE_NEW_PRODUCT || actionType === ACTION_TYPES.MANUAL_MATCH,
       createsDraftProductAutomatically: false,
       expectedCreateDraftProductsFlag: false,
@@ -782,9 +1366,13 @@ const createOrUpdateSupplierProductPayload = ({ existing, productId, supplierId,
   currency: normalizeText(row.currency) || existing?.currency || 'TRY',
   minimumOrderQty: Math.max(1, Number(row.minimumOrderQty || existing?.minimumOrderQty || 1)),
   leadTimeDays: Math.max(1, Number(row.leadTimeDays || existing?.leadTimeDays || 3)),
-  priceUnit: normalizeText(row.baseUnit) || existing?.priceUnit || 'adet',
-  minOrderUnit: existing?.minOrderUnit || 'koli',
-  defaultOrderUnit: normalizeText(row.baseUnit) || existing?.defaultOrderUnit || 'koli',
+  priceUnit: row.purchasePriceBasis === 'case'
+    ? 'koli'
+    : row.purchasePriceBasis === 'package'
+      ? 'paket'
+      : normalizeText(row.baseUnit || row.unit) || existing?.priceUnit || 'adet',
+  minOrderUnit: normalizeText(row.minimumOrderUnit) || existing?.minOrderUnit || 'koli',
+  defaultOrderUnit: normalizeText(row.minimumOrderUnit) || existing?.defaultOrderUnit || 'koli',
   unitsPerPack: Math.max(1, Number(existing?.unitsPerPack || 1)),
   unitsPerBox: Math.max(1, Number(existing?.unitsPerBox || 1)),
   unitsPerCase: Math.max(1, Number(row.unitsPerCase || existing?.unitsPerCase || 1)),
@@ -1037,6 +1625,144 @@ const persistApprovalImportRow = async ({ catalogImport, rowIndex, nextRow }) =>
 };
 
 export const catalogImportService = {
+  async listCatalogs(query = {}) {
+    const filters = parseCatalogListQuery(query);
+    const allRows = await getLightweightCatalogRows();
+    const filtered = allRows.filter((row) => matchesCatalogListFilters(row, filters));
+    const sorted = sortCatalogListRows(filtered, filters.sort);
+    const total = sorted.length;
+    const offset = (filters.page - 1) * filters.limit;
+
+    return {
+      items: sorted.slice(offset, offset + filters.limit),
+      ...buildPagination({ page: filters.page, limit: filters.limit, total }),
+    };
+  },
+
+  async getCatalogItems(versionId, query = {}) {
+    const prisma = await getPrisma();
+    const tenantId = getActiveTenantId();
+    const page = parsePositiveInt(query.page, 1, 100000);
+    const limit = parsePositiveInt(query.limit, 50, 100);
+    const search = normalizeComparable(query.search || query.query);
+    const status = normalizeText(query.status);
+    const offset = (page - 1) * limit;
+
+    if (String(versionId).startsWith('gen-catv-')) {
+      const supplierId = String(versionId).replace('gen-catv-', '');
+      const where = {
+        tenantId,
+        supplierId,
+        ...(status === 'active' ? { isActive: { not: false } } : {}),
+        ...(status === 'inactive' ? { isActive: false } : {}),
+        ...(search ? {
+          OR: [
+            { normalizedSearch: { contains: search, mode: 'insensitive' } },
+            { supplierProductName: { contains: search, mode: 'insensitive' } },
+            { supplierProductCode: { contains: search, mode: 'insensitive' } },
+            { supplierSku: { contains: search, mode: 'insensitive' } },
+            { barcode: { contains: search, mode: 'insensitive' } },
+            { product: { is: { normalizedSearch: { contains: search, mode: 'insensitive' } } } },
+            { product: { is: { name: { contains: search, mode: 'insensitive' } } } },
+            { product: { is: { sku: { contains: search, mode: 'insensitive' } } } },
+            { product: { is: { barcode: { contains: search, mode: 'insensitive' } } } },
+          ],
+        } : {}),
+      };
+      const [total, rows] = await Promise.all([
+        prisma.supplierProduct.count({ where }),
+        prisma.supplierProduct.findMany({
+          where,
+          select: {
+            id: true,
+            productId: true,
+            supplierProductCode: true,
+            supplierProductName: true,
+            supplierSku: true,
+            barcode: true,
+            purchasePrice: true,
+            currency: true,
+            minimumOrderQty: true,
+            minOrderQty: true,
+            leadTimeDays: true,
+            isActive: true,
+            priceUnit: true,
+            unitsPerCase: true,
+            casesPerPallet: true,
+            product: {
+              select: {
+                id: true,
+                sku: true,
+                barcode: true,
+                name: true,
+                brand: true,
+                etiket: true,
+                unit: true,
+                unitsPerCase: true,
+                casesPerPallet: true,
+                requiredStorageType: true,
+              },
+            },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip: offset,
+          take: limit,
+        }),
+      ]);
+
+      return {
+        items: rows.map((row, index) => mapCatalogItemRow(row, row.product || {}, offset + index + 1)),
+        ...buildPagination({ page, limit, total }),
+      };
+    }
+
+    const version = await prisma.supplierCatalogVersion.findFirst({
+      where: { tenantId, id: versionId },
+      select: { id: true, rows: true, payload: true },
+    });
+    if (!version) throw createNotFoundError('Katalog versiyonu bulunamadı');
+
+    const payload = readJsonObject(version.payload);
+    const snapshot = Array.isArray(payload.supplierProductSnapshot)
+      ? payload.supplierProductSnapshot
+      : Array.isArray(version.rows)
+        ? version.rows
+        : [];
+    const filtered = snapshot.filter((row) => {
+      if (status === 'active' && row.isActive === false) return false;
+      if (status === 'inactive' && row.isActive !== false) return false;
+      if (!search) return true;
+      return catalogItemMatchesSearch(mapSupplierProductCatalogRow(row), search);
+    });
+    const pageRows = filtered.slice(offset, offset + limit);
+    const productIds = [...new Set(pageRows.map((row) => row.productId).filter(Boolean))];
+    const products = productIds.length
+      ? await prisma.product.findMany({
+        where: { tenantId, id: { in: productIds } },
+        select: {
+          id: true,
+          sku: true,
+          barcode: true,
+          name: true,
+          brand: true,
+          etiket: true,
+          unit: true,
+          unitsPerCase: true,
+          casesPerPallet: true,
+          requiredStorageType: true,
+        },
+      })
+      : [];
+    const productMap = new Map(products.map((product) => [String(product.id), product]));
+
+    return {
+      items: pageRows.map((row, index) => (
+        mapCatalogItemRow(row, productMap.get(String(row.productId)) || {}, offset + index + 1)
+      )),
+      ...buildPagination({ page, limit, total: filtered.length }),
+    };
+  },
+
   async listApprovalQueue(query = {}) {
     const [imports, products, supplierProducts, suppliers] = await Promise.all([
       catalogImportRepo.getAll(),
@@ -1476,6 +2202,34 @@ export const catalogImportService = {
       const actionType = payload.actionType ? String(payload.actionType) : row.actionType;
       const isExcluded = actionType === ACTION_TYPES.EXCLUDE;
       const manualProductId = normalizeText(payload.manualProductId || row.manualProductId);
+      const purchasePriceBasis = payload.purchasePriceBasis
+        ? normalizePurchasePriceBasis(payload.purchasePriceBasis)
+        : row.purchasePriceBasis;
+      const priceNormalization = normalizeCatalogPrice({
+        purchasePrice: row.purchasePrice,
+        purchasePriceBasis,
+        unitsPerCase: row.unitsPerCase,
+        packSize: row.packSize,
+        unit: row.unit,
+      });
+      const priceComparison = row.matchStatus === 'matched_existing_product'
+        ? compareNormalizedCatalogPrices({
+          oldPrice: {
+            normalizedUnitPurchasePrice: row.normalizedOldUnitPurchasePrice,
+            normalizedCasePurchasePrice: row.normalizedOldCasePurchasePrice,
+            priceReviewRequired: row.normalizedOldUnitPurchasePrice === null,
+            currency: row.existingCurrency || row.currency,
+            taxRate: row.existingTaxRate ?? row.taxRate,
+            vatIncluded: row.existingVatIncluded,
+          },
+          newPrice: {
+            ...priceNormalization,
+            currency: row.currency,
+            taxRate: row.taxRate,
+            vatIncluded: row.vatIncluded,
+          },
+        })
+        : null;
 
       let matchStatus = row.matchStatus;
       if (actionType === ACTION_TYPES.MANUAL_MATCH) {
@@ -1495,6 +2249,19 @@ export const catalogImportService = {
         actionType,
         isExcluded,
         manualProductId,
+        purchasePriceBasis,
+        normalizedUnitPurchasePrice: priceNormalization.normalizedUnitPurchasePrice,
+        normalizedCasePurchasePrice: priceNormalization.normalizedCasePurchasePrice,
+        priceNormalizationConfidence: priceNormalization.priceNormalizationConfidence,
+        priceNormalizationReason: priceNormalization.priceNormalizationReason,
+        priceReviewRequired: priceComparison
+          ? ['price_review_required', 'currency_review_required', 'vat_review_required'].includes(priceComparison.diffStatus)
+          : priceNormalization.priceReviewRequired,
+        diffStatus: priceComparison?.diffStatus
+          || (priceNormalization.priceReviewRequired ? 'price_review_required' : row.diffStatus),
+        priceDifference: priceComparison?.difference ?? row.priceDifference,
+        priceChangePct: priceComparison?.changePct ?? row.priceChangePct,
+        riskReason: priceComparison?.riskReason || priceNormalization.priceNormalizationReason,
         matchedProductId: manualProductId || row.matchedProductId,
         matchStatus,
       };
@@ -1527,8 +2294,32 @@ export const catalogImportService = {
       throw new AppError(409, 'Bu import zaten işlendi.');
     }
 
-    const createDraftProducts = payload.createDraftProducts === true;
     const rowDecisionMap = buildRowDecisionMap(payload.rowDecisions);
+    const blockingRows = (existingImport.rows || []).filter((row) => (
+      (Array.isArray(row.errors) && row.errors.length > 0)
+      || row.actionType === ACTION_TYPES.INVALID
+      || row.actionType === ACTION_TYPES.CONFLICT
+      || row.priceAnomalyReason
+      || row.priceReviewRequired
+      || ['currency_review_required', 'vat_review_required', 'price_review_required'].includes(row.diffStatus)
+      || (
+        row.matchStatus === 'ambiguous_match'
+        && !rowDecisionMap.get(String(row.rowId))?.decision
+      )
+    ));
+    if (blockingRows.length > 0) {
+      throw new AppError(
+        409,
+        'Hatalı veya şüpheli fiyat satırları düzeltilmeden katalog aktif hale getirilemez.',
+        {
+          errorCode: 'CATALOG_PRICE_VALIDATION_FAILED',
+          blockingRowCount: blockingRows.length,
+          blockingRowIds: blockingRows.map((row) => row.rowId),
+        },
+      );
+    }
+
+    const createDraftProducts = payload.createDraftProducts === true;
     const [supplier, products, supplierProducts, versions] = await Promise.all([
       supplierRepo.findById(existingImport.supplierId),
       productRepo.getAll(),
@@ -1582,7 +2373,7 @@ export const catalogImportService = {
         continue;
       }
 
-      if (row.errors.length || row.actionType === ACTION_TYPES.INVALID || row.actionType === ACTION_TYPES.CONFLICT) {
+      if ((row.errors || []).length || row.actionType === ACTION_TYPES.INVALID || row.actionType === ACTION_TYPES.CONFLICT) {
         if (row.actionType === ACTION_TYPES.CONFLICT) commitSummary.conflictRowCount += 1;
         else commitSummary.invalidRowCount += 1;
         const skipped = {
@@ -2202,5 +2993,7 @@ export const __catalogImportInternals = {
   collectRowErrors,
   buildPreviewRows,
   FIELD_ALIASES,
+  parseCatalogNumber,
+  evaluateCatalogPriceChange,
 };
 

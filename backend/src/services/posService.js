@@ -1031,10 +1031,26 @@ export const posService = {
     await salesRepo.create(sale);
 
     if (payload.mobileOrderId) {
-      try {
-        await mobileOrderService.completeFromPos(payload.mobileOrderId, sale, userContext);
-      } catch (err) {
-        console.error('[POS] Failed to complete mobile order:', err.message);
+      let mobileOrderCompletion = null;
+      let mobileOrderCompletionError = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          mobileOrderCompletion = await mobileOrderService.completeFromPos(payload.mobileOrderId, sale, userContext);
+          mobileOrderCompletionError = null;
+          break;
+        } catch (error) {
+          mobileOrderCompletionError = error;
+        }
+      }
+      if (mobileOrderCompletionError) {
+        console.error('[POS] Mobile order completion failed after retries:', {
+          mobileOrderId: payload.mobileOrderId,
+          saleId: sale.id,
+          message: mobileOrderCompletionError?.message || String(mobileOrderCompletionError),
+        });
+        sale.mobileOrderWarning = 'Satış tamamlandı ancak mobil sipariş durumu güncellenemedi.';
+      } else if (mobileOrderCompletion?.cartCleanupPending) {
+        sale.mobileOrderWarning = 'Satış tamamlandı ancak müşteri sepeti henüz güncellenemedi.';
       }
     }
 

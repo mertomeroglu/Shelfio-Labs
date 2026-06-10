@@ -48,7 +48,7 @@ export default function ProductResultCard({
   const categoryLabel = resolveDisplayCategory(product);
 
   return (
-    <article className="product-result-card product-result-card--compact" onClick={() => onDetail(product.id)}>
+    <article className={`product-result-card product-result-card--compact ${!inStore ? 'product-result-card--out-of-stock' : ''}`} onClick={() => onDetail(product.id)}>
       <h4 className="product-result-card__title line-clamp-2">{productName}</h4>
       <p className="product-result-card__category">{categoryLabel}</p>
       <div className={`product-result-card__availability ${inStore ? 'is-available' : 'is-unavailable'}`}>

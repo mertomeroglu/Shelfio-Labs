@@ -431,6 +431,47 @@
   color: var(--muted);
 }
 
+.product-missing-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  flex-wrap: wrap;
+}
+
+.product-missing-fields--complete {
+  color: #16a34a;
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.product-missing-fields--missing {
+  color: #b91c1c;
+}
+
+.product-missing-fields__tag,
+.product-missing-fields__more {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.product-missing-fields__tag {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
+.product-missing-fields__more {
+  background: rgba(185, 28, 28, 0.08);
+  color: #991b1b;
+}
+
 .products-stock-ratio {
   display: inline-flex;
   align-items: center;
@@ -1153,6 +1194,12 @@
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   border-radius: 16px;
   box-shadow: 0 16px 34px rgba(15, 23, 42, 0.16), 0 6px 16px rgba(15, 23, 42, 0.1);
+}
+
+.modal-card.supplier-catalog-compact-modal {
+  width: min(640px, 96vw) !important;
+  height: auto !important;
+  max-height: 90vh !important;
 }
 
 .supplier-catalog-modal .modal-header {

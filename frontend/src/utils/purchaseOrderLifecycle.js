@@ -118,6 +118,7 @@ export const LEGACY_PURCHASE_ORDER_STATUS_MAP = Object.freeze({
 export const PURCHASE_ORDER_STATUS_SEQUENCE = PURCHASE_ORDER_STATUSES;
 export const PURCHASE_ORDER_LIFECYCLE_ORDER = PURCHASE_ORDER_STATUSES;
 export const VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE = Object.freeze([
+  'draft',
   'submitted_for_approval',
   'supplier_notified',
   'preparing',
@@ -129,9 +130,8 @@ export const VISIBLE_PURCHASE_ORDER_STATUS_SEQUENCE = Object.freeze([
   'completed',
   'cancelled',
 ]);
-export const HIDDEN_PURCHASE_ORDER_STEPPER_STATUSES = new Set(['draft', 'approved', 'delivered', 'archived']);
+export const HIDDEN_PURCHASE_ORDER_STEPPER_STATUSES = new Set(['approved', 'delivered', 'archived']);
 export const PURCHASE_ORDER_VISIBLE_STATUS_MAP = Object.freeze({
-  draft: 'submitted_for_approval',
   approved: 'submitted_for_approval',
   delivered: 'goods_receipt_pending',
   archived: 'completed',

@@ -1,6 +1,6 @@
 import { sectionService } from '../services/sectionService.js';
 
-const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_INTERVAL_MINUTES = 30;
 let timer = null;
 let running = false;
 
@@ -24,8 +24,26 @@ const runOnce = async () => {
 
 export const startTransferRequestAutomationJob = () => {
   if (timer) return timer;
-  const intervalMs = Math.max(60_000, Number(process.env.TRANSFER_AUTOMATION_INTERVAL_MS || DEFAULT_INTERVAL_MS));
-  setTimeout(runOnce, 15_000);
+
+  const enabled = process.env.REPLENISHMENT_SCAN_ENABLED !== 'false';
+  if (!enabled) {
+    console.info('[transfer-automation] scheduler is disabled via REPLENISHMENT_SCAN_ENABLED');
+    return null;
+  }
+
+  const intervalMinutes = Number(process.env.REPLENISHMENT_SCAN_INTERVAL_MINUTES || DEFAULT_INTERVAL_MINUTES);
+  const intervalMs = Math.max(60_000, intervalMinutes * 60 * 1000);
+
+  const isDev = process.env.NODE_ENV === 'development';
+  if (!isDev) {
+    // Run initial scan in production after 15 seconds
+    setTimeout(runOnce, 15_000);
+  } else {
+    console.info('[transfer-automation] Running in development mode. Skipping immediate startup scan to prevent unnecessary runs.');
+  }
+
   timer = setInterval(runOnce, intervalMs);
+  console.info(`[transfer-automation] scheduler started with interval of ${intervalMinutes} minutes.`);
   return timer;
 };
+

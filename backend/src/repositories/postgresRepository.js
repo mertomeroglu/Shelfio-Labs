@@ -66,6 +66,8 @@ const MODEL_BY_FILE = {
   'warehouseMovements.json': 'warehouseMovement',
   'stockTransferRequests.json': 'stockTransferRequest',
   'stockTransferRequestAudits.json': 'transferAudit',
+  'storeLayouts.json': 'storeLayout',
+  'storeLayoutItems.json': 'storeLayoutItem',
 };
 
 const FIELD_CONFIG = {
@@ -189,6 +191,7 @@ const FIELD_CONFIG = {
   stockTransferRequest: {
     string: ['id', 'tenantId', 'productId', 'productName', 'sku', 'barcode', 'sectionId', 'sectionName', 'sourceLocation', 'targetLocation', 'status', 'priority', 'origin', 'source', 'requestedBy', 'requestedByName', 'handledBy', 'handledByName', 'note', 'handledNote'],
     int: ['sectionNumber', 'quantity', 'warehouseStockSnapshot', 'shelfStockSnapshot'],
+    json: ['payload'],
     date: ['createdAt', 'completedAt', 'stockTransferredAt', 'updatedAt'],
   },
   transferAudit: {
@@ -237,6 +240,18 @@ const FIELD_CONFIG = {
     json: ['attachments'],
     date: ['createdAt', 'updatedAt'],
   },
+  storeLayout: {
+    string: ['id', 'tenantId', 'storeId', 'name', 'status', 'publishedBy', 'createdBy'],
+    int: ['version', 'canvasWidth', 'canvasHeight'],
+    json: ['metadata'],
+    date: ['publishedAt', 'createdAt', 'updatedAt'],
+  },
+  storeLayoutItem: {
+    string: ['id', 'tenantId', 'layoutId', 'objectType', 'label', 'sectionId'],
+    int: ['x', 'y', 'width', 'height', 'rotation', 'zIndex', 'sortOrder'],
+    json: ['properties'],
+    date: ['createdAt', 'updatedAt'],
+  },
 };
 
 const ALIASES = {
@@ -279,6 +294,7 @@ const PURCHASE_SUGGESTION_COLUMN_FIELDS = [
 ];
 
 const PURCHASE_SUGGESTION_CALCULATION_FIELDS = [
+  'supplierProductId',
   'reorderPoint',
   'targetStock',
   'grossNeedQty',
@@ -323,12 +339,16 @@ const PURCHASE_SUGGESTION_CALCULATION_FIELDS = [
   'calculationVersion',
   'supplierSelectionScore',
   'supplierSelectionReason',
+  'confidenceScore',
+  'eligibility',
 ];
 
 const PURCHASE_SUGGESTION_WORKFLOW_FIELDS = [
   'linkedOrderId',
   'approvedBy',
   'approvedAt',
+  'convertedBy',
+  'convertedAt',
   'rejectedBy',
   'rejectedAt',
   'updatedBy',

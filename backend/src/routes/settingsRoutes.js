@@ -15,6 +15,7 @@ router.get('/audit-logs', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settin
 router.get('/audit-logs/export', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settingsController.exportAuditLogs);
 router.post('/developer-logs', settingsController.ingestDeveloperLog);
 router.get('/developer-logs', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settingsController.developerLogs);
+router.get('/developer-logs/:id', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settingsController.getDeveloperLogDetail);
 router.get('/developer-logs/export', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settingsController.exportDeveloperLogs);
 router.delete('/logs/:type', requirePermission(PERMISSIONS.SETTINGS_UPDATE), settingsController.clearLogs);
 router.get('/logistics-tariffs', requirePermission(PERMISSIONS.SETTINGS_VIEW), settingsController.logisticsTariffs);

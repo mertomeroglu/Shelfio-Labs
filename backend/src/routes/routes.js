@@ -25,6 +25,7 @@ import proximityRoutes from './proximityRoutes.js';
 import licenseRoutes from './licenseRoutes.js';
 import licenseControlRoutes from './licenseControlRoutes.js';
 import ssoRoutes from './ssoRoutes.js';
+import storeLayoutRoutes from './storeLayoutRoutes.js';
 
 const router = Router();
 
@@ -54,5 +55,6 @@ router.use('/customers', customerRoutes);
 router.use('/customer-auth', customerAuthRoutes);
 router.use('/campaign-analysis', campaignAnalysisRoutes);
 router.use('/proximity', proximityRoutes);
+router.use('/location-layouts', storeLayoutRoutes);
 
 export default router;

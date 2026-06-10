@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { getPrisma } from '../providers/postgresProvider.js';
+import { config } from '../config/config.js';
 import { MAIN_STORE_ID, MAIN_TENANT_ID, getActiveStoreId, getActiveTenantId, runWithTenantContext } from '../tenant/tenantContext.js';
 import { AppError, createNotFoundError } from '../utils/appError.js';
 import { customerRepo } from '../repositories/customerRepository.js';
@@ -44,14 +45,37 @@ const createShortCode = () => {
 const buildNextMobileDisplayOrderNo = async (tenantId) => {
   const todayKey = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const todayPrefix = `${todayKey.slice(0, 4)}-${todayKey.slice(4, 6)}-${todayKey.slice(6, 8)}`;
-  const prisma = await getPrisma();
-  const [customerOrders, mobileOrderCount] = await Promise.all([
-    customerOrderRepo.getAll(),
-    runWithTenantContext({ tenantId }, () => prisma.mobileOrder.count({
-      where: { tenantId, createdAt: { gte: new Date(`${todayPrefix}T00:00:00.000Z`) } },
-    })),
-  ]);
-  const customerOrderCount = customerOrders.filter((row) => String(row?.createdAt || '').startsWith(todayPrefix)).length;
+
+  let customerOrderCount = 0;
+  let mobileOrderCount = 0;
+
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    const todayStart = new Date(`${todayPrefix}T00:00:00.000Z`);
+    const todayEnd = new Date(`${todayPrefix}T23:59:59.999Z`);
+
+    const [cCount, mCount] = await Promise.all([
+      runWithTenantContext({ tenantId }, () => prisma.customerOrder.count({
+        where: { tenantId, createdAt: { gte: todayStart, lte: todayEnd } },
+      })),
+      runWithTenantContext({ tenantId }, () => prisma.mobileOrder.count({
+        where: { tenantId, createdAt: { gte: todayStart, lte: todayEnd } },
+      })),
+    ]);
+    customerOrderCount = cCount;
+    mobileOrderCount = mCount;
+  } else {
+    const prisma = await getPrisma();
+    const [customerOrders, mCount] = await Promise.all([
+      customerOrderRepo.getAll(),
+      runWithTenantContext({ tenantId }, () => prisma.mobileOrder.count({
+        where: { tenantId, createdAt: { gte: new Date(`${todayPrefix}T00:00:00.000Z`) } },
+      })),
+    ]);
+    customerOrderCount = customerOrders.filter((row) => String(row?.createdAt || '').startsWith(todayPrefix)).length;
+    mobileOrderCount = mCount;
+  }
+
   return `MOB-${todayKey}-${String(customerOrderCount + mobileOrderCount + 1).padStart(4, '0')}`;
 };
 
@@ -90,6 +114,119 @@ const normalizeCartItems = (customer = {}, payload = {}) => {
       };
     })
     .filter(Boolean);
+};
+
+export const subtractCompletedCartItems = (currentItems = [], completedItems = []) => {
+  const completedQuantityByProductId = new Map(
+    completedItems.map((item) => [
+      String(item?.productId || ''),
+      Math.max(0, Number(item?.quantity || 0)),
+    ])
+  );
+
+  return currentItems
+    .map((item) => {
+      const productId = String(item?.productId || item?.id || '');
+      const completedQuantity = completedQuantityByProductId.get(productId) || 0;
+      const remainingQuantity = Math.max(0, Number(item?.quantity || 0) - completedQuantity);
+      return remainingQuantity > 0 ? { ...item, quantity: remainingQuantity } : null;
+    })
+    .filter(Boolean);
+};
+
+const removeCompletedItemsFromCart = async (customerId, completedItems = []) => {
+  const updatedCustomer = await customerRepo.updateById(customerId, (current) => {
+    const currentItems = Array.isArray(current?.activeCart?.items) ? current.activeCart.items : [];
+    const remainingItems = subtractCompletedCartItems(currentItems, completedItems);
+
+    return {
+      ...current,
+      activeCart: remainingItems.length > 0 ? {
+        ...(current?.activeCart || {}),
+        id: current?.activeCart?.id || `cart-${customerId}`,
+        items: remainingItems,
+        status: 'active',
+        updatedAt: new Date().toISOString(),
+      } : null,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (!updatedCustomer) {
+    throw createNotFoundError('Müşteri bulunamadı');
+  }
+  return updatedCustomer;
+};
+
+const retryCartCleanup = async (customerId, completedItems, attempts = 3) => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await removeCompletedItemsFromCart(customerId, completedItems);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+};
+
+export const buildCustomerOrderFromMobileOrder = (order = {}, options = {}) => {
+  const now = options.now || new Date().toISOString();
+  const displayOrderNo = String(options.displayOrderNo || order.payload?.displayOrderNo || order.payload?.orderNo || order.code || '').trim();
+  const pricingByProductId = order.payload?.itemPricing && typeof order.payload.itemPricing === 'object'
+    ? order.payload.itemPricing
+    : {};
+  const customerOrderId = String(options.customerOrderId || order.payload?.customerOrderId || `mobile-order-${order.id}`);
+  const items = (Array.isArray(order.items) ? order.items : []).map((item) => {
+    const pricing = pricingByProductId[item.productId] || {};
+    const quantity = Number(item.quantity || 0);
+    const unitPrice = roundMoney(item.unitPriceSnapshot);
+    const regularUnitPrice = roundMoney(pricing.regularPrice || unitPrice);
+    return {
+      productId: item.productId,
+      productName: item.productNameSnapshot,
+      sku: item.sku || '',
+      barcode: item.barcode || '',
+      quantity,
+      unitPrice,
+      totalPrice: roundMoney(item.totalPriceSnapshot || unitPrice * quantity),
+      regularUnitPrice,
+      discountAmount: roundMoney(Math.max(0, regularUnitPrice - unitPrice) * quantity),
+      campaignName: pricing.campaignInfo || pricing.activeCampaignName || '',
+      hasActiveCampaign: pricing.hasActiveCampaign === true,
+    };
+  });
+
+  return {
+    id: customerOrderId,
+    orderNo: displayOrderNo,
+    customerId: order.customerId,
+    status: 'kasaya_aktarildi',
+    totalAmount: roundMoney(order.totalSnapshot),
+    createdAt: order.createdAt?.toISOString?.() || order.createdAt || now,
+    updatedAt: now,
+    items,
+    payload: {
+      source: 'mobile_order_handoff',
+      mobileOrderId: order.id,
+      mobileOrderCode: order.code,
+      mobileOrderStatus: options.status || order.status,
+      mobileOrderExpiresAt: order.expiresAt?.toISOString?.() || order.expiresAt || null,
+      displayOrderNo,
+      orderNo: displayOrderNo,
+      customer: {
+        id: order.customerId,
+        name: order.customer?.name || '',
+        phone: order.customer?.phone || '',
+        email: order.customer?.email || '',
+      },
+      pricingSnapshot: {
+        subtotal: roundMoney(order.subtotalSnapshot),
+        total: roundMoney(order.totalSnapshot),
+        discount: roundMoney(items.reduce((sum, item) => sum + item.discountAmount, 0)),
+      },
+      note: 'Ödeme kasada tamamlanacak.',
+    },
+  };
 };
 
 const resolveCustomerTenantId = (customer = {}) => customer.tenantId || MAIN_TENANT_ID;
@@ -300,6 +437,16 @@ export const mobileOrderService = {
           errorCode: 'mobile_order_product_unavailable',
         });
       }
+      if (product.currentStock <= 0) {
+        throw new AppError(400, 'Bu ürün stokta bulunmamaktadır.', {
+          errorCode: 'mobile_order_out_of_stock',
+        });
+      }
+      if (item.quantity > product.currentStock) {
+        throw new AppError(400, `Bu üründen en fazla ${product.currentStock} adet ekleyebilirsiniz.`, {
+          errorCode: 'mobile_order_insufficient_stock',
+        });
+      }
       const quantity = item.quantity;
       const unitPrice = roundMoney(product.unitPrice || item.unitPrice);
       return {
@@ -312,6 +459,16 @@ export const mobileOrderService = {
         totalPriceSnapshot: roundMoney(unitPrice * quantity),
       };
     });
+    const itemPricing = Object.fromEntries(orderItems.map((item) => {
+      const product = productMap.get(item.productId);
+      return [item.productId, {
+        regularPrice: roundMoney(product?.regularPrice || item.unitPriceSnapshot),
+        discountedPrice: product?.discountedPrice ? roundMoney(product.discountedPrice) : null,
+        hasActiveCampaign: product?.hasActiveCampaign === true,
+        activeCampaignName: product?.activeCampaignName || '',
+        campaignInfo: product?.campaignInfo || '',
+      }];
+    }));
     const totalSnapshot = roundMoney(orderItems.reduce((sum, item) => sum + item.totalPriceSnapshot, 0));
     const expiresAt = new Date(Date.now() + MOBILE_ORDER_TTL_MINUTES * 60 * 1000);
     const rawToken = createRawToken();
@@ -324,6 +481,39 @@ export const mobileOrderService = {
       const existing = await runWithTenantContext({ tenantId, storeId }, () => prisma.mobileOrder.findFirst({ where: { code } }));
       if (!existing) break;
       code = createShortCode();
+    }
+
+    // Capture lightweight location snapshot for each item at order creation time
+    let locationSnapshots = {};
+    try {
+      const locationRows = await runWithTenantContext({ tenantId }, () => prisma.product.findMany({
+        where: { id: { in: orderItems.map((item) => item.productId).filter(Boolean) } },
+        select: {
+          id: true,
+          sectionId: true,
+          shelfCode: true,
+          shelfSide: true,
+          shelfNo: true,
+          shelfLevel: true,
+          isVirtualLocation: true,
+          depotLocationCode: true,
+          section: { select: { name: true, number: true } },
+        },
+      }));
+      locationSnapshots = Object.fromEntries(locationRows.map((row) => [row.id, {
+        sectionId: row.sectionId || null,
+        sectionName: row.section?.name || null,
+        sectionNumber: row.section?.number ?? null,
+        shelfCode: row.shelfCode || null,
+        shelfSide: row.shelfSide || null,
+        shelfNo: row.shelfNo ?? null,
+        shelfLevel: row.shelfLevel ?? null,
+        isVirtualLocation: row.isVirtualLocation === true,
+        depotLocationCode: row.depotLocationCode || null,
+        snapshotAt: new Date().toISOString(),
+      }]));
+    } catch {
+      // Location snapshot is best-effort; must not block order creation
     }
 
     const order = await runWithTenantContext({ tenantId, storeId }, () => prisma.mobileOrder.create({
@@ -344,37 +534,12 @@ export const mobileOrderService = {
           ttlMinutes: MOBILE_ORDER_TTL_MINUTES,
           displayOrderNo,
           orderNo: displayOrderNo,
+          itemPricing,
+          locationSnapshots,
         },
         items: { create: orderItems.map((item) => ({ ...item, tenantId })) },
       },
       include: { items: true, customer: true },
-    }));
-
-    // Update customer activeCart to remove checked-out items
-    const checkedOutProductIds = new Set(cartItems.map((item) => String(item.productId)));
-    const fullCartItems = Array.isArray(customer.activeCart?.items) ? customer.activeCart.items : [];
-    const remainingCartItems = fullCartItems.filter((item) => {
-      const pid = String(item?.productId || item?.id || '');
-      return pid && !checkedOutProductIds.has(pid);
-    });
-
-    const nextActiveCart = remainingCartItems.length > 0 ? {
-      id: customer.activeCart?.id || `cart-${customerId}`,
-      items: remainingCartItems.map((item) => ({
-        productId: item.productId || item.id,
-        productName: item.productName || item.name || '',
-        quantity: Number(item.quantity || 1),
-        unit: item.unit || 'adet',
-        unitPrice: Number(item.unitPrice || item.price || 0),
-      })),
-      status: 'active',
-      updatedAt: new Date().toISOString(),
-    } : null;
-
-    await customerRepo.updateById(customerId, (current) => ({
-      ...current,
-      activeCart: nextActiveCart,
-      updatedAt: new Date().toISOString(),
     }));
 
     await recordAudit({
@@ -413,42 +578,85 @@ export const mobileOrderService = {
       include: { items: true, customer: true },
     });
 
-    const existingOrderId = updated.payload?.customerOrderId || null;
-    if (!existingOrderId) {
-      const now = new Date().toISOString();
-      const displayOrderNo = String(updated.payload?.displayOrderNo || updated.payload?.orderNo || '').trim()
-        || await buildNextMobileDisplayOrderNo(updated.tenantId);
-      const customerOrder = {
-        id: uuidv4(),
-        orderNo: displayOrderNo,
-        customerId,
-        status: 'kasaya_aktarildi',
-        totalAmount: roundMoney(updated.totalSnapshot),
-        createdAt: now,
-        updatedAt: now,
-        items: updated.items.map((item) => ({
-          productId: item.productId,
-          productName: item.productNameSnapshot,
-          quantity: item.quantity,
-          unitPrice: roundMoney(item.unitPriceSnapshot),
-        })),
-        payload: {
-          source: 'mobile_order_handoff',
-          mobileOrderId: updated.id,
-          mobileOrderCode: updated.code,
-          mobileOrderStatus: nextStatus,
-          mobileOrderExpiresAt: updated.expiresAt?.toISOString?.() || updated.expiresAt,
-          displayOrderNo,
-          orderNo: displayOrderNo,
-          note: 'Ödeme kasada tamamlanacak.',
+    const displayOrderNo = String(updated.payload?.displayOrderNo || updated.payload?.orderNo || '').trim()
+      || await buildNextMobileDisplayOrderNo(updated.tenantId);
+    const customerOrderId = String(updated.payload?.customerOrderId || `mobile-order-${updated.id}`);
+    const customerOrder = buildCustomerOrderFromMobileOrder(updated, {
+      customerOrderId,
+      displayOrderNo,
+      status: nextStatus,
+    });
+
+    const cleanupResult = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT id FROM mobile_orders WHERE id = $1 FOR UPDATE', updated.id);
+      const lockedOrder = await tx.mobileOrder.findUnique({ where: { id: updated.id } });
+      const lockedPayload = lockedOrder?.payload || {};
+      await tx.customerOrder.upsert({
+        where: { id: customerOrder.id },
+        create: {
+          id: customerOrder.id,
+          tenantId: updated.tenantId,
+          customerId,
+          totalAmount: customerOrder.totalAmount,
+          items: customerOrder.items,
+          status: customerOrder.status,
+          payload: customerOrder,
+          createdAt: new Date(customerOrder.createdAt),
+          updatedAt: new Date(customerOrder.updatedAt),
         },
-      };
-      await customerOrderRepo.create(customerOrder);
-      await prisma.mobileOrder.update({
-        where: { id: updated.id },
-        data: { payload: { ...(updated.payload || {}), customerOrderId: customerOrder.id, displayOrderNo, orderNo: displayOrderNo } },
+        update: {
+          totalAmount: customerOrder.totalAmount,
+          items: customerOrder.items,
+          status: customerOrder.status,
+          payload: customerOrder,
+          updatedAt: new Date(customerOrder.updatedAt),
+        },
       });
-    }
+      const customerRow = await tx.customer.findUnique({ where: { id: customerId } });
+      if (!customerRow) throw createNotFoundError('Müşteri bulunamadı');
+
+      const customerPayload = customerRow.payload && typeof customerRow.payload === 'object'
+        ? customerRow.payload
+        : {};
+      let activeCart = customerPayload.activeCart || null;
+      if (lockedPayload.cartCleanupCompleted !== true) {
+        const currentItems = Array.isArray(activeCart?.items) ? activeCart.items : [];
+        const remainingItems = subtractCompletedCartItems(currentItems, updated.items);
+        activeCart = remainingItems.length > 0 ? {
+          ...(activeCart || {}),
+          id: activeCart?.id || `cart-${customerId}`,
+          items: remainingItems,
+          status: 'active',
+          updatedAt: new Date().toISOString(),
+        } : null;
+        await tx.customer.update({
+          where: { id: customerId },
+          data: {
+            payload: {
+              ...customerPayload,
+              activeCart,
+              updatedAt: new Date().toISOString(),
+            },
+            updatedAt: new Date(),
+          },
+        });
+      }
+      await tx.mobileOrder.update({
+        where: { id: updated.id },
+        data: {
+          payload: {
+            ...lockedPayload,
+            customerOrderId: customerOrder.id,
+            displayOrderNo,
+            orderNo: displayOrderNo,
+            historyCreated: true,
+            cartCleanupPending: false,
+            cartCleanupCompleted: true,
+          },
+        },
+      });
+      return { activeCart };
+    });
 
     await recordAudit({
       tenantId: updated.tenantId,
@@ -460,7 +668,16 @@ export const mobileOrderService = {
       metadata: { code: updated.code, status: nextStatus },
     });
 
-    return buildPublicOrder(updated);
+    const finalized = await prisma.mobileOrder.findUnique({
+      where: { id: updated.id },
+      include: { items: true, customer: true },
+    });
+    return {
+      ...(await buildPublicOrder(finalized)),
+      customerOrder,
+      activeCart: cleanupResult.activeCart || null,
+      cartCleanupCompleted: true,
+    };
   },
 
   async lookupForPos(input = {}, userContext = {}) {
@@ -529,15 +746,32 @@ export const mobileOrderService = {
     }
 
     const publicOrder = await buildPublicOrder(order, { includeValidation: true });
+
+    // Validate that no items are out of stock, unavailable or have insufficient stock
+    const outOfStockItems = publicOrder.items.filter((item) => item.stockStatus === 'out_of_stock' || item.stockStatus === 'unavailable');
+    if (outOfStockItems.length > 0) {
+      const names = outOfStockItems.map((item) => item.name || item.productName || item.productId).join(', ');
+      throw new AppError(400, `Siparişteki bazı ürünler stokta bulunmamaktadır: ${names}`, {
+        errorCode: 'mobile_order_pull_out_of_stock',
+      });
+    }
+
+    const insufficientItems = publicOrder.items.filter((item) => item.stockStatus === 'insufficient');
+    if (insufficientItems.length > 0) {
+      const names = insufficientItems.map((item) => `${item.name || item.productName || item.productId} (İstenen: ${item.quantity}, Stok: ${item.currentStock})`).join(', ');
+      throw new AppError(400, `Siparişteki bazı ürünler için yetersiz stok: ${names}`, {
+        errorCode: 'mobile_order_pull_insufficient_stock',
+      });
+    }
+
     const transferableItems = publicOrder.items
-      .filter((item) => item.stockStatus !== 'out_of_stock' && item.stockStatus !== 'unavailable')
       .map((item) => ({
         productId: item.productId,
         id: item.productId,
         name: item.productName,
         sku: item.sku,
         barcode: item.barcode,
-        quantity: Math.min(item.quantity, Math.max(0, Number(item.currentStock || 0))),
+        quantity: item.quantity,
         unitPrice: item.unitPrice,
         salePrice: item.unitPrice,
         currentPrice: item.unitPrice,
@@ -578,6 +812,13 @@ export const mobileOrderService = {
       include: { customer: true },
     });
     if (!order) return null;
+    if (order.status === MOBILE_ORDER_STATUS.COMPLETED && order.payload?.cartCleanupCompleted === true) {
+      return {
+        ...(await buildPublicOrder(order)),
+        cartCleanupPending: false,
+      };
+    }
+
     const updated = await prisma.mobileOrder.update({
       where: { id: order.id },
       data: {
@@ -587,10 +828,34 @@ export const mobileOrderService = {
           ...(order.payload || {}),
           saleId: sale.id || null,
           saleReferenceNo: sale.referenceNo || null,
+          cartCleanupPending: true,
+          cartCleanupCompleted: false,
         },
       },
       include: { items: true, customer: true },
     });
+
+    let cartCleanupPending = false;
+    try {
+      await retryCartCleanup(updated.customerId, updated.items);
+      await prisma.mobileOrder.update({
+        where: { id: updated.id },
+        data: {
+          payload: {
+            ...(updated.payload || {}),
+            cartCleanupPending: false,
+            cartCleanupCompleted: true,
+          },
+        },
+      });
+    } catch (error) {
+      cartCleanupPending = true;
+      console.error('[MobileOrder] Completed order cart cleanup failed after retries:', {
+        orderId: updated.id,
+        customerId: updated.customerId,
+        message: error?.message || String(error),
+      });
+    }
 
     const customerOrderId = order.payload?.customerOrderId || null;
     if (customerOrderId) {
@@ -616,6 +881,9 @@ export const mobileOrderService = {
       metadata: { code: updated.code, saleReferenceNo: sale.referenceNo || null },
     });
 
-    return buildPublicOrder(updated);
+    return {
+      ...(await buildPublicOrder(updated)),
+      cartCleanupPending,
+    };
   },
 };

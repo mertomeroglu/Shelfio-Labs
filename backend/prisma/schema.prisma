@@ -241,6 +241,7 @@ model Section {
   transfers   StockTransferRequest[]
   beaconDevices BeaconDevice[]
   locationZones LocationZone[]
+  layoutItems StoreLayoutItem[]
 
   @@map("sections")
 }
@@ -580,6 +581,10 @@ model SupplierProduct {
   supplier            Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@index([productId, supplierId])
+  @@index([createdAt, id])
+  @@index([supplierId])
+  @@index([productId, isActive])
+  @@index([supplierId, isActive])
   @@map("supplier_products")
 }
 
@@ -1369,6 +1374,8 @@ model CatalogImport {
   payload          Json?
   supplier         Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId, uploadedAt])
+  @@index([tenantId, supplierId, status])
   @@map("catalog_imports")
 }
 
@@ -1382,6 +1389,8 @@ model SupplierCatalogVersion {
   createdAt  DateTime? @map("created_at")
   updatedAt  DateTime? @map("updated_at")
 
+  @@index([tenantId, createdAt])
+  @@index([tenantId, supplierId, status])
   @@map("supplier_catalog_versions")
 }
 
@@ -1402,5 +1411,55 @@ model SupportTicket {
   updatedAt   DateTime? @map("updated_at")
 
   @@map("support_tickets")
+}
+
+model StoreLayout {
+  id           String             @id @default(uuid())
+  tenantId     String             @default("tenant_main_shelfio") @map("tenant_id")
+  storeId      String?            @map("store_id")
+  name         String
+  status       String             @default("draft")
+  version      Int                @default(1)
+  canvasWidth  Int                @default(1200) @map("canvas_width")
+  canvasHeight Int                @default(800) @map("canvas_height")
+  metadata     Json?
+  publishedAt  DateTime?          @map("published_at")
+  publishedBy  String?            @map("published_by")
+  createdBy    String?            @map("created_by")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+  items        StoreLayoutItem[]
+
+  /// Partial unique index managed by migration SQL:
+  /// CREATE UNIQUE INDEX "store_layouts_one_published_per_store"
+  ///   ON "store_layouts" ("tenant_id", "store_id") WHERE "status" = 'published';
+  @@index([tenantId, storeId, status])
+  @@index([status])
+  @@map("store_layouts")
+}
+
+model StoreLayoutItem {
+  id         String       @id @default(uuid())
+  tenantId   String       @default("tenant_main_shelfio") @map("tenant_id")
+  layoutId   String       @map("layout_id")
+  objectType String       @map("object_type")
+  label      String?
+  x          Int          @default(0)
+  y          Int          @default(0)
+  width      Int          @default(40)
+  height     Int          @default(40)
+  rotation   Int          @default(0)
+  zIndex     Int          @default(0) @map("z_index")
+  sectionId  String?      @map("section_id")
+  properties Json?
+  sortOrder  Int          @default(0) @map("sort_order")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+  layout     StoreLayout  @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  section    Section?     @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+
+  @@index([layoutId])
+  @@index([sectionId])
+  @@map("store_layout_items")
 }
 

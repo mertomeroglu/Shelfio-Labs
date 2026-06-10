@@ -13,6 +13,7 @@ router.use(requireScope());
 router.get('/logistics-tariffs', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.listLogisticsTariffs);
 router.post('/logistics-quote', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.getLogisticsQuote);
 
+router.get('/matches/summary', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.getMatchesSummary);
 router.get('/supplier-products', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.listSupplierProducts);
 router.post('/supplier-products', requirePermission(PERMISSIONS.PROCUREMENT_CREATE), procurementController.createSupplierProduct);
 router.put('/supplier-products/:id', requirePermission(PERMISSIONS.PROCUREMENT_UPDATE), procurementController.updateSupplierProduct);
@@ -39,6 +40,8 @@ router.post('/catalog-approval-queue/:rowId/undo', requirePermission(PERMISSIONS
 router.post('/catalog-imports/preview', requirePermission(PERMISSIONS.PROCUREMENT_CREATE), procurementController.previewCatalogImport);
 router.patch('/catalog-imports/:id/rows/:rowId', requirePermission(PERMISSIONS.PROCUREMENT_UPDATE), procurementController.updateCatalogImportRow);
 router.post('/catalog-imports/:id/commit', requirePermission(PERMISSIONS.PROCUREMENT_APPROVE), procurementController.commitCatalogImport);
+router.get('/catalogs', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.listCatalogs);
+router.get('/catalogs/:id/items', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.getCatalogItems);
 router.get('/catalog-versions', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.listCatalogVersions);
 router.get('/catalog-versions/:versionId/rows', requirePermission(PERMISSIONS.PROCUREMENT_VIEW), procurementController.getCatalogVersionRows);
 router.post('/catalog-versions/:versionId/activate', requirePermission(PERMISSIONS.PROCUREMENT_APPROVE), procurementController.activateCatalogVersion);

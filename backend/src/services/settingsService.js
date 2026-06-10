@@ -140,6 +140,67 @@ const pickChangedKeys = (previous = {}, next = {}) => {
   return changed;
 };
 
+const hasOwn = (target, key) => Object.prototype.hasOwnProperty.call(target || {}, key);
+
+const mergeCustomerRelations = (current = {}, patch = {}) => ({
+  ...(current && typeof current === 'object' ? current : {}),
+  ...(patch && typeof patch === 'object' ? patch : {}),
+  ...(hasOwn(patch, 'giftCards') ? { giftCards: patch.giftCards } : {}),
+  ...(hasOwn(patch, 'campaigns') ? { campaigns: patch.campaigns } : {}),
+  ...(hasOwn(patch, 'automationCenter') ? { automationCenter: patch.automationCenter } : {}),
+});
+
+const stableSortStrings = (items = []) => [...items].map((item) => String(item || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+
+const buildCampaignPayloadSignature = (campaigns = []) => JSON.stringify(
+  [...(Array.isArray(campaigns) ? campaigns : [])]
+    .map((campaign = {}) => ({
+      id: String(campaign.id || '').trim(),
+      name: String(campaign.name || '').trim(),
+      internalName: String(campaign.internalName || '').trim(),
+      publicName: String(campaign.publicName || campaign.displayName || '').trim(),
+      type: String(campaign.type || '').trim(),
+      discountRate: toNumber(campaign.discountRate) || 0,
+      discountAmount: toNumber(campaign.discountAmount) || 0,
+      startsAt: String(campaign.startsAt || '').trim(),
+      endsAt: String(campaign.endsAt || '').trim(),
+      isIndefinite: campaign.isIndefinite === true,
+      priority: Number(campaign.priority || 0) || 0,
+      status: String(campaign.status || '').trim(),
+      isActive: campaign.isActive !== false,
+      conflictPolicy: String(campaign.conflictPolicy || '').trim(),
+      targetProductIds: stableSortStrings(campaign.targetProductIds),
+      targetCategoryIds: stableSortStrings(campaign.targetCategoryIds),
+      targetCategoryLabelIds: stableSortStrings(campaign.targetCategoryLabelIds),
+      targetCategoryLabels: stableSortStrings(campaign.targetCategoryLabels),
+      targetBrands: stableSortStrings(campaign.targetBrands),
+    }))
+    .sort((left, right) => `${left.id}|${left.name}`.localeCompare(`${right.id}|${right.name}`, 'tr-TR'))
+);
+
+const buildCampaignPricingSignature = (campaigns = []) => JSON.stringify(
+  [...(Array.isArray(campaigns) ? campaigns : [])]
+    .map((campaign = {}) => ({
+      id: String(campaign.id || '').trim(),
+      type: String(campaign.type || '').trim(),
+      discountRate: toNumber(campaign.discountRate) || 0,
+      discountAmount: toNumber(campaign.discountAmount) || 0,
+      startsAt: String(campaign.startsAt || '').trim(),
+      endsAt: String(campaign.endsAt || '').trim(),
+      isIndefinite: campaign.isIndefinite === true,
+      priority: Number(campaign.priority || 0) || 0,
+      status: String(campaign.status || '').trim(),
+      isActive: campaign.isActive !== false,
+      conflictPolicy: String(campaign.conflictPolicy || '').trim(),
+      targetProductIds: stableSortStrings(campaign.targetProductIds),
+      targetCategoryIds: stableSortStrings(campaign.targetCategoryIds),
+      targetCategoryLabelIds: stableSortStrings(campaign.targetCategoryLabelIds),
+      targetCategoryLabels: stableSortStrings(campaign.targetCategoryLabels),
+      targetBrands: stableSortStrings(campaign.targetBrands),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id, 'tr-TR'))
+);
+
 const appendAuditLog = (settings, entry) => {
   const current = Array.isArray(settings.auditLogs) ? settings.auditLogs : [];
   const next = [entry, ...current].slice(0, MAX_AUDIT_LOGS);
@@ -330,66 +391,152 @@ const buildCampaignPriceEvent = ({ product, previousPrice, nextPrice, pricedProd
   };
 };
 
-const loadCampaignPriceProducts = async () => {
+const campaignRequiresFullScan = (campaign = {}) => {
+  const productIds = Array.isArray(campaign.targetProductIds) ? campaign.targetProductIds : [];
+  const categoryIds = Array.isArray(campaign.targetCategoryIds) ? campaign.targetCategoryIds : [];
+  const labelIds = Array.isArray(campaign.targetCategoryLabelIds) ? campaign.targetCategoryLabelIds : [];
+  const brands = Array.isArray(campaign.targetBrands) ? campaign.targetBrands : [];
+  const hasExplicitScope = productIds.length > 0 || categoryIds.length > 0 || labelIds.length > 0 || brands.length > 0;
+  return campaign.type === 'general' || campaign.type === 'dynamic' || !hasExplicitScope || labelIds.length > 0;
+};
+
+const buildAffectedProductsWhere = (campaigns = []) => {
+  const scope = {
+    fullScan: false,
+    productIds: new Set(),
+    categoryIds: new Set(),
+    brands: new Set(),
+  };
+
+  (Array.isArray(campaigns) ? campaigns : []).forEach((campaign) => {
+    if (!campaign?.id) return;
+    if (campaignRequiresFullScan(campaign)) {
+      scope.fullScan = true;
+      return;
+    }
+    stableSortStrings(campaign.targetProductIds).forEach((id) => scope.productIds.add(id));
+    stableSortStrings(campaign.targetCategoryIds).forEach((id) => scope.categoryIds.add(id));
+    stableSortStrings(campaign.targetBrands).forEach((brand) => scope.brands.add(brand));
+  });
+
+  if (scope.fullScan) {
+    return {
+      isActive: { not: false },
+      isListed: { not: false },
+    };
+  }
+
+  const or = [];
+  if (scope.productIds.size) {
+    or.push({ id: { in: [...scope.productIds] } });
+  }
+  if (scope.categoryIds.size) {
+    or.push({ categoryId: { in: [...scope.categoryIds] } });
+  }
+  if (scope.brands.size) {
+    or.push({ brand: { in: [...scope.brands] } });
+  }
+
+  return {
+    isActive: { not: false },
+    isListed: { not: false },
+    ...(or.length ? { OR: or } : {}),
+  };
+};
+
+const loadCampaignPriceProducts = async ({ campaigns = [] } = {}) => {
   if (config.dataStore === 'postgres') {
     const prisma = await getPrisma();
     return prisma.product.findMany({
-      include: { priceEvents: true },
-      where: {
-        isActive: { not: false },
-        isListed: { not: false },
+      where: buildAffectedProductsWhere(campaigns),
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        salePrice: true,
+        brand: true,
+        categoryId: true,
+        etiket: true,
+        payload: true,
+        priceEvents: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            salePrice: true,
+            createdAt: true,
+            payload: true,
+          },
+        },
       },
     });
   }
   return productRepo.getAll();
 };
 
-const persistCampaignPriceEvent = async ({ product, event }) => {
-  const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
-  const existingHistory = Array.isArray(product?.priceHistory)
-    ? product.priceHistory
-    : (Array.isArray(payload.priceHistory) ? payload.priceHistory : []);
-  const nextHistory = [...existingHistory, event];
-  const nextPayload = { ...payload, priceHistory: nextHistory };
-  const atDate = new Date(event.at);
-  const lastPriceChangeDate = dateOnlyFromIso(event.at);
-
-  if (config.dataStore === 'postgres') {
-    const prisma = await getPrisma();
-    await prisma.product.update({
-      where: { id: product.id },
-      data: {
-        payload: nextPayload,
-        priceUpdatedAt: atDate,
-        lastPriceChangeDate: lastPriceChangeDate ? new Date(`${lastPriceChangeDate}T00:00:00.000Z`) : atDate,
-        lastPriceChangeAt: atDate,
-        lastPriceChangeSource: event.source,
-      },
-    });
-    await prisma.productPriceEvent.create({
-      data: {
-        id: event.id,
-        productId: product.id,
-        previousSalePrice: event.previousSalePrice,
-        salePrice: event.salePrice,
-        source: event.source,
-        payload: event.payload,
-        createdAt: atDate,
-      },
-    });
+const persistCampaignPriceEvents = async ({ products = [], events = [] }) => {
+  if (!events.length) {
     return;
   }
 
-  await productRepo.updateById(product.id, {
-    ...product,
-    payload: nextPayload,
-    priceHistory: nextHistory,
-    priceUpdatedAt: event.at,
-    lastPriceChangeDate,
-    lastPriceChangeAt: event.at,
-    lastPriceChangeSource: event.source,
-    updatedAt: new Date().toISOString(),
-  });
+  if (config.dataStore === 'postgres') {
+    const prisma = await getPrisma();
+    const productEventMap = new Map(events.map((entry) => [entry.productId, entry]));
+    await prisma.$transaction([
+      ...products.map((product) => {
+        const event = productEventMap.get(product.id);
+        const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+        const existingHistory = Array.isArray(product?.priceHistory)
+          ? product.priceHistory
+          : (Array.isArray(payload.priceHistory) ? payload.priceHistory : []);
+        const nextPayload = { ...payload, priceHistory: [...existingHistory, event] };
+        const atDate = new Date(event.at);
+        const lastPriceChangeDate = dateOnlyFromIso(event.at);
+
+        return prisma.product.update({
+          where: { id: product.id },
+          data: {
+            payload: nextPayload,
+            priceUpdatedAt: atDate,
+            lastPriceChangeDate: lastPriceChangeDate ? new Date(`${lastPriceChangeDate}T00:00:00.000Z`) : atDate,
+            lastPriceChangeAt: atDate,
+            lastPriceChangeSource: event.source,
+          },
+        });
+      }),
+      prisma.productPriceEvent.createMany({
+        data: events.map((event) => ({
+          id: event.id,
+          productId: event.productId,
+          previousSalePrice: event.previousSalePrice,
+          salePrice: event.salePrice,
+          source: event.source,
+          payload: event.payload,
+          createdAt: new Date(event.at),
+        })),
+      }),
+    ]);
+    return;
+  }
+
+  for (const product of products) {
+    const event = events.find((entry) => entry.productId === product.id);
+    if (!event) continue;
+    const payload = product?.payload && typeof product.payload === 'object' ? product.payload : {};
+    const existingHistory = Array.isArray(product?.priceHistory)
+      ? product.priceHistory
+      : (Array.isArray(payload.priceHistory) ? payload.priceHistory : []);
+    const nextHistory = [...existingHistory, event];
+    await productRepo.updateById(product.id, {
+      ...product,
+      payload: { ...payload, priceHistory: nextHistory },
+      priceHistory: nextHistory,
+      priceUpdatedAt: event.at,
+      lastPriceChangeDate: dateOnlyFromIso(event.at),
+      lastPriceChangeAt: event.at,
+      lastPriceChangeSource: event.source,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 };
 
 const getLatestRecordedPrice = (product = {}) => {
@@ -425,41 +572,11 @@ const safeListActiveCampaignDefinitions = async ({ settings } = {}) => {
   }
 };
 
-const syncCampaignPriceHistoryForCurrentState = async ({ settings, actorId = 'system', actorName = 'Sistem' }) => {
-  const activeCampaigns = await safeListActiveCampaignDefinitions({ settings });
-  const products = await loadCampaignPriceProducts();
-  const events = [];
-
-  for (const product of products) {
-    const recordedPrice = getLatestRecordedPrice(product);
-    const current = getEffectiveCampaignPrice(product, activeCampaigns);
-    if (pricesEqual(recordedPrice, current.effectivePrice)) continue;
-
-    const basePrice = toNumber(product?.salePrice ?? product?.price ?? product?.currentPrice) || 0;
-    const transition = current.pricedProduct?.hasActiveCampaign || current.pricedProduct?.hasActiveDiscount || !pricesEqual(current.effectivePrice, basePrice)
-      ? 'apply'
-      : 'restore';
-    const event = buildCampaignPriceEvent({
-      product,
-      previousPrice: recordedPrice,
-      nextPrice: current.effectivePrice,
-      pricedProduct: current.pricedProduct,
-      transition,
-      actorId,
-      actorName,
-    });
-    await persistCampaignPriceEvent({ product, event });
-    events.push(event);
-  }
-
-  return { eventCount: events.length };
-};
-
 const syncCampaignPriceHistory = async ({ previousSettings, nextSettings, actorId, actorName }) => {
   const previousCampaigns = await safeListActiveCampaignDefinitions({ settings: previousSettings });
   const nextCampaigns = await safeListActiveCampaignDefinitions({ settings: nextSettings });
-  const products = await loadCampaignPriceProducts();
   const events = [];
+  const products = await loadCampaignPriceProducts({ campaigns: [...previousCampaigns, ...nextCampaigns] });
 
   for (const product of products) {
     const before = getEffectiveCampaignPrice(product, previousCampaigns);
@@ -476,9 +593,13 @@ const syncCampaignPriceHistory = async ({ previousSettings, nextSettings, actorI
       actorId,
       actorName,
     });
-    await persistCampaignPriceEvent({ product, event });
     events.push(event);
   }
+
+  await persistCampaignPriceEvents({
+    products: products.filter((product) => events.some((event) => event.productId === product.id)),
+    events,
+  });
 
   return { eventCount: events.length };
 };
@@ -499,21 +620,17 @@ const assertFourDigitPin = (pin, message = 'PIN 4 haneli sayisal formatta olmali
 export const settingsService = {
   async get(currentUser) {
     const settings = await settingsRepo.getSettings();
-    void syncCampaignPriceHistoryForCurrentState({
-      settings,
-      actorId: 'system',
-      actorName: 'Sistem',
-    }).catch((error) => {
-      console.error('[campaign-price-history-current-sync:error]', error);
-    });
     const base = {
       ...settings,
       posPin: undefined,
       roleManagementPin: undefined,
       deskPins: undefined,
-      loginActivities: undefined,
-      auditLogs: undefined,
-      developerLogs: undefined,
+      loginActivities: [],
+      auditLogs: [],
+      developerLogs: [],
+      loginActivitiesCount: Array.isArray(settings.loginActivities) ? settings.loginActivities.length : 0,
+      auditLogsCount: Array.isArray(settings.auditLogs) ? settings.auditLogs.length : 0,
+      developerLogsCount: Array.isArray(settings.developerLogs) ? settings.developerLogs.length : 0,
     };
 
     if (currentUser?.role === 'admin') {
@@ -521,11 +638,9 @@ export const settingsService = {
         ...base,
         hasPosPin: Boolean(settings.posPin),
         hasRoleManagementPin: Boolean(settings.roleManagementPin),
-        loginActivities: Array.isArray(settings.loginActivities) ? settings.loginActivities : [],
-        auditLogs: Array.isArray(settings.auditLogs) ? settings.auditLogs : [],
-        ...(currentUser?.isSuperUser
-          ? { developerLogs: Array.isArray(settings.developerLogs) ? settings.developerLogs : [] }
-          : {}),
+        loginActivities: [],
+        auditLogs: [],
+        developerLogs: [],
         deskPinMeta: {
           B1: Boolean(settings?.deskPins?.B1),
           B2: Boolean(settings?.deskPins?.B2),
@@ -545,7 +660,16 @@ export const settingsService = {
   async update(payload, currentUser) {
     validateSettingsPayload(payload, { partial: true });
     const current = await settingsRepo.getSettings();
-    const input = sanitizeSettingsInput({ ...current, ...payload });
+    const mergedPayload = {
+      ...current,
+      ...payload,
+      ...(payload?.customerRelations && typeof payload.customerRelations === 'object'
+        ? {
+          customerRelations: mergeCustomerRelations(current.customerRelations, payload.customerRelations),
+        }
+        : {}),
+    };
+    const input = sanitizeSettingsInput(mergedPayload);
 
     const deskPins = {
       ...DEFAULT_DESK_PINS,
@@ -564,6 +688,16 @@ export const settingsService = {
       updatedAt: new Date().toISOString(),
     };
 
+    const currentCampaignPayload = Array.isArray(current?.customerRelations?.campaigns) ? current.customerRelations.campaigns : [];
+    const nextCampaignPayload = Array.isArray(nextSettings?.customerRelations?.campaigns) ? nextSettings.customerRelations.campaigns : [];
+    const campaignsRequested = hasOwn(payload?.customerRelations, 'campaigns');
+    const campaignsChanged = campaignsRequested
+      && buildCampaignPayloadSignature(currentCampaignPayload) !== buildCampaignPayloadSignature(nextCampaignPayload);
+    const previousActiveCampaigns = campaignsRequested ? await safeListActiveCampaignDefinitions({ settings: current }) : [];
+    const nextActiveCampaigns = campaignsRequested ? await safeListActiveCampaignDefinitions({ settings: nextSettings }) : [];
+    const campaignPricingChanged = campaignsRequested
+      && buildCampaignPricingSignature(previousActiveCampaigns) !== buildCampaignPricingSignature(nextActiveCampaigns);
+
     const changedKeys = pickChangedKeys(current, nextSettings);
     const auditEntry = {
       id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
@@ -577,18 +711,13 @@ export const settingsService = {
     nextSettings.auditLogs = appendAuditLog(current, auditEntry);
 
     await settingsRepo.updateSettings(nextSettings);
-    if (Object.prototype.hasOwnProperty.call(payload?.customerRelations || {}, 'campaigns')) {
+    if (campaignsChanged) {
       clearPricingAnalysisCache();
-      if (payload?.skipCampaignPriceHistorySync !== true) {
+      if (campaignPricingChanged && payload?.skipCampaignPriceHistorySync !== true) {
         try {
           await syncCampaignPriceHistory({
             previousSettings: current,
             nextSettings,
-            actorId,
-            actorName,
-          });
-          await syncCampaignPriceHistoryForCurrentState({
-            settings: nextSettings,
             actorId,
             actorName,
           });
@@ -826,12 +955,45 @@ export const settingsService = {
       });
     }
 
-    const limit = normalizeListLimit(query.limit, 200, 1000);
+    const limit = normalizeListLimit(query.limit, 50, 100);
+    const sliced = rows.slice(0, limit);
+    const items = sliced.map((item) => ({
+      id: item.id,
+      timestamp: item.timestamp,
+      level: item.level,
+      message: item.message,
+      source: item.source,
+      action: item.action,
+      endpoint: item.endpoint,
+      statusCode: item.statusCode,
+      userId: item.userId,
+      userName: item.userName,
+      userRole: item.userRole,
+      ip: item.ip,
+      errorType: item.errorType,
+      repeatCount: item.repeatCount,
+      shortStack: item.stack ? item.stack.slice(0, 150) + (item.stack.length > 150 ? '...' : '') : '',
+      hasFullStack: Boolean(item.stack),
+    }));
+
     return {
-      items: rows.slice(0, limit),
+      items,
       total: rows.length,
       limit,
     };
+  },
+
+  async getDeveloperLogDetail(id, currentUser) {
+    if (!currentUser?.isSuperUser) {
+      throw new AppError(403, 'Geliştirici logları için yönetici yetkisi gereklidir');
+    }
+    const settings = await settingsRepo.getSettings();
+    const rows = Array.isArray(settings.developerLogs) ? settings.developerLogs : [];
+    const log = rows.find((item) => String(item.id) === String(id));
+    if (!log) {
+      throw new AppError(404, 'Log kaydı bulunamadı');
+    }
+    return log;
   },
 
   async clearLogs(type, currentUser) {

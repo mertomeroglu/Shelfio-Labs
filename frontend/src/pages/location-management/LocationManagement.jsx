@@ -1,10 +1,12 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Filter, MapPin, Search, Shuffle, Snowflake, Thermometer, Warehouse, Boxes, AlertTriangle, Clock3, ListChecks, PackageCheck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Filter, MapPin, Search, Shuffle, Snowflake, Thermometer, Warehouse, Boxes, AlertTriangle, Clock3, ListChecks, PackageCheck, Edit, Layers } from 'lucide-react';
 import DataTable from '../../components/DataTable.jsx';
 import FilterBar from '../../components/FilterBar.jsx';
 import PageHeader from '../../components/PageHeader.jsx';
 import StatusBadge from '../../components/StatusBadge.jsx';
 import Toast from '../../components/Toast.jsx';
+import LocationPlanSection from './components/LocationPlanSection.jsx';
 import './LocationManagement.css';
 import {
   formatDepotLocationLabel,
@@ -17,6 +19,9 @@ import { productService } from '../../services/productService.js';
 import { sectionService } from '../../services/sectionService.js';
 import { stockService } from '../../services/stockService.js';
 import { warehouseService } from '../../services/warehouseService.js';
+import { locationLayoutService } from '../../services/locationLayoutService.js';
+import { useAuth } from '../../hooks/useAuth.js';
+import { hasPermission } from '../../config/permissions.js';
 
 const LOCATION_TYPES = {
   SECTION: 'reyon',
@@ -234,15 +239,21 @@ function LocationFilters({ locationType, categoryOptions, sectionOptions, filter
             {categoryOptions.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
-        {locationType === LOCATION_TYPES.SECTION ? (
-          <label className="field-group">
-            <span>Reyon</span>
-            <select value={filters.sectionFilter} onChange={(event) => actions.setSectionFilter(event.target.value)}>
-              <option value="">Tüm Reyonlar</option>
-              {sectionOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-        ) : null}
+        <label className="field-group">
+          <span>Lokasyon Tipi</span>
+          <select value={filters.locationTypeFilter} onChange={(event) => actions.setLocationTypeFilter(event.target.value)}>
+            <option value="">Tümü</option>
+            <option value="reyon">Reyon</option>
+            <option value="depo">Depo</option>
+          </select>
+        </label>
+        <label className="field-group">
+          <span>Reyon</span>
+          <select value={filters.sectionFilter} onChange={(event) => actions.setSectionFilter(event.target.value)}>
+            <option value="">Tüm Reyonlar</option>
+            {sectionOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
         <label className="field-group">
           <span>Durum</span>
           <select value={filters.statusFilter} onChange={(event) => actions.setStatusFilter(event.target.value)}>
@@ -275,7 +286,7 @@ function LocationFilters({ locationType, categoryOptions, sectionOptions, filter
   );
 }
 
-function LocationHeader({ locationType, onLocationTypeChange, categoryOptions, sectionOptions, filters, actions, onApply }) {
+function LocationHeader() {
   return (
     <>
       <PageHeader
@@ -285,29 +296,13 @@ function LocationHeader({ locationType, onLocationTypeChange, categoryOptions, s
         description="Depo ve reyon lokasyonlarını analiz edin."
       />
 
-      <section className="location-type-switch-wrap" aria-label="Lokasyon tipi seçimi">
-        <span className="location-type-switch-label">Lokasyon Tipi</span>
-        <div className="location-type-toggle location-type-toggle-hero" role="group" aria-label="Lokasyon tipi seçimi">
-          <button
-            type="button"
-            className={locationType === LOCATION_TYPES.SECTION ? 'active' : ''}
-            aria-pressed={locationType === LOCATION_TYPES.SECTION}
-            onClick={() => onLocationTypeChange(LOCATION_TYPES.SECTION)}
-          >
-            <MapPin size={14} /> Reyon
-          </button>
-          <button
-            type="button"
-            className={locationType === LOCATION_TYPES.WAREHOUSE ? 'active' : ''}
-            aria-pressed={locationType === LOCATION_TYPES.WAREHOUSE}
-            onClick={() => onLocationTypeChange(LOCATION_TYPES.WAREHOUSE)}
-          >
-            <Warehouse size={14} /> Depo
-          </button>
-        </div>
-      </section>
+    </>
+  );
+}
 
-      <div className="mod-card location-toolbar-card products-filter-card">
+function LocationFilterSection({ locationType, categoryOptions, sectionOptions, filters, actions, onApply }) {
+  return (
+      <section className="mod-card location-toolbar-card products-filter-card">
         <div className="mod-card-header">
           <div className="mod-card-icon mod-icon-violet"><Filter size={18} /></div>
           <div><h3>Filtreler</h3><p>Lokasyon listesini daraltmak için filtreleyin</p></div>
@@ -320,22 +315,30 @@ function LocationHeader({ locationType, onLocationTypeChange, categoryOptions, s
           actions={actions}
           onApply={onApply}
         />
-      </div>
-    </>
+      </section>
   );
 }
 
-function LocationSummaryCards({ items }) {
+function LocationKpiSummaryRow({ kpis }) {
   return (
-    <section className="location-summary-grid">
-      {items.map((item) => (
-        <div className="mod-stat" key={item.label}>
-          <div className={`mod-stat-icon ${item.iconClass || 'mod-icon-blue'}`}>{item.icon || <Boxes size={20} />}</div>
-          <div className="mod-stat-body">
-            <span className="mod-stat-label">{item.label}</span>
-            <span className="mod-stat-value">{item.value}</span>
+    <section className="lm-kpi-row" aria-label="Lokasyon performans göstergeleri">
+      {kpis.map((kpi) => (
+        <article className="lm-kpi-card" key={kpi.title}>
+          <div className="lm-kpi-card__top">
+            <span className="lm-kpi-card__title" title={kpi.title}>{kpi.title}</span>
+            <span className="lm-kpi-card__value">{kpi.percentText}</span>
           </div>
-        </div>
+          <div className="lm-kpi-card__bar">
+            <div
+              className={`lm-kpi-card__bar-fill ${kpi.colorClass}`}
+              style={{ width: `${Math.min(100, Math.max(0, kpi.percent))}%` }}
+            />
+          </div>
+          <div className="lm-kpi-card__bottom">
+            <span className="lm-kpi-card__metric">{kpi.metricText}</span>
+            <span className="lm-kpi-card__description" title={kpi.description}>{kpi.description}</span>
+          </div>
+        </article>
       ))}
     </section>
   );
@@ -361,65 +364,108 @@ function LocationDetailPanel({ locationType, selectedLocation, onMove, onCreateR
   const productGroup = detailGroups.find((group) => group.id === 'product') || detailGroups[1];
   const operationalGroup = detailGroups.find((group) => group.id === 'operational') || detailGroups[2];
 
-  const renderGroup = (group, keyPrefix = '') => (
-    <section className={`location-detail-group location-detail-group-${group.id}`} key={`${keyPrefix}${group.id}`}>
-      <header className="location-detail-group-head">
-        <h4>{group.title}</h4>
-      </header>
-      <div className={`location-detail-items location-detail-items-${group.id}`}>
-        {group.fields.map(([label, key]) => {
-          const value = selectedLocation ? (selectedLocation[key] || '-') : '-';
-          const isPlaceholder = !selectedLocation || !selectedLocation[key];
-          return (
-            <article className={`location-detail-item location-detail-item-${group.id}`} key={`${keyPrefix}${group.id}-${label}-${key}`}>
-              <span>{label}</span>
-              <strong className={isPlaceholder ? 'is-placeholder' : ''}>{value}</strong>
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
+  const renderCard = (group, isPlaceholder = false) => {
+    // If it is the product group, check if there is a product.
+    if (group.id === 'product' && !isPlaceholder && selectedLocation) {
+      const hasProduct = selectedLocation.productName && selectedLocation.productName !== '-';
+      if (!hasProduct) {
+        return (
+          <section id={`lm-detail-card-${group.id}`} className="lm-location-detail-card lm-location-detail-card-product" key={group.id}>
+            <h4 className="lm-location-detail-card__title">{group.title}</h4>
+            <div className="lm-product-empty-state">
+              <Boxes size={24} className="lm-product-empty-icon" />
+              <p>Bu lokasyonda ürün bulunmuyor</p>
+            </div>
+          </section>
+        );
+      }
+    }
+
+    return (
+      <section id={`lm-detail-card-${group.id}`} className={`lm-location-detail-card lm-location-detail-card-${group.id}`} key={group.id}>
+        <h4 className="lm-location-detail-card__title">{group.title}</h4>
+        <div className="lm-location-detail-grid">
+          {group.fields.map(([label, key]) => {
+            const value = selectedLocation ? (selectedLocation[key] || '-') : '-';
+            const valPlaceholder = !selectedLocation || !selectedLocation[key] || selectedLocation[key] === '-';
+            const isFullWidth = key === 'productName' || key === 'note';
+
+            if (key === 'occupancyLabel' && !isPlaceholder && selectedLocation) {
+              const pct = occupancyValue(selectedLocation.occupancyPercent || parseFloat(selectedLocation.occupancyLabel) || 0);
+              return (
+                <div className="lm-location-detail-row full-width" key={key}>
+                  <span className="lm-location-detail-label">{label}</span>
+                  <div className="lm-occupancy-progress-wrapper">
+                    <div className="lm-occupancy-progress-bar">
+                      <div className={`lm-occupancy-progress-fill status-${statusTone(selectedLocation.status)}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <strong className="lm-location-detail-value">{selectedLocation.occupancyLabel || toPercent(pct)}</strong>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className={`lm-location-detail-row ${isFullWidth ? 'full-width' : ''}`} key={key}>
+                <span className="lm-location-detail-label">{label}</span>
+                <strong className={`lm-location-detail-value ${valPlaceholder ? 'is-placeholder' : ''} ${key === 'statusLabel' ? `tone-${statusTone(value)}` : ''}`}>
+                  {value}
+                </strong>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
 
   const renderActionFooter = () => {
     if (isSectionMode && isSelectedEmpty) {
       return (
-        <div className="location-empty-actions">
-          <p>Bu raf gözü boş.</p>
-          <button className="ghost-button" type="button" onClick={onCreateRefillRequest}><ListChecks size={14} /> Reyon Besleme Talebi</button>
+        <div className="lm-location-detail-actions">
+          <p className="lm-location-detail-actions-text">Bu raf gözü boş.</p>
+          <div className="lm-location-detail-actions-group">
+            <button className="ghost-button" type="button" onClick={onCreateRefillRequest}><ListChecks size={14} /> Reyon Besleme Talebi</button>
+          </div>
         </div>
       );
     }
 
     if (isSectionMode && selectedLocation && !isSelectedEmpty) {
       return (
-        <div className="location-empty-actions">
-          <p>Bu raf gözünde ürün bulunuyor.</p>
-          <button className="ghost-button" type="button" onClick={onViewRefillHistory}><Clock3 size={14} /> Besleme Geçmişi</button>
-          <button className="ghost-button" type="button" onClick={onMoveSlot}><Shuffle size={14} /> Göz Değiştir</button>
+        <div className="lm-location-detail-actions">
+          <p className="lm-location-detail-actions-text">Bu raf gözünde ürün bulunuyor.</p>
+          <div className="lm-location-detail-actions-group">
+            <button className="ghost-button" type="button" onClick={onViewRefillHistory}><Clock3 size={14} /> Besleme Geçmişi</button>
+            <button className="ghost-button" type="button" onClick={onMoveSlot}><Shuffle size={14} /> Göz Değiştir</button>
+          </div>
         </div>
       );
     }
 
     if (!isSectionMode && selectedLocation) {
       return (
-        <div className="location-empty-actions">
-          <p>{isSelectedEmpty ? 'Bu depo lokasyonu boş.' : 'Bu depo lokasyonunda ürün bulunuyor.'}</p>
-          <button className="primary-button" type="button" onClick={onMove} disabled={isSelectedEmpty}><Shuffle size={14} /> Ürün Taşı</button>
+        <div className="lm-location-detail-actions">
+          <p className="lm-location-detail-actions-text">{isSelectedEmpty ? 'Bu depo lokasyonu boş.' : 'Bu depo lokasyonunda ürün bulunuyor.'}</p>
+          <div className="lm-location-detail-actions-group">
+            <button className="primary-button" type="button" onClick={onMove} disabled={isSelectedEmpty}><Shuffle size={14} /> Ürün Taşı</button>
+          </div>
         </div>
       );
     }
 
     return (
-      <div className="location-empty-actions location-empty-actions-disabled">
-        <p>Aksiyonlar için listeden bir lokasyon seçin.</p>
-        <button className="ghost-button" type="button" disabled>Göz Değiştir</button>
+      <div className="lm-location-detail-actions is-disabled">
+        <p className="lm-location-detail-actions-text">Aksiyonlar için listeden bir lokasyon seçin.</p>
+        <div className="lm-location-detail-actions-group">
+          <button className="ghost-button" type="button" disabled>Göz Değiştir</button>
+        </div>
       </div>
     );
   };
 
   return (
-    <aside className="location-right-detail mod-card">
+    <section className="location-right-detail mod-card">
       <div className="mod-card-header">
         <div className="mod-card-icon mod-icon-violet"><MapPin size={18} /></div>
         <div>
@@ -430,36 +476,55 @@ function LocationDetailPanel({ locationType, selectedLocation, onMove, onCreateR
 
       {selectedLocation ? (
         <div className="location-right-detail-body">
-          <div className="location-detail-groups location-detail-groups-two-column">
-            <div className="location-detail-column location-detail-column-left">
-              {locationGroup ? renderGroup(locationGroup) : null}
+          {/* A. Üst Özet Alanı */}
+          <div className="lm-location-detail-summary">
+            <div className="lm-summary-item">
+              <span className="lm-summary-label">Kod</span>
+              <strong className="lm-summary-value" title={selectedLocation.locationCodeLabel || selectedLocation.locationCode}>
+                {selectedLocation.locationCodeLabel || selectedLocation.locationCode || '-'}
+              </strong>
             </div>
-            <div className="location-detail-column location-detail-column-right">
-              {productGroup ? renderGroup(productGroup) : null}
-              {operationalGroup ? renderGroup(operationalGroup) : null}
+            <div className="lm-summary-item">
+              <span className="lm-summary-label">Tip</span>
+              <span className="lm-summary-badge type-badge">{selectedLocation.locationTypeLabel || (isSectionMode ? 'Reyon' : 'Depo')}</span>
+            </div>
+            <div className="lm-summary-item">
+              <span className="lm-summary-label">Durum</span>
+              <span className={`lm-summary-badge status-${statusTone(selectedLocation.status)}`}>
+                {statusLabel(selectedLocation.status) || '-'}
+              </span>
+            </div>
+            <div className="lm-summary-item">
+              <span className="lm-summary-label">Doluluk</span>
+              <strong className="lm-summary-value">
+                {selectedLocation.occupancyLabel || toPercent(occupancyValue(selectedLocation.occupancyPercent))}
+              </strong>
             </div>
           </div>
+
+          <div id="lm-location-detail-cards-container" className="lm-location-detail-container">
+            {locationGroup ? renderCard(locationGroup) : null}
+            {productGroup ? renderCard(productGroup) : null}
+            {operationalGroup ? renderCard(operationalGroup) : null}
+          </div>
+          
           <div className="location-detail-footer">
             {renderActionFooter()}
           </div>
         </div>
       ) : (
         <div className="location-right-detail-body">
-          <div className="location-detail-groups location-detail-groups-two-column" aria-hidden="true">
-            <div className="location-detail-column location-detail-column-left">
-              {locationGroup ? renderGroup(locationGroup, 'empty-') : null}
-            </div>
-            <div className="location-detail-column location-detail-column-right">
-              {productGroup ? renderGroup(productGroup, 'empty-') : null}
-              {operationalGroup ? renderGroup(operationalGroup, 'empty-') : null}
-            </div>
+          <div className="lm-location-detail-empty-panel">
+            <MapPin size={48} className="lm-location-detail-empty-icon" />
+            <h4>Lokasyon Seçilmedi</h4>
+            <p>Ayrıntıları görüntülemek ve işlem yapmak için haritadan veya listeden bir lokasyon seçin.</p>
           </div>
           <div className="location-detail-footer">
             {renderActionFooter()}
           </div>
         </div>
       )}
-    </aside>
+    </section>
   );
 }
 
@@ -762,7 +827,16 @@ function buildCommonPredicate(filters, criticalMap) {
 }
 
 export default function LocationManagementPage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const canManageLayout = hasPermission(user, 'layout:manage');
+
   const [locationType, setLocationType] = useState(LOCATION_TYPES.SECTION);
+
+  // --- Mağaza Planı (Map) state ---
+  const [planLayout, setPlanLayout] = useState(null);
+  const [isPlanLoading, setIsPlanLoading] = useState(true);
+  const [planError, setPlanError] = useState(null);
 
   const [searchText, setSearchText] = useState('');
   const [skuSearch, setSkuSearch] = useState('');
@@ -782,6 +856,7 @@ export default function LocationManagementPage() {
   const [onlyOrtam, setOnlyOrtam] = useState(false);
   const [onlyNeedsRefill, setOnlyNeedsRefill] = useState(false);
 
+  const [locationTypeFilter, setLocationTypeFilter] = useState('');
   const [selectedSectionId, setSelectedSectionId] = useState('');
   const [selectedLocationCode, setSelectedLocationCode] = useState('');
   const [sectionListSearch, setSectionListSearch] = useState('');
@@ -846,8 +921,9 @@ export default function LocationManagementPage() {
 
   const handleCreateRefillRequestAction = useCallback(async () => {
     const currentSelected = selectedLocationRef.current;
-    if (locationType !== LOCATION_TYPES.SECTION) {
-      setToast({ type: 'warning', title: 'Reyon Besleme Talebi', message: 'Besleme talebi yalnızca reyon görünümünde oluşturulabilir.' });
+    const isSection = currentSelected?.locationType === 'section_shelf' || currentSelected?.locationType === 'section_common_area';
+    if (!isSection) {
+      setToast({ type: 'warning', title: 'Reyon Besleme Talebi', message: 'Besleme talebi yalnızca reyon lokasyonları için oluşturulabilir.' });
       return;
     }
 
@@ -913,7 +989,8 @@ export default function LocationManagementPage() {
         message: `${refillCandidate.item.name || refillCandidate.item.sku || 'Ürün'} için ${formatNumber(requestedQty)} adet talep oluşturuldu (${created?.status || 'Bekliyor'}).`,
       });
     } catch (error) {
-      setToast({ type: 'error', title: 'Reyon Besleme Talebi', message: error.message || 'Besleme talebi oluşturulamadı.' });
+      const realMsg = error.payload?.message || error.payload?.error || error.message;
+      setToast({ type: 'error', title: 'Reyon Besleme Talebi', message: realMsg || 'Besleme talebi oluşturulamadı.' });
     }
   }, [locationType, selectedLocationCode, selectedSectionId, selectedSectionProducts]);
 
@@ -975,7 +1052,8 @@ export default function LocationManagementPage() {
 
       setMovementModal((current) => ({ ...current, isLoading: false, rows: normalizedRows, error: '' }));
     } catch (error) {
-      setMovementModal((current) => ({ ...current, isLoading: false, rows: [], error: error.message || 'Hareket geçmişi alınamadı.' }));
+      const realMsg = error.payload?.message || error.payload?.error || error.message;
+      setMovementModal((current) => ({ ...current, isLoading: false, rows: [], error: realMsg || 'Hareket geçmişi alınamadı.' }));
     }
   }, [selectedLocationCode]);
 
@@ -1054,7 +1132,8 @@ export default function LocationManagementPage() {
 
       setRefillHistoryModal((current) => ({ ...current, isLoading: false, rows: refillRows, summary, error: '' }));
     } catch (error) {
-      setRefillHistoryModal((current) => ({ ...current, isLoading: false, rows: [], error: error.message || 'Besleme geçmişi alınamadı.' }));
+      const realMsg = error.payload?.message || error.payload?.error || error.message;
+      setRefillHistoryModal((current) => ({ ...current, isLoading: false, rows: [], error: realMsg || 'Besleme geçmişi alınamadı.' }));
     }
   }, [selectedLocationCode]);
 
@@ -1081,6 +1160,7 @@ export default function LocationManagementPage() {
     setStatusFilter('');
     setOccupancyFilter('');
     setLocationCodeSearch('');
+    setLocationTypeFilter('');
     setOnlyEmpty(false);
     setOnlyFilled(false);
     setOnlyCritical(false);
@@ -1100,6 +1180,7 @@ export default function LocationManagementPage() {
     statusFilter,
     occupancyFilter,
     locationCodeSearch,
+    locationTypeFilter,
     onlyEmpty,
     onlyFilled,
     onlyCritical,
@@ -1119,6 +1200,7 @@ export default function LocationManagementPage() {
     setStatusFilter,
     setOccupancyFilter,
     setLocationCodeSearch,
+    setLocationTypeFilter,
     setOnlyEmpty,
     setOnlyFilled,
     setOnlyCritical,
@@ -1196,13 +1278,32 @@ export default function LocationManagementPage() {
         setDerivedShelfZones(Array.isArray(warehouseData?.shelfZones) ? warehouseData.shelfZones : []);
         setSelectedSectionId((current) => current || safeSections[0]?.id || '');
       } catch (error) {
-        setToast({ type: 'error', title: 'Lokasyon Yönetimi', message: error.message || 'Lokasyon verileri yüklenemedi.' });
+        const realMsg = error.payload?.message || error.payload?.error || error.message;
+        setToast({ type: 'error', title: 'Lokasyon Yönetimi', message: realMsg || 'Lokasyon verileri yüklenemedi.' });
       } finally {
         setIsLoading(false);
       }
     };
 
     loadAll();
+  }, []);
+
+  // --- Fetch published layout for the map view ---
+  useEffect(() => {
+    const loadPlanLayout = async () => {
+      try {
+        setIsPlanLoading(true);
+        setPlanError(null);
+        const data = await locationLayoutService.getPublishedLayout();
+        setPlanLayout(data);
+      } catch (err) {
+        console.error('Published layout could not be loaded for plan view:', err);
+        setPlanError(err);
+      } finally {
+        setIsPlanLoading(false);
+      }
+    };
+    loadPlanLayout();
   }, []);
 
   useEffect(() => {
@@ -1246,7 +1347,8 @@ export default function LocationManagementPage() {
         const rows = await sectionService.getProducts(selectedSectionId);
         setSelectedSectionProducts(Array.isArray(rows) ? rows : []);
       } catch (error) {
-        setToast({ type: 'error', title: 'Reyon Detayı', message: error.message || 'Reyon ürünleri yüklenemedi.' });
+        const realMsg = error.payload?.message || error.payload?.error || error.message;
+        setToast({ type: 'error', title: 'Reyon Detayı', message: realMsg || 'Reyon ürünleri yüklenemedi.' });
         setSelectedSectionProducts([]);
       } finally {
         setIsSectionDetailLoading(false);
@@ -1595,7 +1697,166 @@ export default function LocationManagementPage() {
     return map;
   }, [warehouseGridRows]);
 
-  const activeRows = locationType === LOCATION_TYPES.SECTION ? filteredSectionRows : filteredWarehouseRows;
+  const allLocationRows = useMemo(() => {
+    const sectionRowsMapped = sectionGridRows.map((row) => ({
+      ...row,
+      locationType: row.isVirtualLocation ? 'section_common_area' : 'section_shelf',
+      locationTypeLabel: 'Reyon',
+    }));
+
+    const warehouseRowsMapped = warehouseRowsNormalized.map((row) => ({
+      ...row,
+      locationType: row.isVirtualLocation ? 'warehouse_common_area' : 'warehouse_location',
+      locationTypeLabel: 'Depo',
+    }));
+
+    return [...sectionRowsMapped, ...warehouseRowsMapped];
+  }, [sectionGridRows, warehouseRowsNormalized]);
+
+  const filteredCombinedRows = useMemo(() => {
+    let list = allLocationRows.filter(predicate);
+    if (filters.locationTypeFilter === 'reyon') {
+      list = list.filter((row) => row.locationType === 'section_shelf' || row.locationType === 'section_common_area');
+    } else if (filters.locationTypeFilter === 'depo') {
+      list = list.filter((row) => row.locationType === 'warehouse_location' || row.locationType === 'warehouse_common_area');
+    }
+    return list;
+  }, [allLocationRows, predicate, filters.locationTypeFilter]);
+
+  const locationKpis = useMemo(() => {
+    const totalSectionSlots = sectionCards.reduce((sum, card) => sum + Number(card.totalSlots || 100), 0);
+    const occupiedSectionSlots = sectionCards.reduce((sum, card) => sum + Number(card.occupiedSlots || 0), 0);
+
+    const totalWarehouseSlots = warehouseRowsNormalized.length;
+    const occupiedWarehouseSlots = warehouseRowsNormalized.filter((item) => !isEmptyStatus(item.status)).length;
+
+    const totalLocations = totalSectionSlots + totalWarehouseSlots;
+    const totalOccupied = occupiedSectionSlots + occupiedWarehouseSlots;
+    const totalEmpty = Math.max(0, totalLocations - totalOccupied);
+
+    const criticalSection = sectionCards.reduce((sum, card) => sum + Number(card.criticalCount || 0), 0);
+    const criticalWarehouse = warehouseRowsNormalized.filter((item) => item.isCritical).length;
+    const totalCritical = criticalSection + criticalWarehouse;
+
+    const placedSectionCount = (Array.isArray(derivedShelfPlan) ? derivedShelfPlan : []).filter((item) => item.productId).length;
+    const placedWarehouseCount = warehouseRowsNormalized.filter((item) => item.productId && item.productId !== '-').length;
+    const totalPlaced = placedSectionCount + placedWarehouseCount;
+
+    const occupiedRate = totalLocations > 0 ? (totalOccupied / totalLocations) * 100 : 0;
+    const emptyRate = totalLocations > 0 ? (totalEmpty / totalLocations) * 100 : 0;
+    const warehouseOccupiedRate = totalWarehouseSlots > 0 ? (occupiedWarehouseSlots / totalWarehouseSlots) * 100 : 0;
+    const sectionOccupiedRate = totalSectionSlots > 0 ? (occupiedSectionSlots / totalSectionSlots) * 100 : 0;
+    const criticalRate = totalLocations > 0 ? (totalCritical / totalLocations) * 100 : 0;
+    const placedRate = totalLocations > 0 ? (totalPlaced / totalLocations) * 100 : 0;
+
+    return [
+      {
+        title: 'Dolu Lokasyon Oranı',
+        percent: occupiedRate,
+        percentText: toPercent(occupiedRate),
+        metricText: `${formatNumber(totalOccupied)} / ${formatNumber(totalLocations)}`,
+        description: 'Dolu reyon ve depo gözleri',
+        colorClass: 'lm-kpi-bar-green',
+      },
+      {
+        title: 'Boş Lokasyon Oranı',
+        percent: emptyRate,
+        percentText: toPercent(emptyRate),
+        metricText: `${formatNumber(totalEmpty)} / ${formatNumber(totalLocations)}`,
+        description: 'Boş reyon ve depo gözleri',
+        colorClass: 'lm-kpi-bar-gray',
+      },
+      {
+        title: 'Depo Doluluk Oranı',
+        percent: warehouseOccupiedRate,
+        percentText: toPercent(warehouseOccupiedRate),
+        metricText: `${formatNumber(occupiedWarehouseSlots)} / ${formatNumber(totalWarehouseSlots)}`,
+        description: 'Depo alanlarındaki doluluk oranı',
+        colorClass: 'lm-kpi-bar-blue',
+      },
+      {
+        title: 'Reyon Doluluk Oranı',
+        percent: sectionOccupiedRate,
+        percentText: toPercent(sectionOccupiedRate),
+        metricText: `${formatNumber(occupiedSectionSlots)} / ${formatNumber(totalSectionSlots)}`,
+        description: 'Reyon ve raf doluluk oranı',
+        colorClass: 'lm-kpi-bar-purple',
+      },
+      {
+        title: 'Kritik Göz Oranı',
+        percent: criticalRate,
+        percentText: toPercent(criticalRate),
+        metricText: `${formatNumber(totalCritical)} / ${formatNumber(totalLocations)}`,
+        description: 'Kritik stok seviyesindeki gözler',
+        colorClass: 'lm-kpi-bar-red',
+      },
+      {
+        title: 'Yerleşmiş Ürün Oranı',
+        percent: placedRate,
+        percentText: toPercent(placedRate),
+        metricText: `${formatNumber(totalPlaced)} / ${formatNumber(totalLocations)}`,
+        description: 'Ürün atanmış lokasyon oranı',
+        colorClass: 'lm-kpi-bar-teal',
+      },
+    ];
+  }, [sectionCards, warehouseRowsNormalized, derivedShelfPlan]);
+
+  const locationColumns = [
+    {
+      key: 'locationCode',
+      label: 'Lokasyon Kodu',
+      render: (row) => row.locationCodeLabel || locationDisplayLabel(row.locationCode)
+    },
+    {
+      key: 'locationTypeLabel',
+      label: 'Tip',
+      render: (row) => row.locationTypeLabel || '-'
+    },
+    {
+      key: 'scopeLabel',
+      label: 'Reyon/Depo',
+      render: (row) => row.scopeLabel || '-'
+    },
+    {
+      key: 'productName',
+      label: 'Ürün',
+      className: 'location-cell-product',
+      render: (row) => <span className="location-table-clamp-2">{row.productName || '-'}</span>
+    },
+    {
+      key: 'sku',
+      label: 'SKU/Barkod',
+      className: 'location-cell-sku',
+      render: (row) => (
+        <span className="location-table-clamp-2">
+          {row.sku && row.sku !== '-' ? row.sku : ''}
+          {row.barcode && row.barcode !== '-' ? ` / ${row.barcode}` : ''}
+          {!row.sku && !row.barcode ? '-' : ''}
+        </span>
+      )
+    },
+    {
+      key: 'stockLabel',
+      label: 'Stok',
+      render: (row) => row.stockLabel || '-'
+    },
+    {
+      key: 'occupancyLabel',
+      label: 'Kapasite/Doluluk',
+      render: (row) => row.occupancyLabel || '-'
+    },
+    {
+      key: 'status',
+      label: 'Durum',
+      render: (row) => <StatusBadge tone={statusTone(row.status)}>{statusLabel(row.status)}</StatusBadge>,
+      sortValue: (row) => ({ Bos: 0, Dolu: 1, Kritik: 2 }[String(row.status || '')] ?? 99),
+    },
+    {
+      key: 'lastMovementAtLabel',
+      label: 'Son Hareket',
+      render: (row) => row.lastMovementAtLabel || row.lastInAt || '-'
+    }
+  ];
 
   const handleMoveProductAction = useCallback(() => {
     const currentSelected = selectedLocationRef.current;
@@ -1610,20 +1871,21 @@ export default function LocationManagementPage() {
       return;
     }
 
-    const targetRows = activeRows.filter((row) => String(row.locationCode || '') !== sourceLocationCode);
+    const targetRows = filteredCombinedRows.filter((row) => String(row.locationCode || '') !== sourceLocationCode);
     if (!targetRows.length) {
       setToast({ type: 'warning', title: 'Ürün Taşı', message: 'Hedef lokasyon bulunamadı. Filtreleri genişletin.' });
       return;
     }
 
+    const isWarehouse = currentSelected?.locationType === 'warehouse_location' || currentSelected?.locationType === 'warehouse_common_area';
     setTransferModal({
       isOpen: true,
-      transferDirection: locationType === LOCATION_TYPES.WAREHOUSE ? 'warehouse_to_section' : 'section_to_warehouse',
+      transferDirection: isWarehouse ? 'warehouse_to_section' : 'section_to_warehouse',
       sourceLocationCode,
       sourceProductLabel: String(currentSelected?.productName || currentSelected?.sku || '-'),
       targetLocationCode: String(targetRows[0]?.locationCode || ''),
     });
-  }, [activeRows, selectedLocationCode]);
+  }, [filteredCombinedRows, selectedLocationCode]);
 
   const locationIndex = useMemo(() => {
     const map = new Map();
@@ -1760,7 +2022,8 @@ export default function LocationManagementPage() {
       closeSlotMoveModal();
     } catch (error) {
       setSlotMoveModal((current) => ({ ...current, isSubmitting: false }));
-      setToast({ type: 'error', title: 'Göz Değiştir', message: error.message || 'Lokasyon güncellenemedi.' });
+      const realMsg = error.payload?.message || error.payload?.error || error.message;
+      setToast({ type: 'error', title: 'Göz Değiştir', message: realMsg || 'Lokasyon güncellenemedi.' });
     }
   }, [closeSlotMoveModal, slotMoveModal.sourceLocationCode, slotMoveModal.sourceProductId, slotMoveModal.sourceProductLabel, slotMoveModal.targetLocationCode, slotMoveModal.targetOptions]);
 
@@ -1803,17 +2066,13 @@ export default function LocationManagementPage() {
     const total = filteredWarehouseRows.length;
     const full = filteredWarehouseRows.filter((item) => item.status === 'Dolu').length;
     const empty = filteredWarehouseRows.filter((item) => isEmptyStatus(item.status)).length;
-    const Ortam = filteredWarehouseRows.filter((item) => item.storageType === 'Ortam').length;
-    const cold = filteredWarehouseRows.filter((item) => item.storageType === 'cold_chain').length;
-    const freezer = filteredWarehouseRows.filter((item) => item.storageType === 'freezer').length;
+    const critical = filteredWarehouseRows.filter((item) => item.isCritical).length;
 
     return [
       { label: 'Toplam Lokasyon', value: formatNumber(total), icon: <MapPin size={18} />, iconClass: 'mod-icon-blue' },
       { label: 'Dolu Lokasyon', value: formatNumber(full), icon: <PackageCheck size={18} />, iconClass: 'mod-icon-emerald' },
       { label: 'Boş Lokasyon', value: formatNumber(empty), icon: <Boxes size={18} />, iconClass: 'mod-icon-cyan' },
-      { label: 'Ortam Kapasite', value: formatNumber(Ortam), icon: <Thermometer size={18} />, iconClass: 'mod-icon-violet' },
-      { label: 'Soğuk Kapasite', value: formatNumber(cold), icon: <Snowflake size={18} />, iconClass: 'mod-icon-cyan' },
-      { label: 'Dondurucu Kapasite', value: formatNumber(freezer), icon: <Snowflake size={18} />, iconClass: 'mod-icon-indigo' },
+      { label: 'Kritik Lokasyon', value: formatNumber(critical), icon: <AlertTriangle size={18} />, iconClass: 'mod-icon-rose' },
     ];
   }, [filteredWarehouseRows]);
 
@@ -1860,25 +2119,13 @@ export default function LocationManagementPage() {
     const totalSlots = visibleSectionCards.length * 100;
     const filled = filteredSectionRows.filter((item) => item.status === 'Dolu').length;
     const empty = filteredSectionRows.filter((item) => isEmptyStatus(item.status)).length;
-    const ambientCols = filteredSectionRows.filter((item) => item.storageType === 'Ortam').length;
-    const coldCols = filteredSectionRows.filter((item) => item.storageType === 'cold_chain').length;
-    const freezerCols = filteredSectionRows.filter((item) => item.storageType === 'freezer').length;
     const criticalSlots = filteredSectionRows.filter((item) => item.isCritical).length;
-    const totalVariety = new Set(filteredSectionRows.filter((item) => item.productId).map((item) => item.productId)).size;
-    const avgOccupancy = filteredSectionRows.length ?
-      filteredSectionRows.reduce((sum, item) => sum + Number(item.occupancyPercent || 0), 0) / filteredSectionRows.length
-      : 0;
 
     return [
       { label: 'Toplam Göz', value: formatNumber(totalSlots), icon: <Boxes size={18} />, iconClass: 'mod-icon-violet' },
       { label: 'Dolu Göz', value: formatNumber(filled), icon: <PackageCheck size={18} />, iconClass: 'mod-icon-emerald' },
       { label: 'Boş Göz', value: formatNumber(empty), icon: <Boxes size={18} />, iconClass: 'mod-icon-cyan' },
-      { label: 'Ortam Gözü', value: formatNumber(ambientCols), icon: <Thermometer size={18} />, iconClass: 'mod-icon-violet' },
-      { label: 'Soğuk Göz', value: formatNumber(coldCols), icon: <Snowflake size={18} />, iconClass: 'mod-icon-cyan' },
-      { label: 'Dondurucu Göz', value: formatNumber(freezerCols), icon: <Snowflake size={18} />, iconClass: 'mod-icon-indigo' },
-      { label: 'Toplam Ürün Çeşidi', value: formatNumber(totalVariety), icon: <Boxes size={18} />, iconClass: 'mod-icon-blue' },
       { label: 'Kritik Göz', value: formatNumber(criticalSlots), icon: <AlertTriangle size={18} />, iconClass: 'mod-icon-rose' },
-      { label: 'Ortalama Doluluk', value: `${avgOccupancy.toFixed(1)}%`, icon: <PackageCheck size={18} />, iconClass: 'mod-icon-emerald' },
     ];
   }, [filteredSectionRows, visibleSectionCards]);
 
@@ -1961,13 +2208,34 @@ export default function LocationManagementPage() {
       .join('\n');
   }, [activeSelectedLocation, products, selectedSection?.categoryLabel, warehouseStockByProductId]);
 
+  const handleRefreshPlan = useCallback(async () => {
+    try {
+      setIsPlanLoading(true);
+      setPlanError(null);
+      const data = await locationLayoutService.getPublishedLayout();
+      setPlanLayout(data);
+    } catch (err) {
+      console.error('Published layout refresh failed:', err);
+      setPlanError(err);
+    } finally {
+      setIsPlanLoading(false);
+    }
+  }, []);
+
+  const handleOpenEditor = useCallback(() => {
+    navigate('/lokasyon-duzenle');
+  }, [navigate]);
+
   return (
     <div className="page-stack location-management-page">
       <Toast toast={toast} onClose={() => setToast(null)} />
 
-      <LocationHeader
+      <LocationHeader />
+
+      <LocationKpiSummaryRow kpis={locationKpis} />
+
+      <LocationFilterSection
         locationType={locationType}
-        onLocationTypeChange={setLocationType}
         categoryOptions={categoryOptions}
         sectionOptions={sections}
         filters={filters}
@@ -1975,172 +2243,47 @@ export default function LocationManagementPage() {
         onApply={applyFilters}
       />
 
-      {locationType === LOCATION_TYPES.SECTION ? (
-        <>
-          <LocationSummaryCards items={sectionSummaryCards} />
-
-          <section className="location-three-stack location-three-stack-section">
-            <div className="location-stack-row location-section-top-grid">
-              <div className="location-list-panel mod-card">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-cyan"><MapPin size={18} /></div>
-                  <div className="location-list-header-main">
-                    <h3>Reyon Listesi</h3>
-                    <p>Seç ve gridde tek tıkla lokasyon detayına in</p>
-                  </div>
-                  <div className="location-list-header-search">
-                    <Search size={14} aria-hidden="true" className="location-list-header-search-icon" />
-                    <input
-                      ref={sectionListSearchInputRef}
-                      type="text"
-                      value={sectionListSearch}
-                      onChange={(event) => setSectionListSearch(event.target.value)}
-                      placeholder="Reyon ara"
-                      aria-label="Reyon listesinde ara"
-                    />
-                  </div>
-                </div>
-                <div className="location-card-list" ref={sectionListRef} onWheel={handleSectionListWheel}>
-                  {listedSectionCards.map((item) => (
-                    <button key={item.id} className={`location-reyon-card ${selectedSection?.id === item.id ? 'is-selected' : ''}`} type="button" onClick={() => setSelectedSectionId(item.id)}>
-                      <div className="location-reyon-card-head">
-                        <strong>{item.name}</strong>
-                        <span>{item.code}</span>
-                      </div>
-                      <div className="location-reyon-card-grid">
-                        <span>Kategori</span><strong>{item.categoryLabel || '-'}</strong>
-                        <span>Saklama Tipi</span><strong>{storageTypeLabel(item.dominantStorageType)} ({item.reyonType})</strong>
-                        <span>Doluluk</span><strong>{item.occupancyRate.toFixed(1)}% ({item.occupiedSlots}/{item.totalSlots})</strong>
-                        <span>Ürün Çeşidi</span><strong>{formatNumber(item.productVarietyCount)}</strong>
-                        <span>Kritik Ürün</span><strong>{formatNumber(item.criticalCount)}</strong>
-                        <span>Stok Kullanımı</span><strong>{formatNumber(item.currentProductCount)} / {formatNumber(item.maxProductCapacity)}{item.stockUsageRate !== null ? ` (${item.stockUsageRate.toFixed(1)}%)` : ''}</strong>
-                        <span>Desi Kullanımı</span><strong>{item.hasDesiData ? `${formatNumber(item.currentDesi)} / ${formatNumber(item.maxDesi)} (${item.desiUsageRate.toFixed(1)}%)` : 'Desi verisi yok'}</strong>
-                        <span>Kapasite</span><strong>{formatNumber(item.totalSlots)} fiziksel slot</strong>
-                        <span>Son Besleme</span><strong>{formatDateTimeLabel(item.lastFeedAt)}</strong>
-                      </div>
-                    </button>
-                  ))}
-                  {!listedSectionCards.length ? (
-                    <div className="location-list-mini-empty">Aramaya uygun reyon bulunamadı.</div>
-                  ) : null}
-                </div>
+      {/* --- Operasyonel Alan: Birleşik Lokasyon Tablosu & Detay sidebar'ı --- */}
+      <section className="location-unified-workspace-section">
+        <div className="location-unified-layout-stack">
+          <section className="mod-card location-unified-table-card">
+            <div className="mod-card-header">
+              <div className="mod-card-icon mod-icon-indigo"><Boxes size={18} /></div>
+              <div>
+                <h3>Genel Lokasyon Listesi</h3>
+                <p>Mağazadaki tüm reyon ve depo lokasyonlarının birleşik anlık durumu</p>
               </div>
-
-              <LocationDetailPanel
-                locationType={locationType}
-                selectedLocation={activeSelectedLocation}
-                onMove={handleMoveProductAction}
-                onCreateRefillRequest={handleCreateRefillRequestAction}
-                onViewMovements={handleViewMovementsAction}
-                onViewRefillHistory={handleViewRefillHistoryAction}
-                onMoveSlot={handleMoveSlotAction}
-              />
             </div>
-
-            <div className="location-stack-row location-grid-area">
-              <ReyonGridView
-                selectedSection={selectedSection}
-                rows={filteredSectionRows}
-                selectedLocationCode={selectedLocationCode}
-                setSelectedLocationCode={setSelectedLocationCode}
+            <div className="unified-location-table-scroll">
+              <DataTable
+                columns={locationColumns}
+                rows={filteredCombinedRows}
+                isLoading={isLoading}
+                emptyMessage="Filtreye uygun lokasyon bulunamadı."
+                initialSort={{ key: 'locationCode', direction: 'asc' }}
+                pageSize={10}
+                topHorizontalScroll
+                onRowClick={handleLocationRowClick}
+                isRowSelected={(row) => row.locationCode === selectedLocationCode}
               />
-
-              <div className="mod-card">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-indigo"><MapPin size={18} /></div>
-                  <div>
-                    <h3>Reyon Lokasyon Listesi</h3>
-                    <p>Raf/kat/lokasyon/stok bilgilerini tablo olarak görüntüleyin</p>
-                  </div>
-                </div>
-                <div className="reyon-location-table-scroll">
-                  <DataTable
-                    columns={sectionColumns}
-                    rows={filteredSectionRows}
-                    isLoading={isLoading || isSectionDetailLoading}
-                    emptyMessage="Filtreye uygun reyon lokasyonu bulunamadı."
-                    initialSort={{ key: 'locationCode', direction: 'asc' }}
-                    pageSize={10}
-                    topHorizontalScroll
-                    onRowClick={handleLocationRowClick}
-                    isRowSelected={(row) => row.locationCode === selectedLocationCode}
-                  />
-                </div>
-              </div>
             </div>
           </section>
-        </>
-      ) : (
-        <>
-          <LocationSummaryCards items={warehouseSummaryCards} />
 
-          <section className="location-three-stack location-three-stack-warehouse">
-            <div className="location-stack-row location-warehouse-top-grid">
-              <div className="location-list-panel mod-card location-warehouse-info-panel">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-cyan"><Warehouse size={18} /></div>
-                  <div>
-                    <h3>Depo Bilgisi</h3>
-                    <p>3 sıra x 2 taraf x 15 raf x 10 kat</p>
-                  </div>
-                </div>
-                <div className="location-metric-strip">
-                  <div><span>D1</span><strong>{formatNumber(depotZoneCountByRow.get(1) || filteredWarehouseRows.filter((item) => item.rowNo === 1).length)}</strong></div>
-                  <div><span>D2</span><strong>{formatNumber(depotZoneCountByRow.get(2) || filteredWarehouseRows.filter((item) => item.rowNo === 2).length)}</strong></div>
-                  <div><span>D3</span><strong>{formatNumber(depotZoneCountByRow.get(3) || filteredWarehouseRows.filter((item) => item.rowNo === 3).length)}</strong></div>
-                  <div><span>Toplam Kapasite</span><strong>{formatNumber(warehouseSummary?.totalLocations || 900)}</strong></div>
-                </div>
-                <LocationLegend />
-              </div>
-
-              <LocationDetailPanel
-                locationType={locationType}
-                selectedLocation={activeSelectedLocation}
-                onMove={handleMoveProductAction}
-                onCreateRefillRequest={handleCreateRefillRequestAction}
-                onViewMovements={handleViewMovementsAction}
-                onViewRefillHistory={handleViewRefillHistoryAction}
-                onMoveSlot={handleMoveSlotAction}
-              />
-            </div>
-
-            <div className="location-stack-row location-grid-area">
-              <DepotGridView
-                selectedWarehouseRowNo={selectedWarehouseRowNo}
-                setSelectedWarehouseRowNo={setSelectedWarehouseRowNo}
-                selectedWarehouseSide={selectedWarehouseSide}
-                setSelectedWarehouseSide={setSelectedWarehouseSide}
-                warehouseGridMap={warehouseGridMap}
-                selectedLocationCode={selectedLocationCode}
-                setSelectedLocationCode={setSelectedLocationCode}
-              />
-
-              <div className="mod-card">
-                <div className="mod-card-header">
-                  <div className="mod-card-icon mod-icon-indigo"><Warehouse size={18} /></div>
-                  <div>
-                    <h3>Depo Lokasyon Listesi</h3>
-                    <p>Raf/kat/lokasyon/stok/parti/SKT göre anlık görünüm</p>
-                  </div>
-                </div>
-                <div className="reyon-location-table-scroll depot-location-table-scroll">
-                  <DataTable
-                    columns={warehouseColumns}
-                    rows={filteredWarehouseRows}
-                    isLoading={isLoading}
-                    emptyMessage="Filtreye uygun lokasyon bulunamadı."
-                    pageSize={10}
-                    topHorizontalScroll
-                    onRowClick={handleLocationRowClick}
-                    isRowSelected={(row) => row.locationCode === selectedLocationCode}
-                  />
-                </div>
-              </div>
-            </div>
-
-          </section>
-        </>
-      )}
+          <LocationDetailPanel
+            locationType={
+              activeSelectedLocation?.locationType?.startsWith('warehouse')
+                ? LOCATION_TYPES.WAREHOUSE
+                : LOCATION_TYPES.SECTION
+            }
+            selectedLocation={activeSelectedLocation}
+            onMove={handleMoveProductAction}
+            onCreateRefillRequest={handleCreateRefillRequestAction}
+            onViewMovements={handleViewMovementsAction}
+            onViewRefillHistory={handleViewRefillHistoryAction}
+            onMoveSlot={handleMoveSlotAction}
+          />
+        </div>
+      </section>
 
       {(isLoading || isSectionDetailLoading) ? (
         <div className="table-panel loading-state">
@@ -2148,6 +2291,45 @@ export default function LocationManagementPage() {
           <p>Lokasyon verileri hazırlanıyor...</p>
         </div>
       ) : null}
+
+      {/* --- Merkezi Kontrol Çubuğu: Sadece Editör butonu --- */}
+      <section className="location-central-control location-plan-control-section" aria-label="Lokasyon görünüm kontrolleri">
+        <div className="location-central-control-left">
+          <div className="mod-card-icon mod-icon-indigo"><Layers size={18} /></div>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Mağaza & Depo Yerleşim Planı</h3>
+            <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>İnteraktif harita üzerinden tüm reyon ve depo alanlarını izleyin</p>
+          </div>
+        </div>
+        <div className="location-central-control-right">
+          {canManageLayout && (
+            <button className="primary-button" type="button" onClick={handleOpenEditor} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <Edit size={14} /> Düzenleme Modu
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* --- Mağaza Planı (Harita Tabanlı Görünüm) --- */}
+      <LocationPlanSection
+        layout={planLayout}
+        isLoading={isPlanLoading}
+        error={planError}
+        onRefresh={handleRefreshPlan}
+        canManage={canManageLayout}
+        onOpenEditor={handleOpenEditor}
+        selectedLocationCode={selectedLocationCode}
+        onSelectLocationCode={setSelectedLocationCode}
+        products={products}
+        selectedLocation={activeSelectedLocation}
+        onMove={handleMoveProductAction}
+        onCreateRefillRequest={handleCreateRefillRequestAction}
+        onViewMovements={handleViewMovementsAction}
+        onViewRefillHistory={handleViewRefillHistoryAction}
+        onMoveSlot={handleMoveSlotAction}
+        hideHeader
+        hideEditButton
+      />
 
       {transferModal.isOpen ? (
         <div className="location-action-modal-backdrop" role="presentation" onClick={closeTransferModal}>

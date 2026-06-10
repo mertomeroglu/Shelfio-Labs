@@ -56,6 +56,8 @@ export default function CustomerCartFull({
   onOpenProduct,
   onClearCart,
   onShowMessage,
+  cartSyncError = '',
+  onRetryCartSync,
 }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const [confirmCheckout, setConfirmCheckout] = useState(false);
@@ -152,20 +154,22 @@ export default function CustomerCartFull({
         </div>
 
         {cartEntries.map(({ product, quantity }) => {
+          const productLoading = product?.isCartProductLoading === true;
+          const productUnavailable = product?.isCartProductUnavailable === true;
           const unitPrice = getProductDisplayPrice(product);
           const locationLabel = resolveLocationLabel(product);
-          const available = Number(product?.available ?? product?.stockSummary?.available ?? product?.currentStock ?? product?.totalStock ?? 0) > 0;
+          const available = !productLoading && Number(product?.available ?? product?.stockSummary?.available ?? product?.currentStock ?? product?.totalStock ?? 0) > 0;
           const metaItems = buildCartMetaItems(product, available);
 
           return (
             <article
               key={product.id}
               className="cart-full-item cart-full-item-minimal cart-full-item-clickable"
-              onClick={() => onOpenProduct?.(product.id)}
+              onClick={() => { if (!productLoading && !productUnavailable) onOpenProduct?.(product.id); }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  onOpenProduct?.(product.id);
+                  if (!productLoading && !productUnavailable) onOpenProduct?.(product.id);
                 }
               }}
               role="button"
@@ -187,7 +191,9 @@ export default function CustomerCartFull({
                       <span className="price">{formatCurrency(unitPrice)}</span>
                     </div>
                     <div className="cart-item-inline-meta">
-                      {metaItems.map((meta) => (
+                      {productLoading ? <small>Ürün bilgileri yükleniyor...</small> : null}
+                      {productUnavailable ? <small className="is-passive">Bu ürün artık satışta değil.</small> : null}
+                      {!productLoading ? metaItems.map((meta) => (
                         <small
                           key={`${product.id}-${meta.key}`}
                           className={meta.label === 'Mağazada mevcut' ? 'is-ok' : meta.label === 'Mağazada mevcut değil' ? 'is-passive' : ''}
@@ -195,17 +201,24 @@ export default function CustomerCartFull({
                           {meta.key === 'location' && locationLabel !== '-' ? <MapPin size={12} /> : null}
                           {meta.label}
                         </small>
-                      ))}
+                      )) : null}
                     </div>
                   </div>
                 </div>
-
                 <div className="cart-item-main-right">
                   <div className="cart-item-control-row">
                     <div className="qty-controls">
-                      <button type="button" onClick={(event) => { event.stopPropagation(); onUpdateQuantity(product.id, quantity - 1); }} aria-label="Azalt"><Minus size={15} /></button>
+                      <button type="button" disabled={productLoading} onClick={(event) => { event.stopPropagation(); onUpdateQuantity(product.id, quantity - 1); }} aria-label="Azalt"><Minus size={15} /></button>
                       <span>{quantity}</span>
-                      <button type="button" onClick={(event) => { event.stopPropagation(); onUpdateQuantity(product.id, quantity + 1); }} aria-label="Artır"><Plus size={15} /></button>
+                      <button
+                        type="button"
+                        disabled={productLoading || !available || quantity >= Number(product?.available ?? product?.stockSummary?.available ?? product?.currentStock ?? product?.totalStock ?? 0)}
+                        style={(!available || quantity >= Number(product?.available ?? product?.stockSummary?.available ?? product?.currentStock ?? product?.totalStock ?? 0)) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                        onClick={(event) => { event.stopPropagation(); onUpdateQuantity(product.id, quantity + 1); }}
+                        aria-label="Artır"
+                      >
+                        <Plus size={15} />
+                      </button>
                     </div>
                     <button
                       type="button"
@@ -227,6 +240,12 @@ export default function CustomerCartFull({
         <div className="summary-row"><span>Toplam</span><strong>{formatCurrency(scopedSubtotal)}</strong></div>
         <div className="summary-row"><span>KDV</span><strong>{formatCurrency(vat)}</strong></div>
         <div className="summary-row total"><span>Genel Toplam</span><strong>{formatCurrency(grandTotal)}</strong></div>
+        {cartSyncError ? (
+          <div className="customer-mobile-order-error">
+            <span>{cartSyncError}</span>
+            <button type="button" className="ghost-button" onClick={onRetryCartSync}>Tekrar Dene</button>
+          </div>
+        ) : null}
         <div className="cart-summary-actions">
           <button
             type="button"
@@ -236,10 +255,48 @@ export default function CustomerCartFull({
                 onShowMessage?.('Lütfen en az bir ürün seçin.', 'error');
                 return;
               }
+              if (scopedEntries.some((row) => row.product?.isCartProductLoading === true)) {
+                onShowMessage?.('Sepet bilgileri hazırlanıyor. Lütfen kısa bir süre sonra tekrar deneyin.', 'error');
+                return;
+              }
+              if (scopedEntries.some((row) => row.product?.isCartProductUnavailable === true)) {
+                onShowMessage?.('Sepetinizde artık satışta olmayan ürünler var. Devam etmek için bu ürünleri kaldırın.', 'error');
+                return;
+              }
+              const outOfStockSelected = scopedEntries.some(
+                (row) =>
+                  Number(
+                    row.product?.available ??
+                      row.product?.stockSummary?.available ??
+                      row.product?.currentStock ??
+                      row.product?.totalStock ??
+                      0
+                  ) <= 0
+              );
+              if (outOfStockSelected) {
+                onShowMessage?.('Sepetinizde stokta olmayan ürünler bulunmaktadır. Lütfen bu ürünleri sepetten çıkarın.', 'error');
+                return;
+              }
+              const insufficientSelected = scopedEntries.some(
+                (row) => {
+                  const stockLimit = Number(
+                    row.product?.available ??
+                      row.product?.stockSummary?.available ??
+                      row.product?.currentStock ??
+                      row.product?.totalStock ??
+                      0
+                  );
+                  return row.quantity > stockLimit;
+                }
+              );
+              if (insufficientSelected) {
+                onShowMessage?.('Sepetinizdeki bazı ürünlerin miktarı mevcut stoku aşmaktadır. Lütfen miktarları güncelleyin.', 'error');
+                return;
+              }
               setConfirmCheckout(true);
             }}
           >
-            Alışverişi Tamamla
+            Kasada Tamamla
           </button>
         </div>
       </div>
@@ -261,8 +318,8 @@ export default function CustomerCartFull({
 
       {confirmCheckout ? (
         <ConfirmActionModal
-          title="Alışverişiniz kasaya hazırlansın mı?"
-          description="QR kodu veya kasa kodunu kasiyere göstererek ürünlerinizi kasaya aktarabilirsiniz."
+          title="Sepetiniz için kasa kodu oluşturulsun mu?"
+          description="Oluşturulan QR kodu veya kasa kodunu kasiyere gösterin. Alışverişiniz ve ödemeniz kasada tamamlanacak."
           confirmLabel="Kasa Kodunu Hazırla"
           tone="success"
           onCancel={() => setConfirmCheckout(false)}

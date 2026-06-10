@@ -2210,11 +2210,19 @@ const ensureRelations = async ({ categoryId, supplierId }) => {
   return { category };
 };
 
+const pad = (val) => String(val).padStart(2, '0');
+
+const formatShelfCode = (sectionNumber, shelfSide, shelfNo, shelfLevel) => {
+  const sectionNoStr = pad(sectionNumber);
+  const shelfSideStr = String(shelfSide).toUpperCase();
+  return `R${sectionNoStr}-${shelfSideStr}-${pad(shelfNo)}-${pad(shelfLevel)}`;
+};
+
 const buildShelfCode = async (input) => {
-  if (!input.sectionId || !input.shelfSide || !input.shelfNo || !input.shelfLevel) return '';
+  if (!input.sectionId || !input.shelfSide || input.shelfNo === undefined || input.shelfNo === null || input.shelfLevel === undefined || input.shelfLevel === null) return '';
   const section = await sectionRepo.findById(input.sectionId);
   if (!section) return '';
-  return `${section.number}${input.shelfSide}${input.shelfNo}-${input.shelfLevel}`;
+  return formatShelfCode(section.number, input.shelfSide, input.shelfNo, input.shelfLevel);
 };
 
 const resolveProductLogistics = (input, fallback = {}) => {
@@ -2826,6 +2834,206 @@ export const productService = {
     const input = sanitizeProductInput({ ...existing, ...payload });
     const relations = await ensureRelations(input);
 
+    // Location Guardrail & Handling
+    let resolvedLocation = {};
+    const hasLocationUpdate = payload.hasOwnProperty('sectionId') ||
+                              payload.hasOwnProperty('shelfSide') ||
+                              payload.hasOwnProperty('shelfNo') ||
+                              payload.hasOwnProperty('shelfLevel') ||
+                              payload.hasOwnProperty('depotLocationCode');
+
+    if (hasLocationUpdate) {
+      const targetSectionId = payload.hasOwnProperty('sectionId') ? payload.sectionId : existing.sectionId;
+      const targetShelfSide = payload.hasOwnProperty('shelfSide') ? payload.shelfSide : existing.shelfSide;
+      const targetShelfNo = payload.hasOwnProperty('shelfNo') ? payload.shelfNo : existing.shelfNo;
+      const targetShelfLevel = payload.hasOwnProperty('shelfLevel') ? payload.shelfLevel : existing.shelfLevel;
+
+      // Validate Section
+      if (targetSectionId) {
+        const prisma = await getPrisma();
+        const section = await prisma.section.findUnique({
+          where: { id: targetSectionId }
+        });
+        if (!section) {
+          throw new AppError(404, 'Reyon bulunamadı');
+        }
+
+        // Case 1: Ortak Reyon Alanı (all shelf fields are null/empty)
+        const isCommonAisle = (targetShelfSide === null || targetShelfSide === '') &&
+                              (targetShelfNo === null || targetShelfNo === '') &&
+                              (targetShelfLevel === null || targetShelfLevel === '');
+
+        if (isCommonAisle) {
+          resolvedLocation = {
+            sectionId: targetSectionId,
+            shelfSide: null,
+            shelfNo: null,
+            shelfLevel: null,
+            shelfCode: null,
+            isVirtualLocation: true
+          };
+        } else {
+          // Case 2: Fiziksel Reyon Gözü (all shelf fields must be populated)
+          if (!targetShelfSide || targetShelfNo === null || targetShelfNo === undefined || targetShelfLevel === null || targetShelfLevel === undefined) {
+            throw new AppError(400, 'Hedef lokasyon geçersiz');
+          }
+
+          const parsedShelfNo = Number(targetShelfNo);
+          const parsedShelfLevel = Number(targetShelfLevel);
+          const shelfSideUpper = String(targetShelfSide).toUpperCase();
+
+          if (shelfSideUpper !== 'L' && shelfSideUpper !== 'R') {
+            throw new AppError(400, 'Hedef lokasyon geçersiz');
+          }
+          if (parsedShelfNo < 1 || parsedShelfNo > 10 || parsedShelfLevel < 1 || parsedShelfLevel > 5) {
+            throw new AppError(400, 'Hedef lokasyon geçersiz');
+          }
+
+          // Check conflict
+          const conflictProduct = await prisma.product.findFirst({
+            where: {
+              sectionId: targetSectionId,
+              shelfSide: shelfSideUpper,
+              shelfNo: parsedShelfNo,
+              shelfLevel: parsedShelfLevel,
+              id: { not: id }
+            }
+          });
+
+          if (conflictProduct) {
+            throw new AppError(409, 'Bu fiziksel gözde başka bir ürün var');
+          }
+
+          resolvedLocation = {
+            sectionId: targetSectionId,
+            shelfSide: shelfSideUpper,
+            shelfNo: parsedShelfNo,
+            shelfLevel: parsedShelfLevel,
+            shelfCode: formatShelfCode(section.number, shelfSideUpper, parsedShelfNo, parsedShelfLevel),
+            isVirtualLocation: false
+          };
+        }
+      } else {
+        // Section is null (unassigned from reyon)
+        resolvedLocation = {
+          sectionId: null,
+          shelfSide: null,
+          shelfNo: null,
+          shelfLevel: null,
+          shelfCode: null
+        };
+      }
+
+      // Warehouse / Depot Location
+      const targetDepotLocationCode = payload.hasOwnProperty('depotLocationCode') ? payload.depotLocationCode : existing.depotLocationCode;
+      
+      if (targetDepotLocationCode === null || targetDepotLocationCode === '') {
+        // Unassigning or moving to Ortak Depo Alanı
+        if (existing.depotLocationCode) {
+          const prisma = await getPrisma();
+          // Verify stock in old location before clearing
+          const oldLoc = await prisma.warehouseLocation.findFirst({
+            where: { locationCode: existing.depotLocationCode }
+          });
+          if (oldLoc) {
+            if (oldLoc.warehouseStock > 0 || (oldLoc.palletCount || 0) > 0 || Number(oldLoc.occupancy || 0) > 0) {
+              throw new AppError(400, 'Bu depo lokasyonunda fiziksel stok bulunduğu için atama kaldırılamaz.');
+            }
+            // Clear old location
+            await prisma.warehouseLocation.update({
+              where: { id: oldLoc.id },
+              data: {
+                productId: null,
+                productName: null,
+                sku: null,
+                barcode: null,
+                status: 'Boş'
+              }
+            });
+          }
+        }
+
+        // Check stock relation for Ortak Depo Alanı
+        const prisma = await getPrisma();
+        const stock = await prisma.stock.findUnique({
+          where: { productId: id }
+        });
+        if (stock && stock.warehouseQuantity > 0) {
+          // This is Ortak Depo Alanı!
+          resolvedLocation.depotLocationCode = null;
+          resolvedLocation.defaultWarehouseLocationCode = null;
+          resolvedLocation.depotAssignmentType = 'shared_overflow';
+          resolvedLocation.capacityMode = 'unbounded_virtual';
+          resolvedLocation.isVirtualLocation = true;
+        } else {
+          // Completely unassigned depot
+          resolvedLocation.depotLocationCode = null;
+          resolvedLocation.defaultWarehouseLocationCode = null;
+          resolvedLocation.depotAssignmentType = 'shared_overflow';
+          resolvedLocation.capacityMode = 'unbounded_virtual';
+          if (resolvedLocation.isVirtualLocation === undefined) {
+            resolvedLocation.isVirtualLocation = true;
+          }
+        }
+      } else {
+        // Physical Depot Assignment
+        const prisma = await getPrisma();
+        const wl = await prisma.warehouseLocation.findUnique({
+          where: { locationCode: targetDepotLocationCode }
+        });
+        if (!wl) {
+          throw new AppError(404, 'Depo lokasyonu bulunamadı');
+        }
+
+        if (existing.depotLocationCode !== targetDepotLocationCode) {
+          // Validate old location if it changes
+          if (existing.depotLocationCode) {
+            const oldLoc = await prisma.warehouseLocation.findFirst({
+              where: { locationCode: existing.depotLocationCode }
+            });
+            if (oldLoc) {
+              if (oldLoc.warehouseStock > 0 || (oldLoc.palletCount || 0) > 0 || Number(oldLoc.occupancy || 0) > 0) {
+                throw new AppError(400, 'Ürünün eski depo lokasyonunda fiziksel stok bulunduğu için atama taşınamaz.');
+              }
+              await prisma.warehouseLocation.update({
+                where: { id: oldLoc.id },
+                data: {
+                  productId: null,
+                  productName: null,
+                  sku: null,
+                  barcode: null,
+                  status: 'Boş'
+                }
+              });
+            }
+          }
+
+          // Check conflict on new location
+          if (wl.productId && wl.productId !== id) {
+            throw new AppError(409, 'Bu depo lokasyonunda zaten başka bir ürün tanımlı');
+          }
+
+          // Occupy new location
+          await prisma.warehouseLocation.update({
+            where: { id: wl.id },
+            data: {
+              productId: id,
+              productName: existing.name,
+              sku: existing.sku,
+              barcode: existing.barcode || '',
+              status: 'Dolu'
+            }
+          });
+        }
+
+        resolvedLocation.depotLocationCode = targetDepotLocationCode;
+        resolvedLocation.defaultWarehouseLocationCode = targetDepotLocationCode;
+        resolvedLocation.depotAssignmentType = 'fixed_pallet';
+        resolvedLocation.capacityMode = 'bounded';
+        resolvedLocation.isVirtualLocation = false;
+      }
+    }
+
     const sameSkuProduct = await productRepo.findBySku(input.sku);
     if (sameSkuProduct && sameSkuProduct.id !== id) {
       throw new AppError(409, 'SKU zaten mevcut');
@@ -2953,6 +3161,7 @@ export const productService = {
       lastPriceChangeSource: priceEvent ? priceEvent.source : (existing.lastPriceChangeSource || null),
       ...(Array.isArray(preservedDepotLocations) ? { depotLocations: preservedDepotLocations } : {}),
       ...(priceEvent ? { priceHistory: [...existingPriceHistory, priceEvent] } : {}),
+      ...resolvedLocation
     };
 
     await persistProductWrite(() => productRepo.updateById(id, updated));
@@ -3037,6 +3246,411 @@ export const productService = {
     const activeCampaigns = await listActiveCampaignDefinitions();
     return enrichProduct(product, activeCampaigns, {
       includeGeneralCampaigns: options.includeGeneralCampaigns !== false,
+    });
+  },
+
+  async assignLocation(productId, payload, user) {
+    const {
+      targetType,
+      sectionId,
+      shelfSide,
+      shelfNo,
+      shelfLevel,
+      warehouseLocationCode,
+      warehouseLocationId,
+      replaceExisting = false,
+      expectedCurrentProductId,
+    } = payload;
+
+    const prisma = await getPrisma();
+
+    return await prisma.$transaction(async (tx) => {
+      // 1. Get current product
+      const product = await tx.product.findUnique({
+        where: { id: productId }
+      });
+      if (!product) {
+        throw new AppError(404, 'Ürün bulunamadı');
+      }
+
+      if (targetType === 'section_shelf') {
+        if (!sectionId || !shelfSide || shelfNo === undefined || shelfLevel === undefined) {
+          throw new AppError(400, 'sectionId, shelfSide, shelfNo ve shelfLevel alanları zorunludur.');
+        }
+
+        // Find section details
+        const section = await tx.section.findUnique({
+          where: { id: sectionId }
+        });
+        if (!section) {
+          throw new AppError(404, 'Reyon bulunamadı');
+        }
+
+        const parsedShelfNo = Number(shelfNo);
+        const parsedShelfLevel = Number(shelfLevel);
+        const shelfSideUpper = String(shelfSide).toUpperCase();
+
+        if (shelfSideUpper !== 'L' && shelfSideUpper !== 'R') {
+          throw new AppError(400, 'Hedef lokasyon geçersiz');
+        }
+        if (parsedShelfNo < 1 || parsedShelfNo > 10 || parsedShelfLevel < 1 || parsedShelfLevel > 5) {
+          throw new AppError(400, 'Hedef lokasyon geçersiz');
+        }
+
+        // Check if already assigned to the exact same shelf
+        if (product.sectionId === sectionId &&
+            product.shelfSide === shelfSideUpper &&
+            product.shelfNo === parsedShelfNo &&
+            product.shelfLevel === parsedShelfLevel) {
+          return product;
+        }
+
+        // Check conflict
+        const conflictProduct = await tx.product.findFirst({
+          where: {
+            sectionId,
+            shelfSide: shelfSideUpper,
+            shelfNo: parsedShelfNo,
+            shelfLevel: parsedShelfLevel,
+            id: { not: productId }
+          }
+        });
+
+        if (conflictProduct) {
+          // Concurrency check
+          if (expectedCurrentProductId && conflictProduct.id !== expectedCurrentProductId) {
+            throw new AppError(409, 'Lokasyon başka bir kullanıcı tarafından güncellendi. Lütfen verileri yenileyin.');
+          }
+
+          if (!replaceExisting) {
+            throw new AppError(409, `Bu fiziksel gözde başka bir ürün var`);
+          } else {
+            // Unassign conflicting product
+            await tx.product.update({
+              where: { id: conflictProduct.id },
+              data: {
+                sectionId: null,
+                shelfSide: null,
+                shelfNo: null,
+                shelfLevel: null,
+                shelfCode: null
+              }
+            });
+          }
+        } else {
+          // Concurrency check: If expected a product but found none
+          if (expectedCurrentProductId) {
+            throw new AppError(409, 'Lokasyon başka bir kullanıcı tarafından güncellendi. Lütfen verileri yenileyin.');
+          }
+        }
+
+        // Generate shelfCode using formatting helper
+        const shelfCode = formatShelfCode(section.number, shelfSideUpper, parsedShelfNo, parsedShelfLevel);
+
+        // Update target product
+        const updatedProduct = await tx.product.update({
+          where: { id: productId },
+          data: {
+            sectionId,
+            shelfSide: shelfSideUpper,
+            shelfNo: parsedShelfNo,
+            shelfLevel: parsedShelfLevel,
+            shelfCode,
+            isVirtualLocation: false
+          }
+        });
+
+        return {
+          updatedProduct,
+          previousLocation: {
+            sectionId: product.sectionId,
+            shelfSide: product.shelfSide,
+            shelfNo: product.shelfNo,
+            shelfLevel: product.shelfLevel,
+            shelfCode: product.shelfCode
+          },
+          targetLocation: {
+            sectionId,
+            shelfSide: shelfSideUpper,
+            shelfNo: parsedShelfNo,
+            shelfLevel: parsedShelfLevel,
+            shelfCode
+          },
+          replacedProduct: conflictProduct ? { id: conflictProduct.id, name: conflictProduct.name, sku: conflictProduct.sku } : null
+        };
+      } else if (targetType === 'section_common') {
+        if (!sectionId) {
+          throw new AppError(400, 'Ortak reyon alanı için reyon seçilmelidir');
+        }
+
+        // Find section details
+        const section = await tx.section.findUnique({
+          where: { id: sectionId }
+        });
+        if (!section) {
+          throw new AppError(404, 'Reyon bulunamadı');
+        }
+
+        // Update target product
+        const updatedProduct = await tx.product.update({
+          where: { id: productId },
+          data: {
+            sectionId,
+            shelfSide: null,
+            shelfNo: null,
+            shelfLevel: null,
+            shelfCode: null,
+            isVirtualLocation: true
+          }
+        });
+
+        return {
+          updatedProduct,
+          previousLocation: {
+            sectionId: product.sectionId,
+            shelfSide: product.shelfSide,
+            shelfNo: product.shelfNo,
+            shelfLevel: product.shelfLevel,
+            shelfCode: product.shelfCode
+          },
+          targetLocation: {
+            sectionId,
+            shelfSide: null,
+            shelfNo: null,
+            shelfLevel: null,
+            shelfCode: null
+          },
+          replacedProduct: null
+        };
+      } else if (targetType === 'unassign') {
+        // Clean shelf location if assigned
+        await tx.product.update({
+          where: { id: productId },
+          data: {
+            sectionId: null,
+            shelfSide: null,
+            shelfNo: null,
+            shelfLevel: null,
+            shelfCode: null
+          }
+        });
+
+        // Clear from depot locations if assigned
+        if (product.depotLocationCode) {
+          const oldLoc = await tx.warehouseLocation.findFirst({
+            where: { locationCode: product.depotLocationCode }
+          });
+          if (oldLoc) {
+            // Validate stock before unassigning
+            if (oldLoc.warehouseStock > 0 || (oldLoc.palletCount || 0) > 0 || Number(oldLoc.occupancy || 0) > 0) {
+              throw new AppError(400, 'Bu depo lokasyonunda fiziksel stok bulunduğu için atama kaldırılamaz.');
+            }
+            await tx.warehouseLocation.update({
+              where: { id: oldLoc.id },
+              data: {
+                productId: null,
+                productName: null,
+                sku: null,
+                barcode: null,
+                status: 'Boş'
+              }
+            });
+          }
+          await tx.product.update({
+            where: { id: productId },
+            data: {
+              depotLocationCode: null,
+              defaultWarehouseLocationCode: null,
+              depotAssignmentType: 'shared_overflow',
+              capacityMode: 'unbounded_virtual',
+              isVirtualLocation: true
+            }
+          });
+        }
+
+        return { success: true };
+      } else if (targetType === 'warehouse_common') {
+        // Check stock relation
+        const stock = await tx.stock.findUnique({
+          where: { productId }
+        });
+        if (!stock) {
+          throw new AppError(400, 'Ortak depo alanı için ürün depo stok ilişkisi korunur');
+        }
+
+        // Clear from depot locations if assigned
+        if (product.depotLocationCode) {
+          const oldLoc = await tx.warehouseLocation.findFirst({
+            where: { locationCode: product.depotLocationCode }
+          });
+          if (oldLoc) {
+            // Validate stock before unassigning
+            if (oldLoc.warehouseStock > 0 || (oldLoc.palletCount || 0) > 0 || Number(oldLoc.occupancy || 0) > 0) {
+              throw new AppError(400, 'Bu depo lokasyonunda fiziksel stok bulunduğu için atama kaldırılamaz.');
+            }
+            await tx.warehouseLocation.update({
+              where: { id: oldLoc.id },
+              data: {
+                productId: null,
+                productName: null,
+                sku: null,
+                barcode: null,
+                status: 'Boş'
+              }
+            });
+          }
+        }
+
+        // Update target product
+        const updatedProduct = await tx.product.update({
+          where: { id: productId },
+          data: {
+            depotLocationCode: null,
+            defaultWarehouseLocationCode: null,
+            depotAssignmentType: 'shared_overflow',
+            capacityMode: 'unbounded_virtual',
+            isVirtualLocation: true
+          }
+        });
+
+        return {
+          updatedProduct,
+          previousLocation: {
+            depotLocationCode: product.depotLocationCode
+          },
+          targetLocation: {
+            depotLocationCode: null
+          },
+          replacedProduct: null
+        };
+      } else if (targetType === 'warehouse_location') {
+        let location;
+        if (warehouseLocationId) {
+          location = await tx.warehouseLocation.findUnique({
+            where: { id: warehouseLocationId }
+          });
+        } else if (warehouseLocationCode) {
+          location = await tx.warehouseLocation.findUnique({
+            where: { locationCode: warehouseLocationCode }
+          });
+        }
+
+        if (!location) {
+          throw new AppError(404, 'Depo lokasyonu bulunamadı');
+        }
+
+        // Check if already assigned
+        if (product.depotLocationCode === location.locationCode) {
+          return product;
+        }
+
+        // Validate blocked & reserved
+        if (location.isBlocked) {
+          throw new AppError(400, 'Bu depo lokasyonu blokeli olduğu için ürün atanamaz.');
+        }
+        if (location.isReserved) {
+          throw new AppError(400, 'Bu depo lokasyonu rezerve olduğu için ürün atanamaz.');
+        }
+
+        // Check conflict
+        if (location.productId && location.productId !== productId) {
+          // Concurrency check
+          if (expectedCurrentProductId && location.productId !== expectedCurrentProductId) {
+            throw new AppError(409, 'Lokasyon başka bir kullanıcı tarafından güncellendi. Lütfen verileri yenileyin.');
+          }
+
+          // Validate stock before overwriting
+          if (location.warehouseStock > 0 || (location.palletCount || 0) > 0 || Number(location.occupancy || 0) > 0) {
+            throw new AppError(400, 'Bu depo lokasyonunda fiziksel stok bulunduğu için ürün ataması değiştirilemez.');
+          }
+
+          if (!replaceExisting) {
+            throw new AppError(409, `Bu depo lokasyonunda zaten başka bir ürün tanımlı: ${location.productName} (SKU: ${location.sku}). Önceki atamayı kaldırmak veya üzerine yazmak ister misiniz?`);
+          } else {
+            // Clear conflicting product's depotLocationCode
+            const conflictingProduct = await tx.product.findUnique({
+              where: { id: location.productId }
+            });
+            if (conflictingProduct && conflictingProduct.depotLocationCode === location.locationCode) {
+              await tx.product.update({
+                where: { id: conflictingProduct.id },
+                data: {
+                  depotLocationCode: null,
+                  defaultWarehouseLocationCode: null,
+                  depotAssignmentType: 'shared_overflow',
+                  capacityMode: 'unbounded_virtual',
+                  isVirtualLocation: true
+                }
+              });
+            }
+          }
+        } else {
+          // Concurrency check: expected a product but found none
+          if (expectedCurrentProductId) {
+            throw new AppError(409, 'Lokasyon başka bir kullanıcı tarafından güncellendi. Lütfen verileri yenileyin.');
+          }
+        }
+
+        // Clear product from previous location if it changes
+        if (product.depotLocationCode && product.depotLocationCode !== location.locationCode) {
+          const oldLoc = await tx.warehouseLocation.findFirst({
+            where: { locationCode: product.depotLocationCode }
+          });
+          if (oldLoc) {
+            // Validate stock in old location before clearing
+            if (oldLoc.warehouseStock > 0 || (oldLoc.palletCount || 0) > 0 || Number(oldLoc.occupancy || 0) > 0) {
+              throw new AppError(400, `Ürünün eski depo lokasyonunda (${oldLoc.locationCode}) fiziksel stok bulunduğu için atama taşınamaz.`);
+            }
+            await tx.warehouseLocation.update({
+              where: { id: oldLoc.id },
+              data: {
+                productId: null,
+                productName: null,
+                sku: null,
+                barcode: null,
+                status: 'Boş'
+              }
+            });
+          }
+        }
+
+        // Update new location
+        await tx.warehouseLocation.update({
+          where: { id: location.id },
+          data: {
+            productId: product.id,
+            productName: product.name,
+            sku: product.sku,
+            barcode: product.barcode || '',
+            status: 'Dolu'
+          }
+        });
+
+        // Update target product
+        const updatedProduct = await tx.product.update({
+          where: { id: productId },
+          data: {
+            depotLocationCode: location.locationCode,
+            defaultWarehouseLocationCode: location.locationCode,
+            depotAssignmentType: 'fixed_pallet',
+            capacityMode: 'bounded',
+            isVirtualLocation: false
+          }
+        });
+
+        return {
+          updatedProduct,
+          previousLocation: {
+            depotLocationCode: product.depotLocationCode
+          },
+          targetLocation: {
+            depotLocationCode: location.locationCode
+          },
+          replacedProduct: location.productId ? { id: location.productId, name: location.productName, sku: location.sku } : null
+        };
+      } else {
+        throw new AppError(400, 'Geçersiz hedef lokasyon tipi (targetType).');
+      }
     });
   },
 };
